@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { FILE_BROWSER_FAVORITES_PATH } from './fileBrowserFilesSettings'
 import type { FileBrowserEntry, FileBrowserRoot } from './fileBrowserBridge'
 import {
+  activeRootPathForPath,
   buildBreadcrumbs,
   customIconNameForPath,
   fileBrowserEntryCanOpenInShell,
@@ -32,7 +33,9 @@ function entry(path: string, kind = 'file', name = ''): FileBrowserEntry {
 const roots: FileBrowserRoot[] = [
   { path: '/', label: 'Computer', kind: 'root' },
   { path: '/home/crab', label: 'Home', kind: 'home' },
+  { path: '/home/crab/Pictures', label: 'Pictures', kind: 'pictures' },
   { path: '/home/crab/projects', label: 'Projects', kind: 'folder' },
+  { path: '/run/media/crab/USB Disk', label: 'USB Disk', kind: 'mount' },
 ]
 
 describe('fileBrowserPresentation', () => {
@@ -45,6 +48,11 @@ describe('fileBrowserPresentation', () => {
 
   it('uses deepest root for labels and breadcrumbs', () => {
     expect(rootLabelForPath('/home/crab/projects/derp', roots)).toBe('Projects')
+    expect(activeRootPathForPath('/home/crab/projects/derp', roots)).toBe('/home/crab/projects')
+    expect(activeRootPathForPath('/home/crab/Pictures', roots)).toBe('/home/crab/Pictures')
+    expect(activeRootPathForPath('/home/crab/Pictures/wallpapers', roots)).toBe('/home/crab/Pictures')
+    expect(activeRootPathForPath('/tmp/a', roots)).toBe('/')
+    expect(activeRootPathForPath(null, roots)).toBe(null)
     expect(buildBreadcrumbs('/home/crab/projects/derp/shell', roots)).toEqual([
       { path: '/home/crab/projects', label: 'Projects' },
       { path: '/home/crab/projects/derp', label: 'derp' },
@@ -58,6 +66,14 @@ describe('fileBrowserPresentation', () => {
       { path: '/opt', label: 'opt' },
       { path: '/opt/derp', label: 'derp' },
       { path: '/opt/derp/bin', label: 'bin' },
+    ])
+  })
+
+  it('uses mount roots as first-class breadcrumb roots', () => {
+    expect(rootLabelForPath('/run/media/crab/USB Disk/photos', roots)).toBe('USB Disk')
+    expect(buildBreadcrumbs('/run/media/crab/USB Disk/photos', roots)).toEqual([
+      { path: '/run/media/crab/USB Disk', label: 'USB Disk' },
+      { path: '/run/media/crab/USB Disk/photos', label: 'photos' },
     ])
   })
 

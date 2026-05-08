@@ -1,7 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
 use base64::Engine;
@@ -26,7 +27,7 @@ struct FileBrowserErrorDetail {
     path: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct FileBrowserRootEntry {
     pub label: String,
     pub path: String,
@@ -271,11 +272,36 @@ fn decode_mount_path(input: &str) -> PathBuf {
     PathBuf::from(out)
 }
 
-fn mounted_volume_roots() -> Vec<FileBrowserRootEntry> {
-    let Ok(body) = fs::read_to_string("/proc/mounts") else {
-        return Vec::new();
-    };
-    let ignored_types = [
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct FstabMountHint {
+    label: Option<String>,
+    show: bool,
+    hide: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MountInfoEntry {
+    mount_path: PathBuf,
+    source: String,
+    fs_type: String,
+}
+
+static TEST_MOUNT_ROOTS: OnceLock<Mutex<Vec<FileBrowserRootEntry>>> = OnceLock::new();
+
+pub(crate) fn set_test_file_browser_mount_roots(roots: Vec<FileBrowserRootEntry>) {
+    let cell = TEST_MOUNT_ROOTS.get_or_init(|| Mutex::new(Vec::new()));
+    *cell.lock().expect("test file browser mount roots") = roots;
+}
+
+fn test_file_browser_mount_roots() -> Vec<FileBrowserRootEntry> {
+    TEST_MOUNT_ROOTS
+        .get()
+        .map(|cell| cell.lock().expect("test file browser mount roots").clone())
+        .unwrap_or_default()
+}
+
+fn ignored_mount_fs_types() -> &'static [&'static str] {
+    &[
         "proc",
         "sysfs",
         "tmpfs",
@@ -295,47 +321,168 @@ fn mounted_volume_roots() -> Vec<FileBrowserRootEntry> {
         "configfs",
         "ramfs",
         "autofs",
-    ];
-    let mut seen = BTreeSet::new();
-    let mut out = Vec::new();
+        "binfmt_misc",
+        "bpf",
+        "efivarfs",
+        "hugetlbfs",
+        "rpc_pipefs",
+        "selinuxfs",
+        "systemd-1",
+    ]
+}
+
+fn decode_mount_token(input: &str) -> String {
+    decode_mount_path(input).to_string_lossy().into_owned()
+}
+
+fn parse_fstab_mount_hints(body: &str) -> BTreeMap<PathBuf, FstabMountHint> {
+    let mut out = BTreeMap::new();
     for line in body.lines() {
-        let mut parts = line.split_whitespace();
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let mut parts = trimmed.split_whitespace();
         let _source = parts.next();
         let Some(raw_mount_path) = parts.next() else {
             continue;
         };
-        let Some(fs_type) = parts.next() else {
+        let _fs_type = parts.next();
+        let Some(raw_options) = parts.next() else {
             continue;
         };
-        if ignored_types.contains(&fs_type) {
+        let mut hint = FstabMountHint::default();
+        for option in raw_options.split(',') {
+            if option == "x-gvfs-show" {
+                hint.show = true;
+            } else if option == "x-gvfs-hide" {
+                hint.hide = true;
+            } else if let Some(raw_label) = option.strip_prefix("x-gvfs-name=") {
+                let label = decode_mount_token(raw_label).trim().to_string();
+                if !label.is_empty() {
+                    hint.label = Some(label);
+                }
+            }
+        }
+        if hint.show || hint.hide || hint.label.is_some() {
+            out.insert(decode_mount_path(raw_mount_path), hint);
+        }
+    }
+    out
+}
+
+fn read_fstab_mount_hints() -> BTreeMap<PathBuf, FstabMountHint> {
+    fs::read_to_string("/etc/fstab")
+        .map(|body| parse_fstab_mount_hints(&body))
+        .unwrap_or_default()
+}
+
+fn parse_mountinfo_entries(body: &str) -> Vec<MountInfoEntry> {
+    let mut out = Vec::new();
+    for line in body.lines() {
+        let Some((left, right)) = line.split_once(" - ") else {
+            continue;
+        };
+        let left_parts: Vec<&str> = left.split_whitespace().collect();
+        if left_parts.len() < 5 {
             continue;
         }
-        let mount_path = decode_mount_path(raw_mount_path);
-        if mount_path == Path::new("/") || !mount_path.is_absolute() || !mount_path.exists() {
+        let mut right_parts = right.split_whitespace();
+        let Some(fs_type) = right_parts.next() else {
+            continue;
+        };
+        let Some(source) = right_parts.next() else {
+            continue;
+        };
+        out.push(MountInfoEntry {
+            mount_path: decode_mount_path(left_parts[4]),
+            source: decode_mount_token(source),
+            fs_type: decode_mount_token(fs_type),
+        });
+    }
+    out
+}
+
+fn mount_path_is_user_visible(mount_path: &Path, hint: Option<&FstabMountHint>) -> bool {
+    if hint.is_some_and(|value| value.show) {
+        return true;
+    }
+    let mount_str = mount_path.to_string_lossy();
+    let gvfs_prefix = std::env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .filter(|value| value.starts_with("/run/user/"))
+        .map(|value| format!("{value}/gvfs/"));
+    mount_str.starts_with("/mnt/")
+        || mount_str.starts_with("/media/")
+        || mount_str.starts_with("/run/media/")
+        || gvfs_prefix
+            .as_deref()
+            .is_some_and(|prefix| mount_str.starts_with(prefix))
+}
+
+fn mount_label(entry: &MountInfoEntry, hint: Option<&FstabMountHint>) -> String {
+    if let Some(label) = hint.and_then(|value| value.label.clone()) {
+        return label;
+    }
+    entry
+        .mount_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if entry.source.is_empty() {
+                entry.mount_path.to_string_lossy().into_owned()
+            } else {
+                entry.source.clone()
+            }
+        })
+}
+
+fn collect_mounted_volume_roots(
+    entries: &[MountInfoEntry],
+    hints: &BTreeMap<PathBuf, FstabMountHint>,
+) -> Vec<FileBrowserRootEntry> {
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for entry in entries {
+        if ignored_mount_fs_types().contains(&entry.fs_type.as_str()) {
             continue;
         }
-        let mount_str = mount_path.to_string_lossy();
-        if !mount_str.starts_with("/mnt/")
-            && !mount_str.starts_with("/media/")
-            && !mount_str.starts_with("/run/media/")
-        {
+        let hint = hints.get(&entry.mount_path);
+        if hint.is_some_and(|value| value.hide) {
             continue;
         }
-        if !seen.insert(mount_path.clone()) {
+        if entry.mount_path == Path::new("/") || !entry.mount_path.is_absolute() {
             continue;
         }
-        let label = mount_path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| mount_path.to_string_lossy().into_owned());
+        if !mount_path_is_user_visible(&entry.mount_path, hint) {
+            continue;
+        }
+        let canonical = entry
+            .mount_path
+            .canonicalize()
+            .unwrap_or_else(|_| entry.mount_path.clone());
+        if !canonical.exists() {
+            continue;
+        }
+        if !seen.insert(canonical.clone()) {
+            continue;
+        }
         out.push(FileBrowserRootEntry {
-            label,
-            path: mount_path.to_string_lossy().into_owned(),
+            label: mount_label(entry, hint),
+            path: canonical.to_string_lossy().into_owned(),
             kind: "mount",
         });
     }
+    out
+}
+
+fn mounted_volume_roots() -> Vec<FileBrowserRootEntry> {
+    let mut out = fs::read_to_string("/proc/self/mountinfo")
+        .map(|body| collect_mounted_volume_roots(&parse_mountinfo_entries(&body), &read_fstab_mount_hints()))
+        .unwrap_or_default();
+    out.extend(test_file_browser_mount_roots());
     out
 }
 
@@ -1254,6 +1401,117 @@ pub(crate) fn file_browser_open_video_stream(
             send_end_inclusive: end_inclusive,
             file,
         }),
+    }
+}
+
+#[cfg(test)]
+mod mount_roots_tests {
+    use super::*;
+
+    fn temp_mount_dir(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "derp-file-browser-mount-test-{}-{name}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("create temp mount dir");
+        path
+    }
+
+    #[test]
+    fn mountinfo_decodes_escaped_mount_points() {
+        let entries = parse_mountinfo_entries(
+            "42 24 8:1 / /run/media/crab/USB\\040Disk rw,nosuid - ext4 /dev/sdb1 rw\n",
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].mount_path, PathBuf::from("/run/media/crab/USB Disk"));
+        assert_eq!(entries[0].source, "/dev/sdb1");
+        assert_eq!(entries[0].fs_type, "ext4");
+    }
+
+    #[test]
+    fn fstab_hints_parse_gvfs_options() {
+        let hints = parse_fstab_mount_hints(
+            "/dev/sdb1 /srv/files ext4 defaults,x-gvfs-show,x-gvfs-name=Work\\040Disk 0 2\n/dev/sdc1 /srv/hidden ext4 defaults,x-gvfs-hide 0 2\n",
+        );
+        assert_eq!(
+            hints.get(Path::new("/srv/files")),
+            Some(&FstabMountHint {
+                label: Some("Work Disk".to_string()),
+                show: true,
+                hide: false,
+            })
+        );
+        assert!(hints.get(Path::new("/srv/hidden")).is_some_and(|hint| hint.hide));
+    }
+
+    #[test]
+    fn user_visible_paths_match_gnome_places() {
+        let old_runtime = std::env::var("XDG_RUNTIME_DIR").ok();
+        std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1234");
+        assert!(mount_path_is_user_visible(Path::new("/media/crab/USB"), None));
+        assert!(mount_path_is_user_visible(Path::new("/run/media/crab/USB"), None));
+        assert!(mount_path_is_user_visible(Path::new("/mnt/data"), None));
+        assert!(mount_path_is_user_visible(Path::new("/run/user/1234/gvfs/smb-share:server=n"), None));
+        assert!(!mount_path_is_user_visible(Path::new("/srv/data"), None));
+        if let Some(value) = old_runtime {
+            std::env::set_var("XDG_RUNTIME_DIR", value);
+        } else {
+            std::env::remove_var("XDG_RUNTIME_DIR");
+        }
+    }
+
+    #[test]
+    fn collect_mount_roots_honors_gvfs_hints_and_dedupes() {
+        let visible = temp_mount_dir("visible");
+        let hidden = temp_mount_dir("hidden");
+        let mut hints = BTreeMap::new();
+        hints.insert(
+            visible.clone(),
+            FstabMountHint {
+                label: Some("Visible Disk".to_string()),
+                show: true,
+                hide: false,
+            },
+        );
+        hints.insert(
+            hidden.clone(),
+            FstabMountHint {
+                label: None,
+                show: true,
+                hide: true,
+            },
+        );
+        let entries = vec![
+            MountInfoEntry {
+                mount_path: visible.clone(),
+                source: "/dev/sdb1".to_string(),
+                fs_type: "ext4".to_string(),
+            },
+            MountInfoEntry {
+                mount_path: visible.clone(),
+                source: "/dev/sdb1".to_string(),
+                fs_type: "ext4".to_string(),
+            },
+            MountInfoEntry {
+                mount_path: hidden,
+                source: "/dev/sdc1".to_string(),
+                fs_type: "ext4".to_string(),
+            },
+            MountInfoEntry {
+                mount_path: temp_mount_dir("proc"),
+                source: "proc".to_string(),
+                fs_type: "proc".to_string(),
+            },
+        ];
+        let roots = collect_mounted_volume_roots(&entries, &hints);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].label, "Visible Disk");
+        assert_eq!(
+            roots[0].path,
+            visible.canonicalize().expect("canonical visible").to_string_lossy()
+        );
+        assert_eq!(roots[0].kind, "mount");
     }
 }
 

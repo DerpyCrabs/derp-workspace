@@ -53,6 +53,7 @@ import {
 } from './fileBrowserState'
 import {
   buildBreadcrumbs,
+  activeRootPathForPath,
   customIconNameForPath,
   fileBrowserEntryCanOpenInShell,
   fileBrowserIconForEntry,
@@ -307,6 +308,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   const [uploadBusy, setUploadBusy] = createSignal(false)
 
   const breadcrumbs = createMemo(() => buildBreadcrumbs(state.activePath, state.roots))
+  const activeSidebarRootPath = createMemo(() => activeRootPathForPath(state.activePath, state.roots))
   const favoritePathSet = createMemo(() => new Set(filesSettings.settings().favorites))
   const customIcons = createMemo(() => filesSettings.settings().custom_icons)
   const activeViewMode = createMemo(() => {
@@ -1536,9 +1538,13 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
               <button
                 type="button"
                 class="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-(--shell-control-muted-hover)"
+                data-file-browser-root
+                data-file-browser-root-path={root.path}
+                data-file-browser-root-label={root.label}
+                data-file-browser-root-kind={root.kind}
                 classList={{
                   'bg-(--shell-accent-soft) text-(--shell-accent-soft-text)':
-                    pathWithinRoot(state.activePath, root.path),
+                    activeSidebarRootPath() === root.path,
                 }}
                 onClick={() => {
                   setState('selectedPath', null)

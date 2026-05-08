@@ -364,6 +364,12 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
     label: crumbEl.getAttribute('data-file-browser-label') ?? crumbEl.textContent?.trim() ?? '',
     rect: snapshotRect(crumbEl, origin),
   }))
+  const fileBrowserRoots = queryAllWithin(root, '[data-file-browser-root]').map((rootEl) => ({
+    path: rootEl.getAttribute('data-file-browser-root-path') ?? '',
+    label: rootEl.getAttribute('data-file-browser-root-label') ?? rootEl.textContent?.trim() ?? '',
+    kind: rootEl.getAttribute('data-file-browser-root-kind') ?? '',
+    rect: snapshotRect(rootEl, origin),
+  }))
   const fileBrowserPrimaryActions = queryAllWithin(root, '[data-file-browser-primary-action]').map((actionEl) => ({
     id: actionEl.getAttribute('data-file-browser-primary-action') ?? '',
     label: actionEl.getAttribute('aria-label') ?? actionEl.textContent?.trim() ?? '',
@@ -396,6 +402,7 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
       fileBrowserActivePathEl?.getAttribute('data-file-browser-active-path') ??
       fileBrowserActivePathEl?.textContent?.trim() ??
       null,
+    roots: fileBrowserRoots,
     rows: fileBrowserRows,
     breadcrumbs: fileBrowserBreadcrumbs,
     breadcrumb_bar_rect: snapshotRect(breadcrumbBarEl, origin),

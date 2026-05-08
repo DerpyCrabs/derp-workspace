@@ -36,6 +36,8 @@ struct FixtureEntry {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct FileBrowserFixturePaths {
     pub root_path: String,
+    pub mount_root: String,
+    pub mount_file: String,
     pub empty_dir: String,
     pub hidden_dir: String,
     pub nested_dir: String,
@@ -75,6 +77,12 @@ fn generated_fixture_root(manifest: &FixtureManifest) -> Result<PathBuf, String>
     Ok(e2e_state_root()?
         .join("file-browser-fixtures")
         .join(&manifest.root_dir_name))
+}
+
+fn generated_mount_root() -> Result<PathBuf, String> {
+    Ok(e2e_state_root()?
+        .join("file-browser-mounts")
+        .join("GNOME USB"))
 }
 
 fn validate_relative_path(raw: &str, label: &str) -> Result<PathBuf, String> {
@@ -162,6 +170,8 @@ fn collect_fixture_paths(
     };
     Ok(FileBrowserFixturePaths {
         root_path: canonical_path_string(root)?,
+        mount_root: String::new(),
+        mount_file: String::new(),
         empty_dir: required("empty_dir")?,
         hidden_dir: required("hidden_dir")?,
         nested_dir: required("nested_dir")?,
@@ -222,7 +232,26 @@ fn recreate_fixture_tree() -> Result<FileBrowserFixturePaths, String> {
             }
         }
     }
-    collect_fixture_paths(&root, &manifest.entries)
+    let mount_root = generated_mount_root()?;
+    if mount_root.exists() {
+        fs::remove_dir_all(&mount_root)
+            .map_err(|e| format!("remove existing mount fixture root {}: {e}", mount_root.display()))?;
+    }
+    fs::create_dir_all(&mount_root)
+        .map_err(|e| format!("create mount fixture root {}: {e}", mount_root.display()))?;
+    let mount_file = mount_root.join("mounted-note.txt");
+    write_fixture_file(&mount_file, b"Mounted fixture\n", false)?;
+    let mut paths = collect_fixture_paths(&root, &manifest.entries)?;
+    paths.mount_root = canonical_path_string(&mount_root)?;
+    paths.mount_file = canonical_path_string(&mount_file)?;
+    crate::cef::file_browser::set_test_file_browser_mount_roots(vec![
+        crate::cef::file_browser::FileBrowserRootEntry {
+            label: "GNOME USB".to_string(),
+            path: paths.mount_root.clone(),
+            kind: "mount",
+        },
+    ]);
+    Ok(paths)
 }
 
 pub(crate) fn prepare_file_browser_fixtures_json() -> Result<String, String> {

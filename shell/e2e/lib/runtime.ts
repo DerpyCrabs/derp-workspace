@@ -435,6 +435,13 @@ export interface FileBrowserSnapshotAction {
   rect?: Rect | null
 }
 
+export interface FileBrowserRootSnapshot {
+  path: string
+  label: string
+  kind: string
+  rect?: Rect | null
+}
+
 export interface FileBrowserOpenWithOptionSnapshot {
   id: string
   label: string
@@ -452,6 +459,7 @@ export interface FileBrowserSnapshot {
   mount_seq?: number
   load_count?: number
   active_path: string | null
+  roots: FileBrowserRootSnapshot[]
   rows: FileBrowserSnapshotRow[]
   breadcrumbs: FileBrowserSnapshotBreadcrumb[]
   breadcrumb_bar_rect?: Rect | null
@@ -694,6 +702,8 @@ export interface PerfCounterSnapshot {
 
 export interface FileBrowserFixturePaths {
   root_path: string
+  mount_root: string
+  mount_file: string
   empty_dir: string
   hidden_dir: string
   nested_dir: string

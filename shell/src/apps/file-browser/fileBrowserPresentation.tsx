@@ -115,6 +115,14 @@ export function rootLabelForPath(path: string, roots: readonly FileBrowserRoot[]
   return matches[0]?.label ?? null
 }
 
+export function activeRootPathForPath(path: string | null, roots: readonly FileBrowserRoot[]): string | null {
+  if (!path) return null
+  const matches = roots
+    .filter((root) => pathWithinRoot(path, root.path))
+    .sort((a, b) => b.path.length - a.path.length)
+  return matches[0]?.path ?? null
+}
+
 export function buildBreadcrumbs(path: string | null, roots: readonly FileBrowserRoot[]): Breadcrumb[] {
   if (!path) return []
   const matchingRoot = roots

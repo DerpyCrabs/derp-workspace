@@ -199,6 +199,36 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await waitForActivePath(base, fixtures.root_path, navigated.windowId)
   })
 
+  test('file browser lists mount roots in the sidebar and opens them with pointer interaction', async ({ base, state }) => {
+    const fixtures = await prepareFileBrowserFixtures(base)
+    await access(fixtures.mount_root)
+    await access(fixtures.mount_file)
+    const opened = await openFileBrowserFromLauncher(base, state.spawnedShellWindowIds)
+    const mountRoot = await waitFor(
+      'wait for file browser mount root',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const fb = fileBrowserSnapshot(shell, opened.windowId)
+        const root = fb?.roots.find((entry) => entry.kind === 'mount' && entry.path === fixtures.mount_root)
+        return root?.rect ? { shell, root } : null
+      },
+      5000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('file browser mount root', mountRoot.root.rect!, 32, 24))
+    const mounted = await waitForActivePath(base, fixtures.mount_root, opened.windowId)
+    const row = fileBrowserRow(mounted, 'mounted-note.txt', opened.windowId)
+    assert(row?.rect, 'expected mounted fixture file row')
+    const firstBreadcrumb = fileBrowserSnapshot(mounted, opened.windowId)?.breadcrumbs[0]
+    assert(firstBreadcrumb?.label === 'GNOME USB', 'expected mount label as first breadcrumb')
+    await writeJsonArtifact('file-browser-mount-root.json', {
+      mountRoot: mountRoot.root,
+      activePath: fileBrowserSnapshot(mounted, opened.windowId)?.active_path,
+      row,
+      breadcrumbs: fileBrowserSnapshot(mounted, opened.windowId)?.breadcrumbs,
+    })
+  })
+
   test('file browser live refresh picks up external current-folder changes without remounting across many windows', async ({ base, state }) => {
     const fixtures = await prepareFileBrowserFixtures(base)
     const openedWindowIds: number[] = []
