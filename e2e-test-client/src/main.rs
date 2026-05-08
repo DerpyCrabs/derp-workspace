@@ -64,6 +64,17 @@ use wayland_protocols::wp::{
         wp_tearing_control_manager_v1::WpTearingControlManagerV1, wp_tearing_control_v1,
     },
 };
+use wayland_protocols::ext::{
+    image_capture_source::v1::client::{
+        ext_image_capture_source_v1::ExtImageCaptureSourceV1,
+        ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1,
+    },
+    image_copy_capture::v1::client::{
+        ext_image_copy_capture_frame_v1::{self, ExtImageCopyCaptureFrameV1},
+        ext_image_copy_capture_manager_v1::{self, ExtImageCopyCaptureManagerV1},
+        ext_image_copy_capture_session_v1::{self, ExtImageCopyCaptureSessionV1},
+    },
+};
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{Layer as WlrLayer, ZwlrLayerShellV1},
     zwlr_layer_surface_v1::{Anchor, Event as LayerSurfaceEvent, ZwlrLayerSurfaceV1},
@@ -213,6 +224,10 @@ struct Args {
     layer_panel: bool,
     #[arg(long, default_value_t = 48)]
     exclusive_zone: i32,
+    #[arg(long, default_value_t = false)]
+    ext_image_copy_capture_output: bool,
+    #[arg(long, default_value_t = 3)]
+    ext_image_copy_capture_frames: u32,
 }
 
 fn main() {
@@ -259,6 +274,11 @@ fn main() {
 
     if args.layer_panel {
         run_layer_panel(&args);
+        return;
+    }
+
+    if args.ext_image_copy_capture_output {
+        run_ext_image_copy_capture_output(&args);
         return;
     }
 
@@ -1453,6 +1473,357 @@ impl ProvidesRegistryState for ExplicitSyncDmabufClient {
     registry_handlers!(OutputState);
 }
 
+#[derive(Clone, Default)]
+struct ExtImageCopyFrameStatus {
+    index: u32,
+    ready: bool,
+    failed: Option<String>,
+    damage: Vec<(i32, i32, i32, i32)>,
+    checksum: u64,
+    nonzero_pixels: u32,
+}
+
+#[derive(Clone, Default)]
+struct ExtImageCopyStatus {
+    buffer_width: u32,
+    buffer_height: u32,
+    constraints_done: bool,
+    stopped: bool,
+    frames: Vec<ExtImageCopyFrameStatus>,
+}
+
+struct ExtImageCopyClient {
+    registry_state: RegistryState,
+    output_state: OutputState,
+    shm_state: Shm,
+    pool: SlotPool,
+    _output_source_manager: ExtOutputImageCaptureSourceManagerV1,
+    _copy_manager: ExtImageCopyCaptureManagerV1,
+    _source: ExtImageCaptureSourceV1,
+    session: ExtImageCopyCaptureSessionV1,
+    active_frame: Option<ExtImageCopyCaptureFrameV1>,
+    active_buffer: Option<Buffer>,
+    frame_index: u32,
+    target_frames: u32,
+    exit: bool,
+    status_path: Option<String>,
+    status: ExtImageCopyStatus,
+}
+
+fn write_ext_image_copy_status(path: &Option<String>, status: &ExtImageCopyStatus) {
+    let Some(path) = path.as_ref() else {
+        return;
+    };
+    let tmp = format!("{path}.tmp");
+    let frames = status
+        .frames
+        .iter()
+        .map(|frame| {
+            let damage = frame
+                .damage
+                .iter()
+                .map(|(x, y, w, h)| format!("{{\"x\":{x},\"y\":{y},\"width\":{w},\"height\":{h}}}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let failed = frame
+                .failed
+                .as_ref()
+                .map(|value| format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")))
+                .unwrap_or_else(|| "null".to_string());
+            format!(
+                "{{\"index\":{},\"ready\":{},\"failed\":{},\"checksum\":{},\"nonzero_pixels\":{},\"damage\":[{}]}}",
+                frame.index, frame.ready, failed, frame.checksum, frame.nonzero_pixels, damage
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let body = format!(
+        "{{\"buffer_width\":{},\"buffer_height\":{},\"constraints_done\":{},\"stopped\":{},\"frames\":[{}]}}\n",
+        status.buffer_width, status.buffer_height, status.constraints_done, status.stopped, frames
+    );
+    if std::fs::write(&tmp, body).is_ok() {
+        let _ = std::fs::rename(tmp, path);
+    }
+}
+
+impl ExtImageCopyClient {
+    fn maybe_capture_next(&mut self, qh: &QueueHandle<Self>) {
+        if self.exit || self.active_frame.is_some() || !self.status.constraints_done {
+            return;
+        }
+        if self.frame_index >= self.target_frames {
+            self.exit = true;
+            return;
+        }
+        let width = self.status.buffer_width.max(1);
+        let height = self.status.buffer_height.max(1);
+        let required_len = (width * height * 4) as usize;
+        if self.pool.len() < required_len {
+            self.pool.resize(required_len).expect("resize ext image copy pool");
+        }
+        let (mut buffer, _) = self
+            .pool
+            .create_buffer(
+                width as i32,
+                height as i32,
+                (width * 4) as i32,
+                wayland_client::protocol::wl_shm::Format::Xrgb8888,
+            )
+            .expect("create ext image copy buffer");
+        if let Some(canvas) = self.pool.canvas(&mut buffer) {
+            for byte in canvas {
+                *byte = 0;
+            }
+        }
+        let frame = self.session.create_frame(qh, ());
+        frame.attach_buffer(buffer.wl_buffer());
+        if self.frame_index == 1 {
+            frame.damage_buffer(0, 0, width as i32, height as i32);
+        } else if self.frame_index > 1 {
+            frame.damage_buffer(0, 0, (width as i32).min(32), (height as i32).min(32));
+        }
+        frame.capture();
+        self.status.frames.push(ExtImageCopyFrameStatus {
+            index: self.frame_index,
+            ..ExtImageCopyFrameStatus::default()
+        });
+        self.active_buffer = Some(buffer);
+        self.active_frame = Some(frame);
+    }
+
+    fn finish_active_frame(&mut self, ready: bool, failed: Option<String>, qh: &QueueHandle<Self>) {
+        let index = self.frame_index;
+        if let Some(frame) = self.status.frames.iter_mut().find(|frame| frame.index == index) {
+            frame.ready = ready;
+            frame.failed = failed;
+            if ready {
+                if let Some(buffer) = self.active_buffer.as_mut() {
+                    if let Some(canvas) = self.pool.canvas(buffer) {
+                        let mut checksum = 0u64;
+                        let mut nonzero = 0u32;
+                        for pixel in canvas.chunks_exact(4) {
+                            let value = u32::from(pixel[0])
+                                | (u32::from(pixel[1]) << 8)
+                                | (u32::from(pixel[2]) << 16)
+                                | (u32::from(pixel[3]) << 24);
+                            checksum = checksum.wrapping_mul(16_777_619).wrapping_add(u64::from(value));
+                            if value != 0 {
+                                nonzero = nonzero.saturating_add(1);
+                            }
+                        }
+                        frame.checksum = checksum;
+                        frame.nonzero_pixels = nonzero;
+                    }
+                }
+            }
+        }
+        self.active_frame = None;
+        self.active_buffer = None;
+        self.frame_index = self.frame_index.saturating_add(1);
+        write_ext_image_copy_status(&self.status_path, &self.status);
+        self.maybe_capture_next(qh);
+    }
+}
+
+impl CompositorHandler for ExtImageCopyClient {
+    fn scale_factor_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_factor: i32,
+    ) {
+    }
+
+    fn transform_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_transform: wl_output::Transform,
+    ) {
+    }
+
+    fn frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _time: u32,
+    ) {
+    }
+
+    fn surface_enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+
+    fn surface_leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl ShmHandler for ExtImageCopyClient {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm_state
+    }
+}
+
+impl OutputHandler for ExtImageCopyClient {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn update_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl Dispatch<ExtImageCopyCaptureSessionV1, ()> for ExtImageCopyClient {
+    fn event(
+        state: &mut Self,
+        _proxy: &ExtImageCopyCaptureSessionV1,
+        event: ext_image_copy_capture_session_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            ext_image_copy_capture_session_v1::Event::BufferSize { width, height } => {
+                state.status.buffer_width = width;
+                state.status.buffer_height = height;
+                write_ext_image_copy_status(&state.status_path, &state.status);
+            }
+            ext_image_copy_capture_session_v1::Event::Done => {
+                state.status.constraints_done = true;
+                write_ext_image_copy_status(&state.status_path, &state.status);
+                state.maybe_capture_next(qh);
+            }
+            ext_image_copy_capture_session_v1::Event::Stopped => {
+                state.status.stopped = true;
+                state.exit = true;
+                write_ext_image_copy_status(&state.status_path, &state.status);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ExtImageCopyCaptureFrameV1, ()> for ExtImageCopyClient {
+    fn event(
+        state: &mut Self,
+        _proxy: &ExtImageCopyCaptureFrameV1,
+        event: ext_image_copy_capture_frame_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            ext_image_copy_capture_frame_v1::Event::Damage { x, y, width, height } => {
+                if let Some(frame) = state.status.frames.last_mut() {
+                    frame.damage.push((x, y, width, height));
+                    write_ext_image_copy_status(&state.status_path, &state.status);
+                }
+            }
+            ext_image_copy_capture_frame_v1::Event::Ready => {
+                state.finish_active_frame(true, None, qh);
+            }
+            ext_image_copy_capture_frame_v1::Event::Failed { reason } => {
+                state.finish_active_frame(false, Some(format!("{reason:?}")), qh);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl ProvidesRegistryState for ExtImageCopyClient {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+
+    registry_handlers!(OutputState);
+}
+
+fn run_ext_image_copy_capture_output(args: &Args) {
+    let conn = Connection::connect_to_env().expect("connect ext image copy capture client");
+    let (globals, mut event_queue) =
+        registry_queue_init::<ExtImageCopyClient>(&conn).expect("init ext image copy registry");
+    let qh = event_queue.handle();
+    let registry_state = RegistryState::new(&globals);
+    let output_state = OutputState::new(&globals, &qh);
+    let shm_state = Shm::bind(&globals, &qh).expect("bind wl_shm");
+    let output = globals
+        .bind::<wl_output::WlOutput, _, _>(&qh, 1..=4, ())
+        .expect("bind capture wl_output");
+    let output_source_manager = globals
+        .bind::<ExtOutputImageCaptureSourceManagerV1, _, _>(&qh, 1..=1, ())
+        .expect("bind ext_output_image_capture_source_manager_v1");
+    let copy_manager = globals
+        .bind::<ExtImageCopyCaptureManagerV1, _, _>(&qh, 1..=1, ())
+        .expect("bind ext_image_copy_capture_manager_v1");
+    let source = output_source_manager.create_source(&output, &qh, ());
+    let session = copy_manager.create_session(
+        &source,
+        ext_image_copy_capture_manager_v1::Options::empty(),
+        &qh,
+        (),
+    );
+    let pool = SlotPool::new(4, &shm_state).expect("create ext image copy pool");
+    let mut state = ExtImageCopyClient {
+        registry_state,
+        output_state,
+        shm_state,
+        pool,
+        _output_source_manager: output_source_manager,
+        _copy_manager: copy_manager,
+        _source: source,
+        session,
+        active_frame: None,
+        active_buffer: None,
+        frame_index: 0,
+        target_frames: args.ext_image_copy_capture_frames,
+        exit: false,
+        status_path: args.status_json.clone(),
+        status: ExtImageCopyStatus::default(),
+    };
+    write_ext_image_copy_status(&state.status_path, &state.status);
+    while !state.exit {
+        event_queue
+            .blocking_dispatch(&mut state)
+            .expect("dispatch ext image copy capture");
+        conn.flush().expect("flush ext image copy capture");
+    }
+}
+
 fn start_explicit_sync_control(
     socket_path: Option<String>,
     status_path: Option<String>,
@@ -2524,6 +2895,14 @@ delegate_noop!(ExplicitSyncDmabufClient: ignore WpLinuxDrmSyncobjManagerV1);
 delegate_noop!(ExplicitSyncDmabufClient: ignore WpLinuxDrmSyncobjSurfaceV1);
 delegate_noop!(ExplicitSyncDmabufClient: ignore WpLinuxDrmSyncobjTimelineV1);
 delegate_noop!(ExplicitSyncDmabufClient: ignore wl_buffer::WlBuffer);
+delegate_output!(ExtImageCopyClient);
+delegate_shm!(ExtImageCopyClient);
+delegate_registry!(ExtImageCopyClient);
+delegate_noop!(ExtImageCopyClient: ignore wl_output::WlOutput);
+delegate_noop!(ExtImageCopyClient: ignore wl_buffer::WlBuffer);
+delegate_noop!(ExtImageCopyClient: ignore ExtOutputImageCaptureSourceManagerV1);
+delegate_noop!(ExtImageCopyClient: ignore ExtImageCopyCaptureManagerV1);
+delegate_noop!(ExtImageCopyClient: ignore ExtImageCaptureSourceV1);
 
 impl ProvidesRegistryState for TestClient {
     fn registry(&mut self) -> &mut RegistryState {

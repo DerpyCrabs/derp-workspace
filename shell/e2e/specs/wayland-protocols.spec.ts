@@ -8,10 +8,12 @@ import { promisify } from 'node:util'
 import {
   artifactDir,
   assert,
+  buildNativeSpawnCommand,
   captureScreenshotRect,
   copyArtifactFile,
   defineGroup,
   getJson,
+  KEY,
   movePoint,
   nativeBin,
   readPngRgba,
@@ -19,7 +21,10 @@ import {
   SkipError,
   spawnCommand,
   syncTest,
+  tapKey,
   waitFor,
+  waitForNativeFocus,
+  waitForSpawnedWindow,
   waitForWindowGone,
   writeJsonArtifact,
   type CompositorSnapshot,
@@ -42,6 +47,21 @@ type ExplicitSyncDmabufStatus = {
   stress_committed?: number
   stress_release_observed?: number
   stress_release_failed?: boolean
+}
+
+type ExtImageCopyStatus = {
+  buffer_width: number
+  buffer_height: number
+  constraints_done: boolean
+  stopped: boolean
+  frames: Array<{
+    index: number
+    ready: boolean
+    failed: string | null
+    checksum: number
+    nonzero_pixels: number
+    damage: Array<{ x: number; y: number; width: number; height: number }>
+  }>
 }
 
 async function readStatusJson<T>(filePath: string): Promise<T | null> {
@@ -122,6 +142,39 @@ function assertAvoidsTopReserve(
   )
 }
 
+function assertFullDamage(
+  frame: ExtImageCopyStatus['frames'][number],
+  size: { buffer_width: number; buffer_height: number },
+  label: string,
+) {
+  assert(frame.ready, `${label} frame did not become ready: ${JSON.stringify(frame)}`)
+  assert(!frame.failed, `${label} frame failed: ${frame.failed}`)
+  assert(frame.nonzero_pixels > 0, `${label} frame buffer stayed empty`)
+  assert(
+    frame.damage.some(
+      (damage) =>
+        damage.x === 0 &&
+        damage.y === 0 &&
+        damage.width === size.buffer_width &&
+        damage.height === size.buffer_height,
+    ),
+    `${label} did not report full damage for ${size.buffer_width}x${size.buffer_height}: ${JSON.stringify(frame.damage)}`,
+  )
+}
+
+function assertBoundedDamage(frame: ExtImageCopyStatus['frames'][number], size: ExtImageCopyStatus, label: string) {
+  assert(frame.ready, `${label} frame did not become ready: ${JSON.stringify(frame)}`)
+  assert(frame.damage.length > 0, `${label} should report at least one damage rect`)
+  for (const damage of frame.damage) {
+    assert(damage.x >= 0 && damage.y >= 0, `${label} damage has negative origin: ${JSON.stringify(damage)}`)
+    assert(damage.width > 0 && damage.height > 0, `${label} damage has invalid size: ${JSON.stringify(damage)}`)
+    assert(
+      damage.x + damage.width <= size.buffer_width && damage.y + damage.height <= size.buffer_height,
+      `${label} damage escapes ${size.buffer_width}x${size.buffer_height}: ${JSON.stringify(damage)}`,
+    )
+  }
+}
+
 export default defineGroup(import.meta.url, ({ test }) => {
   test('advertises linux-drm-syncobj-v1 to Wayland clients', async ({ base }) => {
     const outputPath = path.join(artifactDir(), `drm-syncobj-globals-${Date.now()}.txt`)
@@ -167,6 +220,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
       'wp_content_type_manager_v1',
       '--require-global',
       'wp_tearing_control_manager_v1',
+      '--require-global',
+      'ext_image_copy_capture_manager_v1',
+      '--require-global',
+      'ext_output_image_capture_source_manager_v1',
       '--list-globals',
       '>',
       shellQuote(outputPath),
@@ -194,7 +251,56 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(output.includes('wp_presentation 2'), output)
     assert(output.includes('wp_content_type_manager_v1 1'), output)
     assert(output.includes('wp_tearing_control_manager_v1 1'), output)
+    assert(output.includes('ext_image_copy_capture_manager_v1 1'), output)
+    assert(output.includes('ext_output_image_capture_source_manager_v1 1'), output)
     assert(output.includes('\nexit:0\n'), output)
+  })
+
+  test('xdg-activation focuses a target only after a focused user interaction token', async ({ base, state }) => {
+    const stamp = Date.now()
+    const launcherTitle = `Derp Activation Policy Launcher ${stamp}`
+    const targetTitle = `Derp Activation Policy Target ${stamp}`
+    const targetCommand = buildNativeSpawnCommand({
+      title: targetTitle,
+      appId: 'derp.e2e.protocol.activation.target',
+      token: `activation-policy-target-${stamp}`,
+      strip: 'orange',
+    })
+    const launcher = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: launcherTitle,
+      appId: 'derp.e2e.protocol.activation.launcher',
+      token: `activation-policy-launcher-${stamp}`,
+      strip: 'cyan',
+      spawnOnPressCommand: targetCommand,
+    })
+    const launcherId = launcher.window.window_id
+    state.spawnedNativeWindowIds.add(launcherId)
+    let targetId: number | null = null
+    try {
+      await waitForNativeFocus(base, launcherId)
+      await tapKey(base, KEY.enter)
+      const target = await waitForSpawnedWindow(base, state.knownWindowIds, {
+        title: targetTitle,
+        appId: 'derp.e2e.protocol.activation.target',
+        command: targetCommand,
+      })
+      targetId = target.window.window_id
+      state.spawnedNativeWindowIds.add(targetId)
+      const focused = await waitForNativeFocus(base, targetId)
+      assert(focused.compositor.focused_window_id === targetId, `expected activation focus on ${targetId}`)
+      await writeJsonArtifact('wayland-protocols-xdg-activation-focus-policy.json', {
+        launcher,
+        target,
+        focused: focused.compositor,
+      })
+    } finally {
+      if (targetId !== null) {
+        await closeWindow(base, targetId)
+        await waitForWindowGone(base, targetId, 5000)
+      }
+      await closeWindow(base, launcherId)
+      await waitForWindowGone(base, launcherId, 5000)
+    }
   })
 
   test('layer-shell exclusive zone reserves compositor work areas', async ({ base, state }) => {
@@ -630,6 +736,46 @@ export default defineGroup(import.meta.url, ({ test }) => {
         await waitForWindowGone(base, windowId, 5000)
       }
     }
+  })
+
+  test('ext-image-copy-capture output frames report first, requested, and subsequent damage', async ({ base }) => {
+    const statusPath = path.join(artifactDir(), `ext-image-copy-capture-output-${Date.now()}.json`)
+    const command = [
+      shellQuote(nativeBin()),
+      '--ext-image-copy-capture-output',
+      '--ext-image-copy-capture-frames',
+      '3',
+      '--status-json',
+      shellQuote(statusPath),
+    ].join(' ')
+    await spawnCommand(base, command)
+    const captured = await waitFor(
+      'wait for ext-image-copy-capture output frames',
+      async () => {
+        const status = await readStatusJson<ExtImageCopyStatus>(statusPath)
+        if (!status?.constraints_done || status.frames.length < 3) return null
+        if (!status.frames.slice(0, 3).every((frame) => frame.ready || frame.failed)) return null
+        return status
+      },
+      8000,
+      100,
+    )
+    assert(captured.buffer_width > 0 && captured.buffer_height > 0, `invalid buffer size ${JSON.stringify(captured)}`)
+    assert(!captured.stopped, 'capture session stopped unexpectedly')
+    const [first, requestedFull, subsequent] = captured.frames
+    assert(first && requestedFull && subsequent, `missing captured frames: ${JSON.stringify(captured.frames)}`)
+    assertFullDamage(first, captured, 'first capture')
+    assertFullDamage(requestedFull, captured, 'requested full-damage capture')
+    assertBoundedDamage(subsequent, captured, 'subsequent capture')
+    assert(
+      captured.frames.every((frame) => frame.checksum !== 0),
+      `expected captured buffers to have checksums: ${JSON.stringify(captured.frames)}`,
+    )
+    await writeJsonArtifact('ext-image-copy-capture-output-damage.json', {
+      command,
+      statusPath,
+      captured,
+    })
   })
 
   test('native presentation content type and tearing hints are committed', async ({ base, state }) => {
