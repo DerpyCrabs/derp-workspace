@@ -33,12 +33,14 @@ import {
 } from "@/features/shell-ui/shellUiWindows";
 import { createBackedShellWindowActions } from "@/features/shell-ui/backedShellWindowActions";
 import { renderShellHostedWindowContent } from "@/features/shell-ui/shellHostedWindowContent";
-import type {
-  ShellCompositorWireOp,
-  ShellCompositorWireSend,
-} from "@/features/shell-ui/shellWireSendType";
+import type { ShellCompositorWireSend } from "@/features/shell-ui/shellWireSendType";
 import { createShellSurfaceRuntime } from "@/features/shell-ui/shellSurfaceRuntime";
 import { createShellWindowGestureRuntime } from "@/features/shell-ui/shellWindowGestureRuntime";
+import {
+  createNativeDragPreviewRuntime,
+  type NativeDragPreview,
+} from "@/features/shell-ui/nativeDragPreviewRuntime";
+import { createShellUiWindowSyncRuntime } from "@/features/shell-ui/shellUiWindowSyncRuntime";
 import {
   CustomLayoutOverlay,
   type CustomLayoutOverlayState,
@@ -56,6 +58,10 @@ import { createFloatingLayerStore } from "@/features/floating/floatingLayers";
 import { createShellOverlayRegistry } from "@/features/floating/shellOverlay";
 import { spawnViaShellHttp } from "@/features/bridge/shellBridge";
 import { shellHttpBase } from "@/features/bridge/shellHttp";
+import {
+  shellMoveLog,
+  shellWireSend,
+} from "@/features/bridge/shellWireBootstrap";
 import { startThemeDomSync } from "@/features/theme/themeDom";
 import { refreshThemeSettingsFromRemote } from "@/features/theme/themeStore";
 import { ShellContextMenusProvider } from "@/host/ShellContextMenusContext";
@@ -93,8 +99,7 @@ import { createCompositorModel } from "@/features/bridge/compositorModel";
 import { registerAppRuntimeBootstrap } from "@/features/bridge/appRuntimeBootstrap";
 import { createScreenshotPortalBridge } from "@/features/bridge/screenshotPortalBridge";
 import { createShellExclusionSync } from "@/features/bridge/shellExclusionSync";
-import { createShellSharedStateSync } from "@/features/bridge/shellSharedStateSync";
-import { createSessionPersistenceRuntime } from "@/features/bridge/sessionPersistenceRuntime";
+import { createAppSessionPersistenceRuntime } from "@/features/bridge/appSessionPersistenceRuntime";
 import { createSessionRuntime } from "@/features/bridge/sessionRuntime";
 import { createShellTransportBridge } from "@/features/bridge/shellTransportBridge";
 import type { CompositorOutputTopology } from "@/features/bridge/compositorBridgeRuntime";
@@ -206,177 +211,6 @@ function shSingleQuotedForSpawn(text: string): string {
   return `'${text.replace(/'/g, `'\\''`)}'`;
 }
 
-function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
-  const now =
-    typeof performance !== "undefined"
-      ? Math.round(performance.now())
-      : Date.now();
-  const current =
-    typeof window.__DERP_MOVE_DEBUG === "object" &&
-    window.__DERP_MOVE_DEBUG !== null
-      ? window.__DERP_MOVE_DEBUG
-      : {
-          events: [] as Array<{
-            msg: string;
-            at: number;
-            detail: Record<string, unknown> | null;
-          }>,
-        };
-  const events = Array.isArray(current.events) ? current.events.slice(-31) : [];
-  events.push({ msg, at: now, detail: detail ?? null });
-  window.__DERP_MOVE_DEBUG = { events };
-}
-
-function nativeDragPreviewUrl(imagePath: string, generation: number) {
-  const base = shellHttpBase();
-  if (!base) return "";
-  return `${base}/native_drag_preview?p=${encodeURIComponent(imagePath)}&g=${generation}`;
-}
-
-const shellWireSend: ShellCompositorWireSend = function shellWireSend(
-  op: ShellCompositorWireOp,
-  arg?: number | string,
-  arg2?: number | string,
-  arg3?: number,
-  arg4?: number,
-  arg5?: number,
-  arg6?: number,
-): boolean {
-  const fn = window.__derpShellWireSend;
-  const hasWire = typeof fn === "function";
-  if (!hasWire) {
-    if (
-      op === "move_begin" ||
-      op === "move_end" ||
-      op === "resize_begin" ||
-      op === "resize_delta" ||
-      op === "resize_end" ||
-      op === "resize_shell_grab_begin" ||
-      op === "resize_shell_grab_end"
-    ) {
-      shellMoveLog("wire_missing", { op, arg, arg2 });
-    }
-    return false;
-  }
-  if (op === "resize_delta" && arg2 !== undefined) {
-    fn(op, arg as number, arg2);
-  } else if (op === "resize_begin" && arg2 !== undefined) {
-    fn(op, arg as number, arg2);
-  } else if (
-    op === "set_geometry" &&
-    typeof arg === "number" &&
-    arg2 !== undefined &&
-    arg3 !== undefined &&
-    arg4 !== undefined &&
-    arg5 !== undefined &&
-    arg6 !== undefined
-  ) {
-    fn(op, arg, arg2, arg3, arg4, arg5, arg6);
-  } else if (
-    (op === "set_fullscreen" || op === "set_maximized") &&
-    arg !== undefined &&
-    arg2 !== undefined
-  ) {
-    fn(op, arg as number, arg2);
-  } else if (
-    op === "quit" ||
-    op === "request_compositor_sync" ||
-    op === "invalidate_view" ||
-    op === "resize_shell_grab_end"
-  ) {
-    fn(op);
-  } else if (
-    (op === "hosted_window_open" || op === "backed_window_open") &&
-    typeof arg === "string"
-  ) {
-    fn(op, arg);
-  } else if (op === "set_output_layout" && typeof arg === "string") {
-    fn(op, arg);
-  } else if (op === "set_desktop_background" && typeof arg === "string") {
-    fn(op, arg);
-  } else if (
-    (op === "workspace_mutation" ||
-      op === "taskbar_pin_add" ||
-      op === "taskbar_pin_remove" ||
-      op === "taskbar_pin_launch" ||
-      op === "command_palette_activate") &&
-    typeof arg === "string"
-  ) {
-    fn(op, arg);
-  } else if (op === "window_intent" && typeof arg === "string") {
-    fn(op, arg);
-  } else if (
-    (op === "shell_hosted_window_state" ||
-      op === "shell_hosted_window_title") &&
-    typeof arg === "string"
-  ) {
-    fn(op, arg);
-  } else if (op === "set_shell_primary" && typeof arg === "string") {
-    fn(op, arg);
-  } else if (op === "set_ui_scale" && typeof arg === "number") {
-    fn(op, arg);
-  } else if (
-    op === "set_output_vrr" &&
-    typeof arg === "string" &&
-    typeof arg2 === "number"
-  ) {
-    fn(op, arg, arg2);
-  } else if (op === "set_taskbar_auto_hide" && typeof arg === "number") {
-    fn(op, arg);
-  } else if (
-    op === "set_taskbar_side" &&
-    typeof arg === "string" &&
-    typeof arg2 === "string"
-  ) {
-    fn(op, arg, arg2);
-  } else if (
-    op === "native_drag_preview_ready" &&
-    typeof arg === "number" &&
-    typeof arg2 === "number"
-  ) {
-    fn(op, arg, arg2);
-  } else if (
-    op === "set_tile_preview" &&
-    typeof arg === "number" &&
-    arg2 !== undefined &&
-    arg3 !== undefined &&
-    arg4 !== undefined &&
-    arg5 !== undefined
-  ) {
-    fn(op, arg, arg2, arg3, arg4, arg5);
-  } else if (
-    op === "set_chrome_metrics" &&
-    typeof arg === "number" &&
-    arg2 !== undefined
-  ) {
-    fn(op, arg, arg2);
-  } else if (op === "sni_tray_activate" && typeof arg === "string") {
-    fn(op, arg);
-  } else if (
-    op === "sni_tray_open_menu" &&
-    typeof arg === "string" &&
-    typeof arg2 === "number"
-  ) {
-    fn(op, arg, arg2);
-  } else if (
-    op === "sni_tray_menu_event" &&
-    typeof arg === "string" &&
-    typeof arg2 === "string" &&
-    arg3 !== undefined
-  ) {
-    fn(op, arg, arg2, arg3);
-  } else if (
-    op === "shell_blur_ui_window" ||
-    op === "programs_menu_closed" ||
-    op === "shell_ui_grab_end"
-  ) {
-    fn(op);
-  } else {
-    fn(op, arg);
-  }
-  return true;
-};
-
 function App() {
   const shellBuildLabel = shellBuildLabelText();
   const desktopApps = useDesktopApplicationsState();
@@ -425,17 +259,10 @@ function App() {
         fullscreen: boolean;
       } | null;
     } | null>(null);
-  const [nativeDragPreview, setNativeDragPreview] = createSignal<{
-    window_id: number;
-    generation: number;
-    image_path: string;
-  } | null>(null);
+  const [nativeDragPreview, setNativeDragPreview] =
+    createSignal<NativeDragPreview | null>(null);
   const [notificationsState, setNotificationsState] =
     createSignal<ShellNotificationsState | null>(emptyNotificationsState());
-  const [loadedNativeDragPreviewKey, setLoadedNativeDragPreviewKey] =
-    createSignal<string | null>(null);
-  const [loadedNativeDragPreviewImage, setLoadedNativeDragPreviewImage] =
-    createSignal<HTMLImageElement | null>(null);
   const [pointerClient, setPointerClient] = createSignal<{
     x: number;
     y: number;
@@ -477,63 +304,10 @@ function App() {
   const taskbarAutoHide = createMemo(
     () => outputTopology()?.taskbarAutoHide ?? false,
   );
-  const nativeDragPreviewKey = createMemo(() => {
-    const preview = nativeDragPreview();
-    return preview
-      ? `${preview.window_id}:${preview.generation}:${preview.image_path}`
-      : null;
-  });
-  const nativeDragPreviewWindowId = createMemo(
-    () => nativeDragPreview()?.window_id ?? null,
+  const nativeDragPreviewAsset = createNativeDragPreviewRuntime(
+    nativeDragPreview,
+    shellWireSend,
   );
-  const nativeDragPreviewGeneration = createMemo(
-    () => nativeDragPreview()?.generation ?? null,
-  );
-  const nativeDragPreviewSrc = createMemo(() => {
-    const preview = nativeDragPreview();
-    if (!preview) return "";
-    return nativeDragPreviewUrl(preview.image_path, preview.generation);
-  });
-  createEffect(() => {
-    const key = nativeDragPreviewKey();
-    const windowId = nativeDragPreviewWindowId();
-    const generation = nativeDragPreviewGeneration();
-    const src = nativeDragPreviewSrc();
-    setLoadedNativeDragPreviewKey(null);
-    setLoadedNativeDragPreviewImage(null);
-    if (!key || windowId === null || generation === null || !src) return;
-    let cancelled = false;
-    let loaded = false;
-    const image = new Image();
-    const markLoaded = () => {
-      if (cancelled || loaded) return;
-      loaded = true;
-      setLoadedNativeDragPreviewImage(image);
-      setLoadedNativeDragPreviewKey(key);
-      shellWireSend("native_drag_preview_ready", windowId, generation);
-    };
-    image.onload = markLoaded;
-    image.src = src;
-    if (image.complete && image.naturalWidth > 0) markLoaded();
-    onCleanup(() => {
-      cancelled = true;
-      image.onload = null;
-    });
-  });
-  const nativeDragPreviewAsset = createMemo(() => {
-    const preview = nativeDragPreview();
-    const key = nativeDragPreviewKey();
-    const src = nativeDragPreviewSrc();
-    if (!preview || !key || !src) return null;
-    const image = loadedNativeDragPreviewImage();
-    const loaded = loadedNativeDragPreviewKey() === key && image !== null;
-    return {
-      ...preview,
-      src,
-      loaded,
-      image: loaded ? image : null,
-    };
-  });
   const shellAudio = useShellAudioState();
   const shellBattery = useShellBatteryState();
   createEffect(() => {
@@ -818,7 +592,7 @@ function App() {
     shellWireReadyRev,
     start: startShellTransportBridge,
   } = shellTransportBridge;
-  const sessionPersistenceRuntime = createSessionPersistenceRuntime({
+  const sessionPersistenceRuntime = createAppSessionPersistenceRuntime({
     sessionRestoreSnapshot,
     windows,
     workspaceSnapshot,
@@ -1708,7 +1482,7 @@ function App() {
     if (!main || !og) return null;
     return { main, outputGeom: og, origin: layoutCanvasOrigin() };
   };
-  const shellSharedStateSync = createShellSharedStateSync({
+  const shellSharedStateSync = createShellUiWindowSyncRuntime({
     invalidateAllShellUiWindows,
     flushShellUiWindowsSyncNow,
     scheduleExclusionZonesSync,
