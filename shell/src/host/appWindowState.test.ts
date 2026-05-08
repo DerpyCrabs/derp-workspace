@@ -105,4 +105,37 @@ describe('appWindowState', () => {
     expect(next.get(1)).toBe(left)
     expect(next.has(2)).toBe(false)
   })
+
+  it('does not fill missing authoritative row fields from the previous window', () => {
+    const previousWindow = makeWindow(1, {
+      output_id: 'old-output-id',
+      output_name: 'OLD-1',
+      kind: 'old-kind',
+      capture_identifier: 'old-capture',
+      client_x: 10,
+    })
+    const previous = new Map<number, DerpWindow>([[previousWindow.window_id, previousWindow]])
+
+    const next = buildWindowsMapFromList(
+      [
+        {
+          window_id: 1,
+          surface_id: 1,
+          x: 2,
+          y: 3,
+          width: 4,
+          height: 5,
+        },
+      ],
+      previous,
+    )
+
+    expect(next.get(1)).toMatchObject({
+      output_id: '',
+      output_name: '',
+      kind: '',
+      capture_identifier: '',
+    })
+    expect(next.get(1)?.client_x).toBeUndefined()
+  })
 })

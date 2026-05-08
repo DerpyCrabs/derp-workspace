@@ -47,6 +47,7 @@ type CreateCompositorModelOptions = {
 type SnapshotAuthoritativeState = {
   focusedWindowId?: number | null
   windows?: { revision: number; rows: unknown[] }
+  windowOrder?: { revision: number; rows: unknown[] }
   workspaceSnapshot?: { revision: number; state: WorkspaceSnapshot }
   shellHostedAppByWindow?: { revision: number; byWindowId: Record<number, unknown> }
   commandPalette?: { revision: number; state: ExternalCommandPaletteState }
@@ -62,7 +63,7 @@ function collectWindowOrderIds(raw: unknown): number[] {
   if (!Array.isArray(raw)) return []
   const entries: { id: number; stack: number; index: number }[] = []
   for (const row of raw) {
-    if (!row || typeof row !== "object") continue
+    if (!row || typeof row !== 'object') continue
     const record = row as Record<string, unknown>
     const id = coerceShellWindowId(record.window_id)
     if (id === null) continue
@@ -73,6 +74,17 @@ function collectWindowOrderIds(raw: unknown): number[] {
   return entries
     .sort((left, right) => right.stack - left.stack || right.id - left.id || left.index - right.index)
     .map((entry) => entry.id)
+}
+
+function filterWindowOrderIds(ids: readonly number[], windows: ReadonlyMap<number, DerpWindow>): number[] {
+  const out: number[] = []
+  const seen = new Set<number>()
+  for (const id of ids) {
+    if (!windows.has(id) || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
 }
 
 function sameNumberArray(left: readonly number[], right: readonly number[]): boolean {
@@ -113,6 +125,13 @@ function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]):
       }
       continue
     }
+    if (detail.type === 'window_order') {
+      next.windowOrder = {
+        revision: coerceRevision(detail.revision),
+        rows: detail.windows,
+      }
+      continue
+    }
     if (detail.type === 'workspace_state') {
       next.workspaceSnapshot = {
         revision: coerceRevision(detail.revision),
@@ -146,7 +165,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
   const windowAccessors = new Map<number, Accessor<DerpWindow | undefined>>()
   const [windowOrderIds, setWindowOrderIds] = createSignal<number[]>([])
-  const [, setWindowsRevision] = createSignal(-1)
+  const [windowsRevision, setWindowsRevision] = createSignal(-1)
+  const [windowOrderRevision, setWindowOrderRevision] = createSignal(-1)
   const [workspaceSnapshot, setWorkspaceSnapshot] = createSignal<WorkspaceSnapshot>(
     options.initialWorkspaceState ?? createEmptyWorkspaceSnapshot(),
   )
@@ -234,14 +254,32 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   const applyAuthoritativeSnapshotDetails = (details: readonly DerpShellDetail[]) => {
     batch(() => {
       const authoritative = collectSnapshotAuthoritativeState(details)
+      let nextWindowsForOrder = windows()
+      let windowsChanged = false
       if (authoritative.windows !== undefined) {
-        const nextWindows = buildWindowsMapFromList(authoritative.windows.rows, windows())
-        commitWindows((prev) => (prev === nextWindows ? prev : nextWindows))
-        const nextOrderIds = collectWindowOrderIds(authoritative.windows.rows)
-        setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
-        setWindowsRevision((prev) => (prev === authoritative.windows!.revision ? prev : authoritative.windows!.revision))
+        windowsChanged = authoritative.windows.revision !== windowsRevision()
+        const nextWindows = windowsChanged ? buildWindowsMapFromList(authoritative.windows.rows, windows()) : windows()
+        nextWindowsForOrder = nextWindows
+        if (windowsChanged) {
+          commitWindows((prev) => (prev === nextWindows ? prev : nextWindows))
+          setWindowsRevision(authoritative.windows.revision)
+        }
+        if (authoritative.windowOrder === undefined && windowsChanged) {
+          const nextOrderIds = collectWindowOrderIds(authoritative.windows.rows)
+          setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
+        }
         if (authoritative.focusedWindowId === undefined) {
           setFocusedWindowId((prev) => (prev != null && nextWindows.has(prev) ? prev : null))
+        }
+      }
+      if (authoritative.windowOrder !== undefined) {
+        if (authoritative.windowOrder.revision !== windowOrderRevision() || windowsChanged) {
+          const nextOrderIds = filterWindowOrderIds(
+            collectWindowOrderIds(authoritative.windowOrder.rows),
+            nextWindowsForOrder,
+          )
+          setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
+          setWindowOrderRevision(authoritative.windowOrder.revision)
         }
       }
       if (authoritative.workspaceSnapshot !== undefined) {

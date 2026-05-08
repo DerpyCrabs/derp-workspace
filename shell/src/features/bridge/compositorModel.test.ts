@@ -123,7 +123,7 @@ describe('createCompositorModel', () => {
     })
   })
 
-  it('does not let snapshot window order override the authoritative window list', () => {
+  it('uses snapshot window order for list order without overwriting authoritative window rows', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()
 
@@ -147,7 +147,65 @@ describe('createCompositorModel', () => {
       ])
 
       expect(model.windows().get(51)?.stack_z).toBe(1)
-      expect(model.windowsListIds()).toEqual([50, 51])
+      expect(model.windowsListIds()).toEqual([51, 50])
+      dispose()
+    })
+  })
+
+  it('falls back to window list stack order when no window order snapshot is present', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+
+      model.applyAuthoritativeSnapshotDetails([
+        {
+          type: 'window_list',
+          revision: 1,
+          windows: [
+            { ...nativeWindow(50, 'Launcher'), stack_z: 2 },
+            { ...nativeWindow(51, 'Target'), stack_z: 9 },
+          ],
+        },
+      ])
+
+      expect(model.windowsListIds()).toEqual([51, 50])
+      dispose()
+    })
+  })
+
+  it('does not preserve missing fields from previous authoritative window rows', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      model.applyAuthoritativeSnapshotDetails([{ type: 'window_list', revision: 1, windows: [nativeWindow(7, 'Old')] }])
+
+      model.applyAuthoritativeSnapshotDetails([
+        {
+          type: 'window_list',
+          revision: 2,
+          windows: [
+            {
+              window_id: 7,
+              surface_id: 70,
+              stack_z: 7,
+              x: 1,
+              y: 2,
+              width: 3,
+              height: 4,
+              title: 'Sparse',
+              app_id: 'sparse.app',
+            },
+          ],
+        },
+      ])
+
+      expect(model.windows().get(7)).toMatchObject({
+        title: 'Sparse',
+        output_id: '',
+        output_name: '',
+        kind: '',
+        capture_identifier: '',
+        workspace_visible: true,
+      })
+      expect(model.windows().get(7)?.client_x).toBeUndefined()
       dispose()
     })
   })

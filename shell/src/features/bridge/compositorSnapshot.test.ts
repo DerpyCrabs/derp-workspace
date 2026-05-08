@@ -33,6 +33,10 @@ function frame(body: number[]): number[] {
   return [...u32(body.length), ...body]
 }
 
+function chunk(domain: number, packets: number[]): number[] {
+  return [...u32(domain), ...u32(packets.length), ...packets]
+}
+
 function domainRevisions(values: number[] = []): number[] {
   const out: number[] = []
   for (let index = 0; index < DOMAIN_COUNT; index += 1) {
@@ -292,6 +296,113 @@ describe('decodeCompositorSnapshot', () => {
         },
       ],
     })
+  })
+
+  it('decodes empty window order snapshots', () => {
+    const windowOrder = frame([
+      ...u32(63),
+      ...u64(20n),
+      ...u32(0),
+    ])
+    const payload = [...domainRevisions([0, 0, 0, 0, 0, 0, 0, 0, 0, 3]), ...windowOrder]
+    const bytes = new Uint8Array([
+      ...u32(0x44525053),
+      ...u32(0),
+      ...u32(payload.length),
+      ...u32(1 << 9),
+      ...u64(2n),
+      ...u64(0n),
+      ...payload,
+    ])
+
+    expect(decodeCompositorSnapshot(bytes.buffer)?.details).toEqual([
+      {
+        type: 'window_order',
+        revision: 20,
+        windows: [],
+      },
+    ])
+  })
+
+  it('decodes window list and order from domain chunks', () => {
+    const title = bytesForString('Terminal')
+    const appId = bytesForString('foot')
+    const empty = bytesForString('')
+    const windowList = frame([
+      ...u32(11),
+      ...u64(17n),
+      ...u32(1),
+      ...u32(0x44525702),
+      ...u32(92),
+      ...u32(9),
+      ...u32(10),
+      ...u32(4),
+      ...i32(20),
+      ...i32(30),
+      ...i32(800),
+      ...i32(600),
+      ...i32(20),
+      ...i32(30),
+      ...i32(800),
+      ...i32(600),
+      ...i32(16),
+      ...i32(4),
+      ...i32(808),
+      ...i32(630),
+      ...u32(0),
+      ...u32(0),
+      ...u32(0),
+      ...u32(1),
+      ...u32(1),
+      ...u32(0),
+      ...u32(title.length),
+      ...u32(appId.length),
+      ...title,
+      ...appId,
+      ...u32(empty.length),
+      ...empty,
+      ...u32(empty.length),
+      ...empty,
+      ...u32(empty.length),
+      ...empty,
+      ...u32(empty.length),
+      ...empty,
+      ...u32(empty.length),
+      ...empty,
+      ...u32(empty.length),
+      ...empty,
+    ])
+    const windowOrder = frame([
+      ...u32(63),
+      ...u64(19n),
+      ...u32(1),
+      ...u32(9),
+      ...u32(12),
+    ])
+    const chunks = [
+      ...u32(0x4452444d),
+      ...u32(2),
+      ...chunk(1 << 1, windowList),
+      ...chunk(1 << 9, windowOrder),
+    ]
+    const payload = [
+      ...domainRevisions([0, 1, 0, 0, 0, 0, 0, 0, 0, 2]),
+      ...chunks,
+    ]
+    const bytes = new Uint8Array([
+      ...u32(0x44525053),
+      ...u32(0),
+      ...u32(payload.length),
+      ...u32((1 << 1) | (1 << 9)),
+      ...u64(2n),
+      ...u64(0n),
+      ...payload,
+    ])
+
+    expect(decodeCompositorSnapshot(bytes.buffer)?.details.map((detail) => detail.type)).toEqual([
+      'window_list',
+      'window_order',
+    ])
   })
 
   it('decodes hot window geometry snapshots separately from the window list', () => {

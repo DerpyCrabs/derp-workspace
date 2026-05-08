@@ -223,16 +223,16 @@ export function workspaceGroupWindowIds(state: WorkspaceSnapshot, windowId: numb
   return groupId ? state.groups.find((group) => group.id === groupId)?.windowIds ?? [windowId] : [windowId]
 }
 
-function coerceOutputName(nextValue: unknown, previousValue: string): string {
-  return typeof nextValue === 'string' && nextValue.length > 0 ? nextValue : previousValue
+function coerceOutputName(nextValue: unknown): string {
+  return typeof nextValue === 'string' && nextValue.length > 0 ? nextValue : ''
 }
 
-function coerceOutputId(nextValue: unknown, previousValue: string): string {
-  return typeof nextValue === 'string' && nextValue.length > 0 ? nextValue : previousValue
+function coerceOutputId(nextValue: unknown): string {
+  return typeof nextValue === 'string' && nextValue.length > 0 ? nextValue : ''
 }
 
-function coerceOptionalFiniteNumber(nextValue: unknown, previousValue?: number): number | undefined {
-  return typeof nextValue === 'number' && Number.isFinite(nextValue) ? nextValue : previousValue
+function coerceOptionalFiniteNumber(nextValue: unknown): number | undefined {
+  return typeof nextValue === 'number' && Number.isFinite(nextValue) ? nextValue : undefined
 }
 
 export function windowIsShellHosted(window: Pick<DerpWindow, 'window_id' | 'app_id' | 'shell_flags'>): boolean {
@@ -288,17 +288,16 @@ export function buildWindowsMapFromList(
     const sid = coerceShellWindowId(r.surface_id)
     if (wid === null || sid === null) continue
     const previousWindow = prev?.get(wid)
-    const outputName = coerceOutputName(r.output_name, previousWindow?.output_name ?? '')
     const sfRaw = r.shell_flags
     const shell_flags =
       typeof sfRaw === 'number' && Number.isFinite(sfRaw)
         ? Math.trunc(sfRaw)
-        : (prev?.get(wid)?.shell_flags ?? 0)
+        : 0
     const szRaw = r.stack_z
     const stack_z =
       typeof szRaw === 'number' && Number.isFinite(szRaw)
         ? Math.trunc(szRaw)
-        : (prev?.get(wid)?.stack_z ?? wid)
+        : wid
     const window: DerpWindow = {
       window_id: wid,
       surface_id: sid,
@@ -307,21 +306,21 @@ export function buildWindowsMapFromList(
       y: Number(r.y) || 0,
       width: Number(r.width) || 0,
       height: Number(r.height) || 0,
-      client_x: coerceOptionalFiniteNumber(r.client_x, previousWindow?.client_x),
-      client_y: coerceOptionalFiniteNumber(r.client_y, previousWindow?.client_y),
-      client_width: coerceOptionalFiniteNumber(r.client_width, previousWindow?.client_width),
-      client_height: coerceOptionalFiniteNumber(r.client_height, previousWindow?.client_height),
-      frame_x: coerceOptionalFiniteNumber(r.frame_x, previousWindow?.frame_x),
-      frame_y: coerceOptionalFiniteNumber(r.frame_y, previousWindow?.frame_y),
-      frame_width: coerceOptionalFiniteNumber(r.frame_width, previousWindow?.frame_width),
-      frame_height: coerceOptionalFiniteNumber(r.frame_height, previousWindow?.frame_height),
+      client_x: coerceOptionalFiniteNumber(r.client_x),
+      client_y: coerceOptionalFiniteNumber(r.client_y),
+      client_width: coerceOptionalFiniteNumber(r.client_width),
+      client_height: coerceOptionalFiniteNumber(r.client_height),
+      frame_x: coerceOptionalFiniteNumber(r.frame_x),
+      frame_y: coerceOptionalFiniteNumber(r.frame_y),
+      frame_width: coerceOptionalFiniteNumber(r.frame_width),
+      frame_height: coerceOptionalFiniteNumber(r.frame_height),
       title: typeof r.title === 'string' ? r.title : '',
       app_id: typeof r.app_id === 'string' ? r.app_id : '',
-      output_id: coerceOutputId(r.output_id, previousWindow?.output_id ?? ''),
-      output_name: outputName,
-      kind: typeof r.kind === 'string' ? r.kind : (prev?.get(wid)?.kind ?? ''),
-      x11_class: typeof r.x11_class === 'string' ? r.x11_class : (prev?.get(wid)?.x11_class ?? ''),
-      x11_instance: typeof r.x11_instance === 'string' ? r.x11_instance : (prev?.get(wid)?.x11_instance ?? ''),
+      output_id: coerceOutputId(r.output_id),
+      output_name: coerceOutputName(r.output_name),
+      kind: typeof r.kind === 'string' ? r.kind : '',
+      x11_class: typeof r.x11_class === 'string' ? r.x11_class : '',
+      x11_instance: typeof r.x11_instance === 'string' ? r.x11_instance : '',
       minimized: !!r.minimized,
       maximized: !!r.maximized,
       fullscreen: !!r.fullscreen,
@@ -329,11 +328,11 @@ export function buildWindowsMapFromList(
       capture_identifier:
         typeof r.capture_identifier === 'string'
           ? r.capture_identifier
-          : (prev?.get(wid)?.capture_identifier ?? ''),
+          : '',
       workspace_visible:
         typeof r.workspace_visible === 'boolean'
           ? r.workspace_visible
-          : (prev?.get(wid)?.workspace_visible ?? true),
+          : true,
     }
     const sameAsPrevious = previousWindow !== undefined && sameDerpWindow(previousWindow, window)
     const stableWindow = sameAsPrevious ? previousWindow : window

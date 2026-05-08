@@ -5,7 +5,9 @@ pub(crate) struct ShellSnapshotModel {
     output_geometry: Option<shell_wire::DecodedCompositorToShellMessage>,
     output_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
     window_list_revision: u64,
+    window_order_revision: u64,
     window_rows_by_id: HashMap<u32, shell_wire::ShellWindowSnapshot>,
+    window_order_entries: Vec<shell_wire::ShellWindowOrderEntry>,
     sorted_window_ids: Vec<u32>,
     sorted_window_ids_dirty: bool,
     window_list_cache: Vec<shell_wire::ShellWindowSnapshot>,
@@ -25,6 +27,11 @@ impl ShellSnapshotModel {
     fn next_window_list_revision(&mut self) -> u64 {
         self.window_list_revision = self.window_list_revision.wrapping_add(1);
         self.window_list_revision
+    }
+
+    fn next_window_order_revision(&mut self) -> u64 {
+        self.window_order_revision = self.window_order_revision.wrapping_add(1);
+        self.window_order_revision
     }
 
     fn window_row_mut(&mut self, window_id: u32) -> Option<&mut shell_wire::ShellWindowSnapshot> {
@@ -47,6 +54,18 @@ impl ShellSnapshotModel {
     fn ordered_window_rows(&mut self) -> Vec<shell_wire::ShellWindowSnapshot> {
         self.ensure_window_list_cache();
         self.window_list_cache.clone()
+    }
+
+    fn refresh_window_order_entries_from_rows(&mut self) {
+        self.ensure_window_list_cache();
+        self.window_order_entries = self
+            .window_list_cache
+            .iter()
+            .map(|window| shell_wire::ShellWindowOrderEntry {
+                window_id: window.window_id,
+                stack_z: window.stack_z,
+            })
+            .collect();
     }
 
     fn ensure_sorted_window_ids(&mut self) {
@@ -82,27 +101,18 @@ impl ShellSnapshotModel {
             }
             shell_wire::DecodedCompositorToShellMessage::WindowList { revision, windows } => {
                 self.window_list_revision = *revision;
+                self.window_order_revision = *revision;
                 self.window_rows_by_id.clear();
                 for window in windows {
                     self.window_rows_by_id
                         .insert(window.window_id, window.clone());
                 }
                 self.mark_all_window_caches_dirty();
+                self.refresh_window_order_entries_from_rows();
             }
-            shell_wire::DecodedCompositorToShellMessage::WindowOrder { windows, .. } => {
-                let mut changed = false;
-                for window in windows {
-                    if let Some(row) = self.window_row_mut(window.window_id) {
-                        if row.stack_z != window.stack_z {
-                            row.stack_z = window.stack_z;
-                            changed = true;
-                        }
-                    }
-                }
-                if changed {
-                    self.mark_window_list_cache_dirty();
-                    self.next_window_list_revision();
-                }
+            shell_wire::DecodedCompositorToShellMessage::WindowOrder { revision, windows } => {
+                self.window_order_revision = *revision;
+                self.window_order_entries = windows.clone();
             }
             shell_wire::DecodedCompositorToShellMessage::WindowMapped {
                 window_id,
@@ -192,11 +202,15 @@ impl ShellSnapshotModel {
                 }
                 self.mark_all_window_caches_dirty();
                 self.next_window_list_revision();
+                self.refresh_window_order_entries_from_rows();
+                self.next_window_order_revision();
             }
             shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id } => {
                 if self.window_row_remove(*window_id) {
                     self.mark_all_window_caches_dirty();
                     self.next_window_list_revision();
+                    self.refresh_window_order_entries_from_rows();
+                    self.next_window_order_revision();
                 }
             }
             shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
@@ -368,6 +382,15 @@ impl ShellSnapshotModel {
                 windows: rows,
             });
         }
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_ORDER != 0 {
+            if self.window_order_entries.is_empty() && !self.window_rows_by_id.is_empty() {
+                self.refresh_window_order_entries_from_rows();
+            }
+            messages.push(shell_wire::DecodedCompositorToShellMessage::WindowOrder {
+                revision: self.window_order_revision,
+                windows: self.window_order_entries.clone(),
+            });
+        }
         if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_FOCUS != 0 {
             if let Some(message) = self.focus_changed.clone() {
                 messages.push(message);
@@ -474,13 +497,15 @@ pub(crate) fn snapshot_domain_for_message(
 mod tests {
     use super::ShellSnapshotModel;
 
-    #[test]
-    fn model_keeps_window_list_authoritative_from_incremental_events() {
-        let mut model = ShellSnapshotModel::default();
-        model.apply(&shell_wire::DecodedCompositorToShellMessage::WindowMapped {
-            window_id: 3,
-            surface_id: 30,
-            stack_z: 3,
+    fn mapped_window(
+        window_id: u32,
+        stack_z: u32,
+        title: &str,
+    ) -> shell_wire::DecodedCompositorToShellMessage {
+        shell_wire::DecodedCompositorToShellMessage::WindowMapped {
+            window_id,
+            surface_id: window_id * 10,
+            stack_z,
             x: 10,
             y: 20,
             w: 300,
@@ -488,8 +513,8 @@ mod tests {
             minimized: false,
             maximized: false,
             fullscreen: false,
-            title: "First".to_string(),
-            app_id: "app.first".to_string(),
+            title: title.to_string(),
+            app_id: format!("app.{window_id}"),
             client_side_decoration: false,
             shell_flags: 0,
             output_id: "out-a".to_string(),
@@ -498,7 +523,13 @@ mod tests {
             kind: "native".to_string(),
             x11_class: String::new(),
             x11_instance: String::new(),
-        });
+        }
+    }
+
+    #[test]
+    fn model_keeps_window_list_authoritative_from_incremental_events() {
+        let mut model = ShellSnapshotModel::default();
+        model.apply(&mapped_window(3, 3, "First"));
         model.apply(
             &shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
                 window_id: 3,
@@ -526,5 +557,103 @@ mod tests {
         assert_eq!(windows[0].surface_id, 31);
         assert_eq!(windows[0].title, "Renamed");
         assert_eq!(windows[0].app_id, "app.renamed");
+    }
+
+    #[test]
+    fn model_emits_full_window_and_order_domains_after_window_changes() {
+        let mut model = ShellSnapshotModel::default();
+        model.apply(&mapped_window(3, 3, "First"));
+        model.apply(&mapped_window(4, 9, "Second"));
+        model.apply(
+            &shell_wire::DecodedCompositorToShellMessage::WindowOrder {
+                revision: 22,
+                windows: vec![
+                    shell_wire::ShellWindowOrderEntry {
+                        window_id: 3,
+                        stack_z: 12,
+                    },
+                    shell_wire::ShellWindowOrderEntry {
+                        window_id: 4,
+                        stack_z: 2,
+                    },
+                ],
+            },
+        );
+
+        let messages = model.messages();
+        let window_list = messages
+            .iter()
+            .find_map(|message| match message {
+                shell_wire::DecodedCompositorToShellMessage::WindowList { windows, .. } => {
+                    Some(windows)
+                }
+                _ => None,
+            })
+            .expect("missing window list");
+        let window_order = messages
+            .iter()
+            .find_map(|message| match message {
+                shell_wire::DecodedCompositorToShellMessage::WindowOrder {
+                    revision,
+                    windows,
+                } => Some((*revision, windows)),
+                _ => None,
+            })
+            .expect("missing window order");
+
+        assert_eq!(window_list.len(), 2);
+        assert_eq!(window_list[0].stack_z, 3);
+        assert_eq!(window_order.0, 22);
+        assert_eq!(window_order.1.len(), 2);
+        assert_eq!(window_order.1[0].window_id, 3);
+        assert_eq!(window_order.1[0].stack_z, 12);
+    }
+
+    #[test]
+    fn model_keeps_workspace_domain_authoritative_after_window_churn() {
+        let mut model = ShellSnapshotModel::default();
+        model.apply(&mapped_window(3, 3, "First"));
+        model.apply(&shell_wire::DecodedCompositorToShellMessage::WorkspaceState {
+            revision: 7,
+            state_json: r#"{"groups":[{"id":"group-1","windowIds":[3]}],"activeTabByGroupId":{"group-1":3},"nextGroupSeq":2}"#.to_string(),
+        });
+        model.apply(&shell_wire::DecodedCompositorToShellMessage::WindowUnmapped {
+            window_id: 3,
+        });
+
+        let messages = model.messages();
+        let workspace = messages
+            .iter()
+            .find_map(|message| match message {
+                shell_wire::DecodedCompositorToShellMessage::WorkspaceState {
+                    revision,
+                    state_json,
+                } => Some((*revision, state_json)),
+                _ => None,
+            })
+            .expect("missing workspace state");
+        let window_list = messages
+            .iter()
+            .find_map(|message| match message {
+                shell_wire::DecodedCompositorToShellMessage::WindowList { windows, .. } => {
+                    Some(windows)
+                }
+                _ => None,
+            })
+            .expect("missing window list");
+        let window_order = messages
+            .iter()
+            .find_map(|message| match message {
+                shell_wire::DecodedCompositorToShellMessage::WindowOrder { windows, .. } => {
+                    Some(windows)
+                }
+                _ => None,
+            })
+            .expect("missing window order");
+
+        assert_eq!(workspace.0, 7);
+        assert!(workspace.1.contains("group-1"));
+        assert!(window_list.is_empty());
+        assert!(window_order.is_empty());
     }
 }
