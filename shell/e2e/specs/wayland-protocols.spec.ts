@@ -1,9 +1,9 @@
-import { readFile } from 'node:fs/promises'
-import { execFile } from 'node:child_process'
-import { createConnection } from 'node:net'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
+import { readFile, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { createConnection } from "node:net";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import {
   artifactDir,
@@ -33,105 +33,133 @@ import {
   waitForWindowGone,
   writeJsonArtifact,
   type CompositorSnapshot,
-} from '../lib/runtime.ts'
-import { closeWindow, openShellTestWindow, postJson, runKeybind, spawnNativeWindow } from '../lib/setup.ts'
+} from "../lib/runtime.ts";
+import {
+  closeWindow,
+  openShellTestWindow,
+  postJson,
+  runKeybind,
+  spawnNativeWindow,
+} from "../lib/setup.ts";
 
-const execFileAsync = promisify(execFile)
-const here = path.dirname(fileURLToPath(import.meta.url))
-const repoRoot = path.resolve(here, '..', '..', '..')
-const derpctlBin = process.env.DERP_E2E_DERPCTL_BIN || path.join(repoRoot, 'target', 'release', 'derpctl')
+const execFileAsync = promisify(execFile);
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, "..", "..", "..");
+const derpctlBin =
+  process.env.DERP_E2E_DERPCTL_BIN ||
+  path.join(repoRoot, "target", "release", "derpctl");
 
 type ExplicitSyncDmabufStatus = {
-  configured: boolean
-  frame_a_committed: boolean
-  frame_b_committed: boolean
-  acquire_b_signaled: boolean
-  release_a_observed: boolean
-  release_b_observed: boolean
-  stress_total?: number
-  stress_committed?: number
-  stress_release_observed?: number
-  stress_release_failed?: boolean
-}
+  configured: boolean;
+  frame_a_committed: boolean;
+  frame_b_committed: boolean;
+  acquire_b_signaled: boolean;
+  release_a_observed: boolean;
+  release_b_observed: boolean;
+  stress_total?: number;
+  stress_committed?: number;
+  stress_release_observed?: number;
+  stress_release_failed?: boolean;
+};
 
 type ExtImageCopyStatus = {
-  buffer_width: number
-  buffer_height: number
-  constraints_done: boolean
-  stopped: boolean
+  buffer_width: number;
+  buffer_height: number;
+  constraints_done: boolean;
+  stopped: boolean;
   frames: Array<{
-    index: number
-    ready: boolean
-    failed: string | null
-    checksum: number
-    nonzero_pixels: number
-    damage: Array<{ x: number; y: number; width: number; height: number }>
-  }>
-}
+    index: number;
+    ready: boolean;
+    failed: string | null;
+    checksum: number;
+    nonzero_pixels: number;
+    damage: Array<{ x: number; y: number; width: number; height: number }>;
+  }>;
+};
+
+type TestRunCommandResult = {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+};
 
 async function readStatusJson<T>(filePath: string): Promise<T | null> {
   try {
-    return JSON.parse(await readFile(filePath, 'utf8')) as T
+    return JSON.parse(await readFile(filePath, "utf8")) as T;
   } catch {
-    return null
+    return null;
   }
 }
 
 async function signalExplicitSyncControl(socketPath: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const socket = createConnection(socketPath)
-    socket.once('connect', () => socket.end())
-    socket.once('end', resolve)
-    socket.once('close', resolve)
-    socket.once('error', reject)
-  })
+    const socket = createConnection(socketPath);
+    socket.once("connect", () => socket.end());
+    socket.once("end", resolve);
+    socket.once("close", resolve);
+    socket.once("error", reject);
+  });
 }
 
 async function derpctl(args: string[]): Promise<void> {
-  const { stdout } = await execFileAsync(derpctlBin, args, { cwd: repoRoot })
-  const reply = JSON.parse(stdout.trim()) as { ok: boolean; error?: { message?: string } }
-  assert(reply.ok, `derpctl ${args.join(' ')} failed: ${reply.error?.message ?? stdout}`)
+  const { stdout } = await execFileAsync(derpctlBin, args, { cwd: repoRoot });
+  const reply = JSON.parse(stdout.trim()) as {
+    ok: boolean;
+    error?: { message?: string };
+  };
+  assert(
+    reply.ok,
+    `derpctl ${args.join(" ")} failed: ${reply.error?.message ?? stdout}`,
+  );
 }
 
-async function dominantInteriorColor(base: string, window: { x: number; y: number; width: number; height: number }) {
+async function dominantInteriorColor(
+  base: string,
+  window: { x: number; y: number; width: number; height: number },
+) {
   const rect = {
     x: window.x + Math.floor(window.width / 4),
     y: window.y + Math.floor(window.height / 4),
     width: Math.max(8, Math.floor(window.width / 2)),
     height: Math.max(8, Math.floor(window.height / 2)),
-  }
-  const screenshot = await captureScreenshotRect(base, rect)
-  const png = await readPngRgba(screenshot.path)
-  let red = 0
-  let green = 0
+  };
+  const screenshot = await captureScreenshotRect(base, rect);
+  const png = await readPngRgba(screenshot.path);
+  let red = 0;
+  let green = 0;
   for (let index = 0; index < png.data.length; index += 4) {
-    const r = png.data[index] ?? 0
-    const g = png.data[index + 1] ?? 0
-    const b = png.data[index + 2] ?? 0
-    if (r > 160 && g < 100 && b < 100) red += 1
-    if (g > 140 && r < 100 && b < 120) green += 1
+    const r = png.data[index] ?? 0;
+    const g = png.data[index + 1] ?? 0;
+    const b = png.data[index + 2] ?? 0;
+    if (r > 160 && g < 100 && b < 100) red += 1;
+    if (g > 140 && r < 100 && b < 120) green += 1;
   }
   return {
     path: screenshot.path,
     red,
     green,
     total: png.width * png.height,
-  }
+  };
 }
 
 function outputOverlapArea(
   window: { x: number; y: number; width: number; height: number },
   output: { x: number; y: number; width: number; height: number },
 ) {
-  const x0 = Math.max(window.x, output.x)
-  const y0 = Math.max(window.y, output.y)
-  const x1 = Math.min(window.x + window.width, output.x + output.width)
-  const y1 = Math.min(window.y + window.height, output.y + output.height)
-  return Math.max(0, x1 - x0) * Math.max(0, y1 - y0)
+  const x0 = Math.max(window.x, output.x);
+  const y0 = Math.max(window.y, output.y);
+  const x1 = Math.min(window.x + window.width, output.x + output.width);
+  const y1 = Math.min(window.y + window.height, output.y + output.height);
+  return Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
 }
 
-function overlappedOutputs(compositor: CompositorSnapshot, window: { x: number; y: number; width: number; height: number }) {
-  return compositor.outputs.filter((output) => outputOverlapArea(window, output) > 16 * 16)
+function overlappedOutputs(
+  compositor: CompositorSnapshot,
+  window: { x: number; y: number; width: number; height: number },
+) {
+  return compositor.outputs.filter(
+    (output) => outputOverlapArea(window, output) > 16 * 16,
+  );
 }
 
 function assertAvoidsTopReserve(
@@ -140,37 +168,46 @@ function assertAvoidsTopReserve(
   window: { x: number; y: number; width: number; height: number },
   reserve: number,
 ) {
-  assert(window.y >= output.y + reserve, `${label} y ${window.y} overlaps reserve ending at ${output.y + reserve}`)
+  assert(
+    window.y >= output.y + reserve,
+    `${label} y ${window.y} overlaps reserve ending at ${output.y + reserve}`,
+  );
   assert(
     window.height <= output.height - reserve,
     `${label} height ${window.height} exceeds output height ${output.height} minus reserve ${reserve}`,
-  )
+  );
 }
 
-async function moveWindowToOutput(windowId: number, output: { x: number; y: number; width: number; height: number }) {
+async function moveWindowToOutput(
+  windowId: number,
+  output: { x: number; y: number; width: number; height: number },
+) {
   await derpctl([
-    'window',
-    'move',
+    "window",
+    "move",
     String(windowId),
-    '--x',
+    "--x",
     String(output.x + 80),
-    '--y',
+    "--y",
     String(output.y + 96),
-    '--width',
+    "--width",
     String(Math.min(520, Math.max(260, output.width - 160))),
-    '--height',
+    "--height",
     String(Math.min(360, Math.max(180, output.height - 192))),
-  ])
+  ]);
 }
 
 function assertFullDamage(
-  frame: ExtImageCopyStatus['frames'][number],
+  frame: ExtImageCopyStatus["frames"][number],
   size: { buffer_width: number; buffer_height: number },
   label: string,
 ) {
-  assert(frame.ready, `${label} frame did not become ready: ${JSON.stringify(frame)}`)
-  assert(!frame.failed, `${label} frame failed: ${frame.failed}`)
-  assert(frame.nonzero_pixels > 0, `${label} frame buffer stayed empty`)
+  assert(
+    frame.ready,
+    `${label} frame did not become ready: ${JSON.stringify(frame)}`,
+  );
+  assert(!frame.failed, `${label} frame failed: ${frame.failed}`);
+  assert(frame.nonzero_pixels > 0, `${label} frame buffer stayed empty`);
   assert(
     frame.damage.some(
       (damage) =>
@@ -180,164 +217,209 @@ function assertFullDamage(
         damage.height === size.buffer_height,
     ),
     `${label} did not report full damage for ${size.buffer_width}x${size.buffer_height}: ${JSON.stringify(frame.damage)}`,
-  )
+  );
 }
 
-function assertBoundedDamage(frame: ExtImageCopyStatus['frames'][number], size: ExtImageCopyStatus, label: string) {
-  assert(frame.ready, `${label} frame did not become ready: ${JSON.stringify(frame)}`)
-  assert(frame.damage.length > 0, `${label} should report at least one damage rect`)
+function assertBoundedDamage(
+  frame: ExtImageCopyStatus["frames"][number],
+  size: ExtImageCopyStatus,
+  label: string,
+) {
+  assert(
+    frame.ready,
+    `${label} frame did not become ready: ${JSON.stringify(frame)}`,
+  );
+  assert(
+    frame.damage.length > 0,
+    `${label} should report at least one damage rect`,
+  );
   for (const damage of frame.damage) {
-    assert(damage.x >= 0 && damage.y >= 0, `${label} damage has negative origin: ${JSON.stringify(damage)}`)
-    assert(damage.width > 0 && damage.height > 0, `${label} damage has invalid size: ${JSON.stringify(damage)}`)
     assert(
-      damage.x + damage.width <= size.buffer_width && damage.y + damage.height <= size.buffer_height,
+      damage.x >= 0 && damage.y >= 0,
+      `${label} damage has negative origin: ${JSON.stringify(damage)}`,
+    );
+    assert(
+      damage.width > 0 && damage.height > 0,
+      `${label} damage has invalid size: ${JSON.stringify(damage)}`,
+    );
+    assert(
+      damage.x + damage.width <= size.buffer_width &&
+        damage.y + damage.height <= size.buffer_height,
       `${label} damage escapes ${size.buffer_width}x${size.buffer_height}: ${JSON.stringify(damage)}`,
-    )
+    );
   }
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
-  test('advertises linux-drm-syncobj-v1 to Wayland clients', async ({ base }) => {
-    const outputPath = path.join(artifactDir(), `drm-syncobj-globals-${Date.now()}.txt`)
+  test("advertises linux-drm-syncobj-v1 to Wayland clients", async ({
+    base,
+  }) => {
+    const outputPath = path.join(
+      artifactDir(),
+      `drm-syncobj-globals-${Date.now()}.txt`,
+    );
     const command = [
       shellQuote(nativeBin()),
-      '--require-global',
-      'wp_linux_drm_syncobj_manager_v1',
-      '--list-globals',
-      '>',
+      "--require-global",
+      "wp_linux_drm_syncobj_manager_v1",
+      "--list-globals",
+      ">",
       shellQuote(outputPath),
-      '2>&1;',
-      'printf',
-      shellQuote('\\nexit:%s\\n'),
-      '$?',
-      '>>',
+      "2>&1;",
+      "printf",
+      shellQuote("\\nexit:%s\\n"),
+      "$?",
+      ">>",
       shellQuote(outputPath),
-    ].join(' ')
-    await spawnCommand(base, `sh -lc ${shellQuote(command)}`)
+    ].join(" ");
+    await spawnCommand(base, `sh -lc ${shellQuote(command)}`);
     const output = await waitFor(
-      'wait for linux-drm-syncobj-v1 registry probe',
+      "wait for linux-drm-syncobj-v1 registry probe",
       async () => {
         try {
-          const text = await readFile(outputPath, 'utf8')
-          return text.includes('\nexit:') ? text : null
+          const text = await readFile(outputPath, "utf8");
+          return text.includes("\nexit:") ? text : null;
         } catch {
-          return null
+          return null;
         }
       },
       5000,
       100,
-    )
-    assert(output.includes('wp_linux_drm_syncobj_manager_v1 1'), output)
-    assert(output.includes('\nexit:0\n'), output)
-  })
+    );
+    assert(output.includes("wp_linux_drm_syncobj_manager_v1 1"), output);
+    assert(output.includes("\nexit:0\n"), output);
+  });
 
-  test('advertises presentation content-type and tearing-control globals', async ({ base }) => {
-    const outputPath = path.join(artifactDir(), `wayland-protocol-globals-${Date.now()}.txt`)
+  test("advertises presentation content-type and tearing-control globals", async ({
+    base,
+  }) => {
+    const outputPath = path.join(
+      artifactDir(),
+      `wayland-protocol-globals-${Date.now()}.txt`,
+    );
     const command = [
       shellQuote(nativeBin()),
-      '--require-global',
-      'wp_presentation',
-      '--require-global',
-      'wp_content_type_manager_v1',
-      '--require-global',
-      'wp_tearing_control_manager_v1',
-      '--require-global',
-      'ext_image_copy_capture_manager_v1',
-      '--require-global',
-      'ext_output_image_capture_source_manager_v1',
-      '--list-globals',
-      '>',
+      "--require-global",
+      "wp_presentation",
+      "--require-global",
+      "wp_content_type_manager_v1",
+      "--require-global",
+      "wp_tearing_control_manager_v1",
+      "--require-global",
+      "ext_image_copy_capture_manager_v1",
+      "--require-global",
+      "ext_output_image_capture_source_manager_v1",
+      "--list-globals",
+      ">",
       shellQuote(outputPath),
-      '2>&1;',
-      'printf',
-      shellQuote('\\nexit:%s\\n'),
-      '$?',
-      '>>',
+      "2>&1;",
+      "printf",
+      shellQuote("\\nexit:%s\\n"),
+      "$?",
+      ">>",
       shellQuote(outputPath),
-    ].join(' ')
-    await spawnCommand(base, `sh -lc ${shellQuote(command)}`)
+    ].join(" ");
+    await spawnCommand(base, `sh -lc ${shellQuote(command)}`);
     const output = await waitFor(
-      'wait for wayland protocol registry probe',
+      "wait for wayland protocol registry probe",
       async () => {
         try {
-          const text = await readFile(outputPath, 'utf8')
-          return text.includes('\nexit:') ? text : null
+          const text = await readFile(outputPath, "utf8");
+          return text.includes("\nexit:") ? text : null;
         } catch {
-          return null
+          return null;
         }
       },
       5000,
       100,
-    )
-    assert(output.includes('wp_presentation 2'), output)
-    assert(output.includes('wp_content_type_manager_v1 1'), output)
-    assert(output.includes('wp_tearing_control_manager_v1 1'), output)
-    assert(output.includes('ext_image_copy_capture_manager_v1 1'), output)
-    assert(output.includes('ext_output_image_capture_source_manager_v1 1'), output)
-    assert(output.includes('\nexit:0\n'), output)
-  })
+    );
+    assert(output.includes("wp_presentation 2"), output);
+    assert(output.includes("wp_content_type_manager_v1 1"), output);
+    assert(output.includes("wp_tearing_control_manager_v1 1"), output);
+    assert(output.includes("ext_image_copy_capture_manager_v1 1"), output);
+    assert(
+      output.includes("ext_output_image_capture_source_manager_v1 1"),
+      output,
+    );
+    assert(output.includes("\nexit:0\n"), output);
+  });
 
-  test('forwards pointer gestures to native clients without leaking shell UI gestures', async ({ base, state }) => {
-    const outputPath = path.join(artifactDir(), `pointer-gestures-globals-${Date.now()}.txt`)
+  test("forwards pointer gestures to native clients without leaking shell UI gestures", async ({
+    base,
+    state,
+  }) => {
+    const outputPath = path.join(
+      artifactDir(),
+      `pointer-gestures-globals-${Date.now()}.txt`,
+    );
     const globalsCommand = [
       shellQuote(nativeBin()),
-      '--require-global',
-      'zwp_pointer_gestures_v1',
-      '--list-globals',
-      '>',
+      "--require-global",
+      "zwp_pointer_gestures_v1",
+      "--list-globals",
+      ">",
       shellQuote(outputPath),
-      '2>&1;',
-      'printf',
-      shellQuote('\\nexit:%s\\n'),
-      '$?',
-      '>>',
+      "2>&1;",
+      "printf",
+      shellQuote("\\nexit:%s\\n"),
+      "$?",
+      ">>",
       shellQuote(outputPath),
-    ].join(' ')
-    await spawnCommand(base, `sh -lc ${shellQuote(globalsCommand)}`)
+    ].join(" ");
+    await spawnCommand(base, `sh -lc ${shellQuote(globalsCommand)}`);
     const globalsOutput = await waitFor(
-      'wait for pointer gestures registry probe',
+      "wait for pointer gestures registry probe",
       async () => {
         try {
-          const text = await readFile(outputPath, 'utf8')
-          return text.includes('\nexit:') ? text : null
+          const text = await readFile(outputPath, "utf8");
+          return text.includes("\nexit:") ? text : null;
         } catch {
-          return null
+          return null;
         }
       },
       5000,
       100,
-    )
-    assert(globalsOutput.includes('zwp_pointer_gestures_v1'), globalsOutput)
-    assert(globalsOutput.includes('\nexit:0\n'), globalsOutput)
+    );
+    assert(globalsOutput.includes("zwp_pointer_gestures_v1"), globalsOutput);
+    assert(globalsOutput.includes("\nexit:0\n"), globalsOutput);
 
-    const stamp = Date.now()
-    const statusPath = path.join(artifactDir(), `pointer-gestures-status-${stamp}.json`)
-    const title = `Derp Pointer Gesture Probe ${stamp}`
+    const stamp = Date.now();
+    const statusPath = path.join(
+      artifactDir(),
+      `pointer-gestures-status-${stamp}.json`,
+    );
+    const title = `Derp Pointer Gesture Probe ${stamp}`;
     const native = await spawnNativeWindow(base, state.knownWindowIds, {
       title,
-      appId: 'derp.e2e.pointer.gestures',
+      appId: "derp.e2e.pointer.gestures",
       token: `pointer-gestures-${stamp}`,
-      strip: 'green',
+      strip: "green",
       width: 420,
       height: 260,
       gestureStatusJson: statusPath,
-    })
-    state.spawnedNativeWindowIds.add(native.window.window_id)
+    });
+    state.spawnedNativeWindowIds.add(native.window.window_id);
     try {
-      await waitForNativeFocus(base, native.window.window_id)
+      await waitForNativeFocus(base, native.window.window_id);
       await movePoint(
         base,
         native.window.x + Math.floor(native.window.width / 2),
         native.window.y + Math.floor(native.window.height / 2),
-      )
-      await waitFor('wait for gesture probe status file', () => readStatusJson<Record<string, number>>(statusPath), 5000, 100)
-      await pointerGesture(base, 'swipe')
-      await pointerGesture(base, 'pinch')
+      );
+      await waitFor(
+        "wait for gesture probe status file",
+        () => readStatusJson<Record<string, number>>(statusPath),
+        5000,
+        100,
+      );
+      await pointerGesture(base, "swipe");
+      await pointerGesture(base, "pinch");
       const delivered = await waitFor(
-        'wait for native pointer gestures',
+        "wait for native pointer gestures",
         async () => {
-          const status = await readStatusJson<Record<string, number>>(statusPath)
-          if (!status) return null
+          const status =
+            await readStatusJson<Record<string, number>>(statusPath);
+          if (!status) return null;
           return status.swipe_begin >= 1 &&
             status.swipe_update >= 1 &&
             status.swipe_end >= 1 &&
@@ -345,37 +427,50 @@ export default defineGroup(import.meta.url, ({ test }) => {
             status.pinch_update >= 1 &&
             status.pinch_end >= 1
             ? status
-            : null
+            : null;
         },
         5000,
         100,
-      )
-      await movePoint(base, native.window.x + 24, native.window.y + 24)
-      await pointerWheel(base, 0, -120)
-      const pointerAfterMotion = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      );
+      await movePoint(base, native.window.x + 24, native.window.y + 24);
+      await pointerWheel(base, 0, -120);
+      const pointerAfterMotion = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
       assert(
-        Math.round(pointerAfterMotion.pointer?.x ?? -1) === native.window.x + 24 &&
-          Math.round(pointerAfterMotion.pointer?.y ?? -1) === native.window.y + 24,
+        Math.round(pointerAfterMotion.pointer?.x ?? -1) ===
+          native.window.x + 24 &&
+          Math.round(pointerAfterMotion.pointer?.y ?? -1) ===
+            native.window.y + 24,
         `pointer motion changed unexpectedly: ${JSON.stringify(pointerAfterMotion.pointer)}`,
-      )
-      const beforeShellGesture = await readStatusJson<Record<string, number>>(statusPath)
-      const shellRect = pointerAfterMotion.shell_exclusion_global?.[0]
-      assert(shellRect && shellRect.width > 0 && shellRect.height > 0, 'missing shell exclusion rect for leak probe')
+      );
+      const beforeShellGesture =
+        await readStatusJson<Record<string, number>>(statusPath);
+      const shellRect = pointerAfterMotion.shell_exclusion_global?.[0];
+      assert(
+        shellRect && shellRect.width > 0 && shellRect.height > 0,
+        "missing shell exclusion rect for leak probe",
+      );
       await movePoint(
         base,
         shellRect.x + Math.floor(shellRect.width / 2),
         shellRect.y + Math.floor(shellRect.height / 2),
-      )
-      await pointerGesture(base, 'swipe')
-      const afterShellGesture = await readStatusJson<Record<string, number>>(statusPath)
-      assert(beforeShellGesture && afterShellGesture, 'missing gesture status around shell leak probe')
+      );
+      await pointerGesture(base, "swipe");
+      const afterShellGesture =
+        await readStatusJson<Record<string, number>>(statusPath);
+      assert(
+        beforeShellGesture && afterShellGesture,
+        "missing gesture status around shell leak probe",
+      );
       assert(
         afterShellGesture.swipe_begin === beforeShellGesture.swipe_begin &&
           afterShellGesture.swipe_update === beforeShellGesture.swipe_update &&
           afterShellGesture.swipe_end === beforeShellGesture.swipe_end,
         `shell UI gesture leaked to native client: before=${JSON.stringify(beforeShellGesture)} after=${JSON.stringify(afterShellGesture)}`,
-      )
-      await writeJsonArtifact('pointer-gestures-forwarding.json', {
+      );
+      await writeJsonArtifact("pointer-gestures-forwarding.json", {
         globals: globalsOutput,
         native: native.window,
         delivered,
@@ -383,74 +478,89 @@ export default defineGroup(import.meta.url, ({ test }) => {
         afterShellGesture,
         shellRect,
         pointerAfterMotion: pointerAfterMotion.pointer,
-      })
+      });
     } finally {
-      await closeWindow(base, native.window.window_id)
-      await waitForWindowGone(base, native.window.window_id, 5000)
+      await closeWindow(base, native.window.window_id);
+      await waitForWindowGone(base, native.window.window_id, 5000);
     }
-  })
+  });
 
-  test('xdg-activation focuses a target only after a focused user interaction token', async ({ base, state }) => {
-    const stamp = Date.now()
-    const launcherTitle = `Derp Activation Policy Launcher ${stamp}`
-    const targetTitle = `Derp Activation Policy Target ${stamp}`
+  test("xdg-activation focuses a target only after a focused user interaction token", async ({
+    base,
+    state,
+  }) => {
+    const stamp = Date.now();
+    const launcherTitle = `Derp Activation Policy Launcher ${stamp}`;
+    const targetTitle = `Derp Activation Policy Target ${stamp}`;
     const targetCommand = buildNativeSpawnCommand({
       title: targetTitle,
-      appId: 'derp.e2e.protocol.activation.target',
+      appId: "derp.e2e.protocol.activation.target",
       token: `activation-policy-target-${stamp}`,
-      strip: 'orange',
-    })
+      strip: "orange",
+    });
     const launcher = await spawnNativeWindow(base, state.knownWindowIds, {
       title: launcherTitle,
-      appId: 'derp.e2e.protocol.activation.launcher',
+      appId: "derp.e2e.protocol.activation.launcher",
       token: `activation-policy-launcher-${stamp}`,
-      strip: 'cyan',
+      strip: "cyan",
       spawnOnPressCommand: targetCommand,
-      activationAppId: 'derp.e2e.protocol.activation.target',
-    })
-    const launcherId = launcher.window.window_id
-    state.spawnedNativeWindowIds.add(launcherId)
-    let targetId: number | null = null
+      activationAppId: "derp.e2e.protocol.activation.target",
+    });
+    const launcherId = launcher.window.window_id;
+    state.spawnedNativeWindowIds.add(launcherId);
+    let targetId: number | null = null;
     try {
-      await waitForNativeFocus(base, launcherId)
-      await tapKey(base, KEY.enter)
+      await waitForNativeFocus(base, launcherId);
+      await tapKey(base, KEY.enter);
       const target = await waitForSpawnedWindow(base, state.knownWindowIds, {
         title: targetTitle,
-        appId: 'derp.e2e.protocol.activation.target',
+        appId: "derp.e2e.protocol.activation.target",
         command: targetCommand,
-      })
-      targetId = target.window.window_id
-      state.spawnedNativeWindowIds.add(targetId)
-      const focused = await waitForNativeFocus(base, targetId)
-      assert(focused.compositor.focused_window_id === targetId, `expected activation focus on ${targetId}`)
-      await writeJsonArtifact('wayland-protocols-xdg-activation-focus-policy.json', {
-        launcher,
-        target,
-        focused: focused.compositor,
-      })
+      });
+      targetId = target.window.window_id;
+      state.spawnedNativeWindowIds.add(targetId);
+      const focused = await waitForNativeFocus(base, targetId);
+      assert(
+        focused.compositor.focused_window_id === targetId,
+        `expected activation focus on ${targetId}`,
+      );
+      await writeJsonArtifact(
+        "wayland-protocols-xdg-activation-focus-policy.json",
+        {
+          launcher,
+          target,
+          focused: focused.compositor,
+        },
+      );
     } finally {
       if (targetId !== null) {
-        await closeWindow(base, targetId)
-        await waitForWindowGone(base, targetId, 5000)
+        await closeWindow(base, targetId);
+        await waitForWindowGone(base, targetId, 5000);
       }
-      await closeWindow(base, launcherId)
-      await waitForWindowGone(base, launcherId, 5000)
+      await closeWindow(base, launcherId);
+      await waitForWindowGone(base, launcherId, 5000);
     }
-  })
+  });
 
-  test('layer-shell exclusive zone reserves compositor work areas', async ({ base, state }) => {
-    const zone = 64
-    const stamp = Date.now()
-    const panelToken = `layer-exclusive-panel-${stamp}`
+  test("layer-shell exclusive zone reserves compositor work areas", async ({
+    base,
+    state,
+  }) => {
+    const zone = 64;
+    const stamp = Date.now();
+    const panelToken = `layer-exclusive-panel-${stamp}`;
     await spawnCommand(
       base,
       `${shellQuote(nativeBin())} --layer-panel --exclusive-zone ${zone} --token ${shellQuote(panelToken)}`,
-    )
+    );
     try {
       const panelOutput = await waitFor(
-        'wait for layer panel exclusive zone',
+        "wait for layer panel exclusive zone",
         async () => {
-          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
           return (
             compositor.outputs.find(
               (output) =>
@@ -459,408 +569,569 @@ export default defineGroup(import.meta.url, ({ test }) => {
                 output.usable_y >= output.y + zone &&
                 output.usable_height <= output.height - zone,
             ) ?? null
-          )
+          );
         },
         5000,
         100,
-      )
+      );
       const native = await spawnNativeWindow(base, state.knownWindowIds, {
         title: `Derp Layer Exclusive Native ${stamp}`,
         token: `layer-exclusive-native-${stamp}`,
-        strip: 'red',
-      })
-      state.spawnedNativeWindowIds.add(native.window.window_id)
-      await moveWindowToOutput(native.window.window_id, panelOutput)
-      await derpctl(['window', 'maximize', String(native.window.window_id), '--enabled', 'true'])
+        strip: "red",
+      });
+      state.spawnedNativeWindowIds.add(native.window.window_id);
+      await moveWindowToOutput(native.window.window_id, panelOutput);
+      await derpctl([
+        "window",
+        "maximize",
+        String(native.window.window_id),
+        "--enabled",
+        "true",
+      ]);
       const nativeMaximized = await waitFor(
-        'wait for native maximize to avoid layer panel',
+        "wait for native maximize to avoid layer panel",
         async () => {
-          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-          const window = compositor.windows.find((entry) => entry.window_id === native.window.window_id)
-          const output = compositor.outputs.find((entry) => entry.name === window?.output_name)
-          return window?.maximized && output && window.y >= output.y + zone ? { compositor, window, output } : null
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = compositor.windows.find(
+            (entry) => entry.window_id === native.window.window_id,
+          );
+          const output = compositor.outputs.find(
+            (entry) => entry.name === window?.output_name,
+          );
+          return window?.maximized && output && window.y >= output.y + zone
+            ? { compositor, window, output }
+            : null;
         },
         5000,
         100,
-      )
-      assertAvoidsTopReserve('native maximized', nativeMaximized.output, nativeMaximized.window, zone)
-      await derpctl(['window', 'maximize', String(native.window.window_id), '--enabled', 'false'])
-      await derpctl(['window', 'focus', String(native.window.window_id)])
-      await runKeybind(base, 'tile_left')
+      );
+      assertAvoidsTopReserve(
+        "native maximized",
+        nativeMaximized.output,
+        nativeMaximized.window,
+        zone,
+      );
+      await derpctl([
+        "window",
+        "maximize",
+        String(native.window.window_id),
+        "--enabled",
+        "false",
+      ]);
+      await derpctl(["window", "focus", String(native.window.window_id)]);
+      await runKeybind(base, "tile_left");
       const nativeTiled = await waitFor(
-        'wait for native tile to avoid layer panel',
+        "wait for native tile to avoid layer panel",
         async () => {
-          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-          const window = compositor.windows.find((entry) => entry.window_id === native.window.window_id)
-          const output = compositor.outputs.find((entry) => entry.name === window?.output_name)
-          return window && output && !window.maximized && window.y >= output.y + zone ? { compositor, window, output } : null
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = compositor.windows.find(
+            (entry) => entry.window_id === native.window.window_id,
+          );
+          const output = compositor.outputs.find(
+            (entry) => entry.name === window?.output_name,
+          );
+          return window &&
+            output &&
+            !window.maximized &&
+            window.y >= output.y + zone
+            ? { compositor, window, output }
+            : null;
         },
         5000,
         100,
-      )
-      assertAvoidsTopReserve('native tiled', nativeTiled.output, nativeTiled.window, zone)
+      );
+      assertAvoidsTopReserve(
+        "native tiled",
+        nativeTiled.output,
+        nativeTiled.window,
+        zone,
+      );
 
-      const shellHosted = await openShellTestWindow(base, state)
-      await moveWindowToOutput(shellHosted.window.window_id, panelOutput)
-      await derpctl(['window', 'maximize', String(shellHosted.window.window_id), '--enabled', 'true'])
+      const shellHosted = await openShellTestWindow(base, state);
+      await moveWindowToOutput(shellHosted.window.window_id, panelOutput);
+      await derpctl([
+        "window",
+        "maximize",
+        String(shellHosted.window.window_id),
+        "--enabled",
+        "true",
+      ]);
       const shellMaximized = await waitFor(
-        'wait for shell-hosted maximize to avoid layer panel',
+        "wait for shell-hosted maximize to avoid layer panel",
         async () => {
-          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-          const window = compositor.windows.find((entry) => entry.window_id === shellHosted.window.window_id)
-          const output = compositor.outputs.find((entry) => entry.name === window?.output_name)
-          return window?.maximized && output && window.y >= output.y + zone ? { compositor, window, output } : null
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = compositor.windows.find(
+            (entry) => entry.window_id === shellHosted.window.window_id,
+          );
+          const output = compositor.outputs.find(
+            (entry) => entry.name === window?.output_name,
+          );
+          return window?.maximized && output && window.y >= output.y + zone
+            ? { compositor, window, output }
+            : null;
         },
         5000,
         100,
-      )
-      assertAvoidsTopReserve('shell-hosted maximized', shellMaximized.output, shellMaximized.window, zone)
-      await derpctl(['window', 'maximize', String(shellHosted.window.window_id), '--enabled', 'false'])
-      await derpctl(['window', 'focus', String(shellHosted.window.window_id)])
-      await runKeybind(base, 'tile_right')
+      );
+      assertAvoidsTopReserve(
+        "shell-hosted maximized",
+        shellMaximized.output,
+        shellMaximized.window,
+        zone,
+      );
+      await derpctl([
+        "window",
+        "maximize",
+        String(shellHosted.window.window_id),
+        "--enabled",
+        "false",
+      ]);
+      await derpctl(["window", "focus", String(shellHosted.window.window_id)]);
+      await runKeybind(base, "tile_right");
       const shellTiled = await waitFor(
-        'wait for shell-hosted tile to avoid layer panel',
+        "wait for shell-hosted tile to avoid layer panel",
         async () => {
-          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-          const window = compositor.windows.find((entry) => entry.window_id === shellHosted.window.window_id)
-          const output = compositor.outputs.find((entry) => entry.name === window?.output_name)
-          return window && output && !window.maximized && window.y >= output.y + zone ? { compositor, window, output } : null
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = compositor.windows.find(
+            (entry) => entry.window_id === shellHosted.window.window_id,
+          );
+          const output = compositor.outputs.find(
+            (entry) => entry.name === window?.output_name,
+          );
+          return window &&
+            output &&
+            !window.maximized &&
+            window.y >= output.y + zone
+            ? { compositor, window, output }
+            : null;
         },
         5000,
         100,
-      )
-      assertAvoidsTopReserve('shell-hosted tiled', shellTiled.output, shellTiled.window, zone)
-      await writeJsonArtifact('layer-shell-exclusive-zone-work-area.json', {
+      );
+      assertAvoidsTopReserve(
+        "shell-hosted tiled",
+        shellTiled.output,
+        shellTiled.window,
+        zone,
+      );
+      await writeJsonArtifact("layer-shell-exclusive-zone-work-area.json", {
         zone,
         nativeMaximized: nativeMaximized.window,
         nativeTiled: nativeTiled.window,
         shellMaximized: shellMaximized.window,
         shellTiled: shellTiled.window,
-      })
+      });
     } finally {
-      await spawnCommand(base, `pkill -f ${shellQuote(panelToken)} || true`)
+      await spawnCommand(base, `pkill -f ${shellQuote(panelToken)} || true`);
     }
-  })
+  });
 
-  test('linux-drm-syncobj-v1 protocol errors are enforced', async ({ base }) => {
+  test("linux-drm-syncobj-v1 protocol errors are enforced", async ({
+    base,
+  }) => {
     const modes = [
-      'no-buffer',
-      'no-acquire',
-      'no-release',
-      'unsupported-buffer',
-      'conflicting-points',
-    ]
-    const results: Record<string, string> = {}
+      "no-buffer",
+      "no-acquire",
+      "no-release",
+      "unsupported-buffer",
+      "conflicting-points",
+    ];
+    const results: Record<string, string> = {};
     for (const mode of modes) {
-      const outputPath = path.join(artifactDir(), `drm-syncobj-error-${mode}-${Date.now()}.txt`)
-      const command = [
-        shellQuote(nativeBin()),
-        '--explicit-sync-error',
-        shellQuote(mode),
-        '>',
-        shellQuote(outputPath),
-        '2>&1;',
-        'printf',
-        shellQuote('\\nexit:%s\\n'),
-        '$?',
-        '>>',
-        shellQuote(outputPath),
-      ].join(' ')
-      await spawnCommand(base, `sh -lc ${shellQuote(command)}`)
-      const output = await waitFor(
-        `wait for linux-drm-syncobj-v1 ${mode} probe`,
-        async () => {
-          try {
-            const text = await readFile(outputPath, 'utf8')
-            return text.includes('\nexit:') ? text : null
-          } catch {
-            return null
-          }
-        },
-        5000,
-        100,
-      )
-      results[mode] = output
-      assert(!output.includes('\nexit:0\n'), `${mode} unexpectedly succeeded:\n${output}`)
+      const command = `${shellQuote(nativeBin())} --explicit-sync-error ${shellQuote(mode)}`;
+      const result = await postJson<TestRunCommandResult>(
+        base,
+        "/test/run_command",
+        { command },
+      );
+      const output = `${result.stdout}${result.stderr}\nexit:${result.status ?? "signal"}\n`;
+      await writeFile(
+        path.join(artifactDir(), `drm-syncobj-error-${mode}-${Date.now()}.txt`),
+        output,
+      );
+      results[mode] = output;
       assert(
-        output.includes('wp_linux_drm_syncobj_surface_v1') ||
-          output.includes('wp_linux_drm_syncobj_manager_v1') ||
-          output.includes('Protocol error'),
+        !output.includes("\nexit:0\n"),
+        `${mode} unexpectedly succeeded:\n${output}`,
+      );
+      assert(
+        output.includes("wp_linux_drm_syncobj_surface_v1") ||
+          output.includes("wp_linux_drm_syncobj_manager_v1") ||
+          output.includes("Protocol error"),
         `${mode} did not report an explicit sync protocol error:\n${output}`,
-      )
+      );
     }
-    await writeJsonArtifact('drm-syncobj-protocol-errors.json', results)
-  })
+    await writeJsonArtifact("drm-syncobj-protocol-errors.json", results);
+  });
 
-  test('linux-drm-syncobj-v1 waits on dma-buf acquire and signals release', async ({ base, state }) => {
-    const title = `Derp Explicit Sync Dmabuf ${Date.now()}`
-    const statusPath = path.join(artifactDir(), `drm-syncobj-dmabuf-status-${Date.now()}.json`)
-    const socketPath = path.join(artifactDir(), `drm-syncobj-dmabuf-control-${Date.now()}.sock`)
+  test("linux-drm-syncobj-v1 waits on dma-buf acquire and signals release", async ({
+    base,
+    state,
+  }) => {
+    const title = `Derp Explicit Sync Dmabuf ${Date.now()}`;
+    const statusPath = path.join(
+      artifactDir(),
+      `drm-syncobj-dmabuf-status-${Date.now()}.json`,
+    );
+    const socketPath = path.join(
+      artifactDir(),
+      `drm-syncobj-dmabuf-control-${Date.now()}.sock`,
+    );
     const command = [
       shellQuote(nativeBin()),
-      '--explicit-sync-dmabuf',
-      '--title',
+      "--explicit-sync-dmabuf",
+      "--title",
       shellQuote(title),
-      '--token',
-      'explicit-sync-dmabuf',
-      '--width',
-      '360',
-      '--height',
-      '240',
-      '--status-json',
+      "--token",
+      "explicit-sync-dmabuf",
+      "--width",
+      "360",
+      "--height",
+      "240",
+      "--status-json",
       shellQuote(statusPath),
-      '--control-socket',
+      "--control-socket",
       shellQuote(socketPath),
-    ].join(' ')
-    let windowId: number | null = null
+    ].join(" ");
+    let windowId: number | null = null;
     try {
-      await spawnCommand(base, command)
+      await spawnCommand(base, command);
       const pending = await waitFor(
-        'wait for explicit sync dma-buf pending frame',
+        "wait for explicit sync dma-buf pending frame",
         async () => {
           const [status, compositor] = await Promise.all([
             readStatusJson<ExplicitSyncDmabufStatus>(statusPath),
-            getJson<CompositorSnapshot>(base, '/test/state/compositor'),
-          ])
+            getJson<CompositorSnapshot>(base, "/test/state/compositor"),
+          ]);
           const window = compositor.windows.find(
-            (entry) => !entry.shell_hosted && !state.knownWindowIds.has(entry.window_id) && entry.title.includes(title),
-          )
-          if (!status?.frame_b_committed || !window) return null
-          return { status, compositor, window }
+            (entry) =>
+              !entry.shell_hosted &&
+              !state.knownWindowIds.has(entry.window_id) &&
+              entry.title.includes(title),
+          );
+          if (!status?.frame_b_committed || !window) return null;
+          return { status, compositor, window };
         },
         5000,
         100,
-      )
-      windowId = pending.window.window_id
-      state.knownWindowIds.add(windowId)
+      );
+      windowId = pending.window.window_id;
+      state.knownWindowIds.add(windowId);
       const red = await waitFor(
-        'wait for acquire-blocked dma-buf to keep frame A visible',
+        "wait for acquire-blocked dma-buf to keep frame A visible",
         async () => {
-          const color = await dominantInteriorColor(base, pending.window)
-          return color.red > color.total * 0.7 && color.green < color.total * 0.1 ? color : null
+          const color = await dominantInteriorColor(base, pending.window);
+          return color.red > color.total * 0.7 &&
+            color.green < color.total * 0.1
+            ? color
+            : null;
         },
         5000,
         100,
-      )
-      const beforeSignal = await readStatusJson<ExplicitSyncDmabufStatus>(statusPath)
-      assert(beforeSignal?.release_b_observed === false, 'frame B release must not signal before acquire is signaled')
-      await signalExplicitSyncControl(socketPath)
+      );
+      const beforeSignal =
+        await readStatusJson<ExplicitSyncDmabufStatus>(statusPath);
+      assert(
+        beforeSignal?.release_b_observed === false,
+        "frame B release must not signal before acquire is signaled",
+      );
+      await signalExplicitSyncControl(socketPath);
       const released = await waitFor(
-        'wait for explicit sync dma-buf frame B release',
+        "wait for explicit sync dma-buf frame B release",
         async () => {
-          const status = await readStatusJson<ExplicitSyncDmabufStatus>(statusPath)
-          if (!status?.acquire_b_signaled || !status.release_b_observed) return null
-          return status
+          const status =
+            await readStatusJson<ExplicitSyncDmabufStatus>(statusPath);
+          if (!status?.acquire_b_signaled || !status.release_b_observed)
+            return null;
+          return status;
         },
         5000,
         100,
-      )
+      );
       const green = await waitFor(
-        'wait for acquired dma-buf frame B to become visible',
+        "wait for acquired dma-buf frame B to become visible",
         async () => {
-          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-          const window = compositor.windows.find((entry) => entry.window_id === windowId)
-          if (!window) return null
-          const color = await dominantInteriorColor(base, window)
-          return color.green > color.total * 0.7 && color.red < color.total * 0.1 ? { color, compositor, window } : null
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = compositor.windows.find(
+            (entry) => entry.window_id === windowId,
+          );
+          if (!window) return null;
+          const color = await dominantInteriorColor(base, window);
+          return color.green > color.total * 0.7 &&
+            color.red < color.total * 0.1
+            ? { color, compositor, window }
+            : null;
         },
         5000,
         100,
-      )
-      await writeJsonArtifact('drm-syncobj-dmabuf-acquire-release.json', {
+      );
+      await writeJsonArtifact("drm-syncobj-dmabuf-acquire-release.json", {
         command,
         statusPath,
         socketPath,
         pending: pending.status,
         released,
         explicitSync: green.compositor.explicit_sync,
-        redScreenshot: await copyArtifactFile('drm-syncobj-dmabuf-frame-a.png', red.path),
-        greenScreenshot: await copyArtifactFile('drm-syncobj-dmabuf-frame-b.png', green.color.path),
-      })
+        redScreenshot: await copyArtifactFile(
+          "drm-syncobj-dmabuf-frame-a.png",
+          red.path,
+        ),
+        greenScreenshot: await copyArtifactFile(
+          "drm-syncobj-dmabuf-frame-b.png",
+          green.color.path,
+        ),
+      });
     } finally {
       if (windowId !== null) {
-        await closeWindow(base, windowId)
-        await waitForWindowGone(base, windowId, 5000)
+        await closeWindow(base, windowId);
+        await waitForWindowGone(base, windowId, 5000);
       }
     }
-  })
+  });
 
-  test('linux-drm-syncobj-v1 survives rapid same-buffer dma-buf churn', async ({ base, state }) => {
-    const title = `Derp Explicit Sync Stress ${Date.now()}`
-    const statusPath = path.join(artifactDir(), `drm-syncobj-stress-status-${Date.now()}.json`)
-    const stressFrames = 96
+  test("linux-drm-syncobj-v1 survives rapid same-buffer dma-buf churn", async ({
+    base,
+    state,
+  }) => {
+    const title = `Derp Explicit Sync Stress ${Date.now()}`;
+    const statusPath = path.join(
+      artifactDir(),
+      `drm-syncobj-stress-status-${Date.now()}.json`,
+    );
+    const stressFrames = 96;
     const command = [
       shellQuote(nativeBin()),
-      '--explicit-sync-dmabuf',
-      '--explicit-sync-dmabuf-stress-frames',
+      "--explicit-sync-dmabuf",
+      "--explicit-sync-dmabuf-stress-frames",
       String(stressFrames),
-      '--title',
+      "--title",
       shellQuote(title),
-      '--token',
-      'explicit-sync-stress',
-      '--width',
-      '640',
-      '--height',
-      '360',
-      '--status-json',
+      "--token",
+      "explicit-sync-stress",
+      "--width",
+      "640",
+      "--height",
+      "360",
+      "--status-json",
       shellQuote(statusPath),
-    ].join(' ')
-    let windowId: number | null = null
+    ].join(" ");
+    let windowId: number | null = null;
     try {
-      await spawnCommand(base, command)
+      await spawnCommand(base, command);
       const settled = await waitFor(
-        'wait for explicit sync dma-buf stress releases',
+        "wait for explicit sync dma-buf stress releases",
         async () => {
           const [status, compositor] = await Promise.all([
             readStatusJson<ExplicitSyncDmabufStatus>(statusPath),
-            getJson<CompositorSnapshot>(base, '/test/state/compositor'),
-          ])
+            getJson<CompositorSnapshot>(base, "/test/state/compositor"),
+          ]);
           const window = compositor.windows.find(
-            (entry) => !entry.shell_hosted && !state.knownWindowIds.has(entry.window_id) && entry.title.includes(title),
-          )
-          if (!status || !window) return null
-          if (status.stress_committed !== stressFrames) return null
-          if (status.stress_release_failed) return null
-          if (status.stress_release_observed !== stressFrames) return null
-          if ((compositor.explicit_sync?.tracked_commits ?? 0) > 1) return null
-          if ((compositor.explicit_sync?.pending_releases ?? 0) > 1) return null
-          return { status, compositor, window }
+            (entry) =>
+              !entry.shell_hosted &&
+              !state.knownWindowIds.has(entry.window_id) &&
+              entry.title.includes(title),
+          );
+          if (!status || !window) return null;
+          if (status.stress_committed !== stressFrames) return null;
+          if (status.stress_release_failed) return null;
+          if (status.stress_release_observed !== stressFrames) return null;
+          if ((compositor.explicit_sync?.tracked_commits ?? 0) > 1) return null;
+          if ((compositor.explicit_sync?.pending_releases ?? 0) > 1)
+            return null;
+          return { status, compositor, window };
         },
         10000,
         100,
-      )
-      windowId = settled.window.window_id
-      state.knownWindowIds.add(windowId)
-      const color = await dominantInteriorColor(base, settled.window)
-      assert(color.total > 0, 'stress screenshot should have pixels')
-      await writeJsonArtifact('drm-syncobj-dmabuf-stress.json', {
+      );
+      windowId = settled.window.window_id;
+      state.knownWindowIds.add(windowId);
+      const color = await dominantInteriorColor(base, settled.window);
+      assert(color.total > 0, "stress screenshot should have pixels");
+      await writeJsonArtifact("drm-syncobj-dmabuf-stress.json", {
         command,
         statusPath,
         stressFrames,
         status: settled.status,
         explicitSync: settled.compositor.explicit_sync,
-        screenshot: await copyArtifactFile('drm-syncobj-dmabuf-stress.png', color.path),
+        screenshot: await copyArtifactFile(
+          "drm-syncobj-dmabuf-stress.png",
+          color.path,
+        ),
         color,
-      })
+      });
     } finally {
       if (windowId !== null) {
-        await closeWindow(base, windowId)
-        await waitForWindowGone(base, windowId, 5000)
+        await closeWindow(base, windowId);
+        await waitForWindowGone(base, windowId, 5000);
       }
     }
-  })
+  });
 
-  test('linux-drm-syncobj-v1 waits for multi-output same-buffer dma-buf churn', async ({ base, state }) => {
-    const initial = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-    const outputs = [...initial.outputs].sort((a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name))
+  test("linux-drm-syncobj-v1 waits for multi-output same-buffer dma-buf churn", async ({
+    base,
+    state,
+  }) => {
+    const initial = await getJson<CompositorSnapshot>(
+      base,
+      "/test/state/compositor",
+    );
+    const outputs = [...initial.outputs].sort(
+      (a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name),
+    );
     if (outputs.length < 2) {
-      throw new SkipError('requires at least two outputs')
+      throw new SkipError("requires at least two outputs");
     }
-    const [left, right] = outputs
-    assert(left && right, 'missing adjacent outputs')
-    const title = `Derp Explicit Sync Multiout ${Date.now()}`
-    const statusPath = path.join(artifactDir(), `drm-syncobj-multiout-status-${Date.now()}.json`)
-    const socketPath = path.join(artifactDir(), `drm-syncobj-multiout-control-${Date.now()}.sock`)
-    const stressFrames = 96
-    const width = Math.min(left.width + Math.floor(right.width / 2), left.width + 720)
-    const height = Math.min(420, Math.max(240, Math.floor(Math.min(left.height, right.height) / 2)))
+    const [left, right] = outputs;
+    assert(left && right, "missing adjacent outputs");
+    const title = `Derp Explicit Sync Multiout ${Date.now()}`;
+    const statusPath = path.join(
+      artifactDir(),
+      `drm-syncobj-multiout-status-${Date.now()}.json`,
+    );
+    const socketPath = path.join(
+      artifactDir(),
+      `drm-syncobj-multiout-control-${Date.now()}.sock`,
+    );
+    const stressFrames = 96;
+    const width = Math.min(
+      left.width + Math.floor(right.width / 2),
+      left.width + 720,
+    );
+    const height = Math.min(
+      420,
+      Math.max(240, Math.floor(Math.min(left.height, right.height) / 2)),
+    );
     const target = {
       x: right.x - Math.floor(width / 2),
-      y: Math.max(0, Math.min(left.y, right.y) + Math.floor((Math.min(left.height, right.height) - height) / 2)),
+      y: Math.max(
+        0,
+        Math.min(left.y, right.y) +
+          Math.floor((Math.min(left.height, right.height) - height) / 2),
+      ),
       width,
       height,
-    }
+    };
     const command = [
       shellQuote(nativeBin()),
-      '--explicit-sync-dmabuf',
-      '--explicit-sync-dmabuf-stress-frames',
+      "--explicit-sync-dmabuf",
+      "--explicit-sync-dmabuf-stress-frames",
       String(stressFrames),
-      '--explicit-sync-dmabuf-wait-control',
-      '--title',
+      "--explicit-sync-dmabuf-wait-control",
+      "--title",
       shellQuote(title),
-      '--token',
-      'explicit-sync-multiout',
-      '--width',
+      "--token",
+      "explicit-sync-multiout",
+      "--width",
       String(width),
-      '--height',
+      "--height",
       String(height),
-      '--status-json',
+      "--status-json",
       shellQuote(statusPath),
-      '--control-socket',
+      "--control-socket",
       shellQuote(socketPath),
-    ].join(' ')
-    let windowId: number | null = null
+    ].join(" ");
+    let windowId: number | null = null;
     try {
-      await spawnCommand(base, command)
+      await spawnCommand(base, command);
       const ready = await waitFor(
-        'wait for multi-output explicit sync dma-buf window',
+        "wait for multi-output explicit sync dma-buf window",
         async () => {
           const [status, compositor] = await Promise.all([
             readStatusJson<ExplicitSyncDmabufStatus>(statusPath),
-            getJson<CompositorSnapshot>(base, '/test/state/compositor'),
-          ])
+            getJson<CompositorSnapshot>(base, "/test/state/compositor"),
+          ]);
           const window = compositor.windows.find(
-            (entry) => !entry.shell_hosted && !state.knownWindowIds.has(entry.window_id) && entry.title.includes(title),
-          )
-          if (!status?.configured || !status.frame_a_committed || !window) return null
-          return { status, compositor, window }
+            (entry) =>
+              !entry.shell_hosted &&
+              !state.knownWindowIds.has(entry.window_id) &&
+              entry.title.includes(title),
+          );
+          if (!status?.configured || !status.frame_a_committed || !window)
+            return null;
+          return { status, compositor, window };
         },
         5000,
         100,
-      )
-      windowId = ready.window.window_id
-      state.knownWindowIds.add(windowId)
+      );
+      windowId = ready.window.window_id;
+      state.knownWindowIds.add(windowId);
       await derpctl([
-        'window',
-        'move',
+        "window",
+        "move",
         String(windowId),
-        '--x',
+        "--x",
         String(target.x),
-        '--y',
+        "--y",
         String(target.y),
-        '--width',
+        "--width",
         String(target.width),
-        '--height',
+        "--height",
         String(target.height),
-      ])
-      await syncTest(base)
+      ]);
+      await syncTest(base);
       const placed = await waitFor(
-        'wait for explicit sync dma-buf window to span outputs',
+        "wait for explicit sync dma-buf window to span outputs",
         async () => {
-          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-          const window = compositor.windows.find((entry) => entry.window_id === windowId)
-          if (!window) return null
-          const overlaps = overlappedOutputs(compositor, window)
-          return overlaps.length >= 2 ? { compositor, window, overlaps } : null
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = compositor.windows.find(
+            (entry) => entry.window_id === windowId,
+          );
+          if (!window) return null;
+          const overlaps = overlappedOutputs(compositor, window);
+          return overlaps.length >= 2 ? { compositor, window, overlaps } : null;
         },
         5000,
         100,
-      )
-      await signalExplicitSyncControl(socketPath)
+      );
+      await signalExplicitSyncControl(socketPath);
       const settled = await waitFor(
-        'wait for multi-output explicit sync dma-buf stress releases',
+        "wait for multi-output explicit sync dma-buf stress releases",
         async () => {
           const [status, compositor] = await Promise.all([
             readStatusJson<ExplicitSyncDmabufStatus>(statusPath),
-            getJson<CompositorSnapshot>(base, '/test/state/compositor'),
-          ])
-          const window = compositor.windows.find((entry) => entry.window_id === windowId)
-          if (!status || !window) return null
-          if (status.stress_committed !== stressFrames) return null
-          if (status.stress_release_failed) return null
-          if (status.stress_release_observed !== stressFrames) return null
-          const overlaps = overlappedOutputs(compositor, window)
-          if (overlaps.length < 2) return null
-          if ((compositor.explicit_sync?.tracked_commits ?? 0) > 1) return null
-          if ((compositor.explicit_sync?.pending_releases ?? 0) > 1) return null
-          return { status, compositor, window, overlaps }
+            getJson<CompositorSnapshot>(base, "/test/state/compositor"),
+          ]);
+          const window = compositor.windows.find(
+            (entry) => entry.window_id === windowId,
+          );
+          if (!status || !window) return null;
+          if (status.stress_committed !== stressFrames) return null;
+          if (status.stress_release_failed) return null;
+          if (status.stress_release_observed !== stressFrames) return null;
+          const overlaps = overlappedOutputs(compositor, window);
+          if (overlaps.length < 2) return null;
+          if ((compositor.explicit_sync?.tracked_commits ?? 0) > 1) return null;
+          if ((compositor.explicit_sync?.pending_releases ?? 0) > 1)
+            return null;
+          return { status, compositor, window, overlaps };
         },
         10000,
         100,
-      )
-      const color = await dominantInteriorColor(base, settled.window)
-      assert(color.total > 0, 'multi-output stress screenshot should have pixels')
-      await writeJsonArtifact('drm-syncobj-dmabuf-multiout-stress.json', {
+      );
+      const color = await dominantInteriorColor(base, settled.window);
+      assert(
+        color.total > 0,
+        "multi-output stress screenshot should have pixels",
+      );
+      await writeJsonArtifact("drm-syncobj-dmabuf-multiout-stress.json", {
         command,
         statusPath,
         socketPath,
@@ -881,184 +1152,279 @@ export default defineGroup(import.meta.url, ({ test }) => {
         })),
         status: settled.status,
         explicitSync: settled.compositor.explicit_sync,
-        screenshot: await copyArtifactFile('drm-syncobj-dmabuf-multiout-stress.png', color.path),
+        screenshot: await copyArtifactFile(
+          "drm-syncobj-dmabuf-multiout-stress.png",
+          color.path,
+        ),
         color,
-      })
+      });
     } finally {
       if (windowId !== null) {
-        await closeWindow(base, windowId)
-        await waitForWindowGone(base, windowId, 5000)
+        await closeWindow(base, windowId);
+        await waitForWindowGone(base, windowId, 5000);
       }
     }
-  })
+  });
 
-  test('ext-image-copy-capture output frames report first, requested, and subsequent damage', async ({ base }) => {
-    const statusPath = path.join(artifactDir(), `ext-image-copy-capture-output-${Date.now()}.json`)
+  test("ext-image-copy-capture output frames report first, requested, and subsequent damage", async ({
+    base,
+  }) => {
+    const statusPath = path.join(
+      artifactDir(),
+      `ext-image-copy-capture-output-${Date.now()}.json`,
+    );
     const command = [
       shellQuote(nativeBin()),
-      '--ext-image-copy-capture-output',
-      '--ext-image-copy-capture-frames',
-      '3',
-      '--status-json',
+      "--ext-image-copy-capture-output",
+      "--ext-image-copy-capture-frames",
+      "3",
+      "--status-json",
       shellQuote(statusPath),
-    ].join(' ')
-    await spawnCommand(base, command)
-    const captured = await waitFor(
-      'wait for ext-image-copy-capture output frames',
-      async () => {
-        const status = await readStatusJson<ExtImageCopyStatus>(statusPath)
-        if (!status?.constraints_done || status.frames.length < 3) return null
-        if (!status.frames.slice(0, 3).every((frame) => frame.ready || frame.failed)) return null
-        return status
-      },
-      8000,
-      100,
-    )
-    assert(captured.buffer_width > 0 && captured.buffer_height > 0, `invalid buffer size ${JSON.stringify(captured)}`)
-    assert(!captured.stopped, 'capture session stopped unexpectedly')
-    const [first, requestedFull, subsequent] = captured.frames
-    assert(first && requestedFull && subsequent, `missing captured frames: ${JSON.stringify(captured.frames)}`)
-    assertFullDamage(first, captured, 'first capture')
-    assertFullDamage(requestedFull, captured, 'requested full-damage capture')
-    assertBoundedDamage(subsequent, captured, 'subsequent capture')
+    ].join(" ");
+    const result = await postJson<TestRunCommandResult>(
+      base,
+      "/test/run_command",
+      { command },
+    );
+    await writeFile(
+      path.join(
+        artifactDir(),
+        `ext-image-copy-capture-output-command-${Date.now()}.txt`,
+      ),
+      `${result.stdout}${result.stderr}\nexit:${result.status ?? "signal"}\n`,
+    );
+    assert(
+      result.status === 0,
+      `ext-image-copy-capture client failed:\n${result.stdout}${result.stderr}`,
+    );
+    const captured = await readStatusJson<ExtImageCopyStatus>(statusPath);
+    assert(
+      captured,
+      `missing ext-image-copy-capture status at ${statusPath}`,
+    );
+    assert(
+      captured.buffer_width > 0 && captured.buffer_height > 0,
+      `invalid buffer size ${JSON.stringify(captured)}`,
+    );
+    assert(!captured.stopped, "capture session stopped unexpectedly");
+    const [first, requestedFull, subsequent] = captured.frames;
+    assert(
+      first && requestedFull && subsequent,
+      `missing captured frames: ${JSON.stringify(captured.frames)}`,
+    );
+    assertFullDamage(first, captured, "first capture");
+    assertFullDamage(requestedFull, captured, "requested full-damage capture");
+    assertBoundedDamage(subsequent, captured, "subsequent capture");
     assert(
       captured.frames.every((frame) => frame.checksum !== 0),
       `expected captured buffers to have checksums: ${JSON.stringify(captured.frames)}`,
-    )
-    await writeJsonArtifact('ext-image-copy-capture-output-damage.json', {
+    );
+    await writeJsonArtifact("ext-image-copy-capture-output-damage.json", {
       command,
       statusPath,
       captured,
-    })
-  })
+    });
+  });
 
-  test('native presentation content type and tearing hints are committed', async ({ base, state }) => {
-    const title = `Derp Wayland Protocol Probe ${Date.now()}`
+  test("native presentation content type and tearing hints are committed", async ({
+    base,
+    state,
+  }) => {
+    const title = `Derp Wayland Protocol Probe ${Date.now()}`;
     const command = [
       shellQuote(nativeBin()),
-      '--title',
+      "--title",
       shellQuote(title),
-      '--token',
-      'wayland-protocols',
-      '--width',
-      '420',
-      '--height',
-      '260',
-      '--presentation-smoke',
-      '--content-type',
-      'game',
-      '--tearing-hint',
-      'async',
-      '--burst-frames',
-      '180',
-    ].join(' ')
-    let windowId: number | null = null
+      "--token",
+      "wayland-protocols",
+      "--width",
+      "420",
+      "--height",
+      "260",
+      "--presentation-smoke",
+      "--content-type",
+      "game",
+      "--tearing-hint",
+      "async",
+      "--burst-frames",
+      "180",
+    ].join(" ");
+    let windowId: number | null = null;
     try {
-      await spawnCommand(base, command)
+      await spawnCommand(base, command);
       const spawned = await waitFor(
-        'wait for protocol probe window state',
+        "wait for protocol probe window state",
         async () => {
-          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
           const window = compositor.windows.find(
-            (entry) => !entry.shell_hosted && !state.knownWindowIds.has(entry.window_id) && entry.title.includes(title),
-          )
-          if (!window) return null
-          if (window.content_type !== 'game') return null
-          if (window.tearing_hint !== 'async') return null
-          if (!window.title.includes('presented=')) return null
-          return { compositor, window }
+            (entry) =>
+              !entry.shell_hosted &&
+              !state.knownWindowIds.has(entry.window_id) &&
+              entry.title.includes(title),
+          );
+          if (!window) return null;
+          if (window.content_type !== "game") return null;
+          if (window.tearing_hint !== "async") return null;
+          if (!window.title.includes("presented=")) return null;
+          return { compositor, window };
         },
         5000,
         100,
-      )
-      windowId = spawned.window.window_id
-      state.knownWindowIds.add(windowId)
-      await runKeybind(base, 'toggle_fullscreen', windowId)
+      );
+      windowId = spawned.window.window_id;
+      state.knownWindowIds.add(windowId);
+      await runKeybind(base, "toggle_fullscreen", windowId);
       const flip = await waitFor(
-        'wait for async flip diagnostic',
+        "wait for async flip diagnostic",
         async () => {
-          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-          const window = compositor.windows.find((entry) => entry.window_id === windowId)
-          if (!window?.fullscreen) return null
-          const output = compositor.outputs.find((entry) => entry.name === window.output_name)
-          if (!output) return null
-          if (output.last_flip_mode === 'async') return { compositor, window, output }
-          if (output.last_flip_fallback_reason) return { compositor, window, output }
-          return null
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = compositor.windows.find(
+            (entry) => entry.window_id === windowId,
+          );
+          if (!window?.fullscreen) return null;
+          const output = compositor.outputs.find(
+            (entry) => entry.name === window.output_name,
+          );
+          if (!output) return null;
+          if (output.last_flip_mode === "async")
+            return { compositor, window, output };
+          if (output.last_flip_fallback_reason)
+            return { compositor, window, output };
+          return null;
         },
         5000,
         100,
-      )
-      await writeJsonArtifact('wayland-protocols-presentation-content-tearing.json', {
-        command,
-        window: flip.window,
-        output: flip.output,
-      })
+      );
+      await writeJsonArtifact(
+        "wayland-protocols-presentation-content-tearing.json",
+        {
+          command,
+          window: flip.window,
+          output: flip.output,
+        },
+      );
     } finally {
       if (windowId !== null) {
-        await closeWindow(base, windowId)
-        await waitForWindowGone(base, windowId, 5000)
+        await closeWindow(base, windowId);
+        await waitForWindowGone(base, windowId, 5000);
       }
     }
-  })
+  });
 
-  test('native xdg toplevel icon metadata reaches shell snapshots', async ({ base, state }) => {
-    const stamp = Date.now()
-    const iconName = `derp-e2e-icon-${stamp}`
+  test("native xdg toplevel icon metadata reaches shell snapshots", async ({
+    base,
+    state,
+  }) => {
+    const stamp = Date.now();
+    const iconName = `derp-e2e-icon-${stamp}`;
     const named = await spawnNativeWindow(base, state.knownWindowIds, {
       title: `Derp Xdg Icon Name ${stamp}`,
-      appId: 'derp.e2e.icon.name',
+      appId: "derp.e2e.icon.name",
       token: `xdg-icon-name-${stamp}`,
-      strip: 'green',
+      strip: "green",
       xdgIconName: iconName,
-    })
-    state.spawnedNativeWindowIds.add(named.window.window_id)
+    });
+    state.spawnedNativeWindowIds.add(named.window.window_id);
     const namedSnapshot = await waitFor(
-      'wait for named xdg icon snapshot',
+      "wait for named xdg icon snapshot",
       async () => {
-        const snapshots = await getSnapshots(base)
-        const compositorWindow = compositorWindowById(snapshots.compositor, named.window.window_id)
-        const shellWindow = shellWindowById(snapshots.shell, named.window.window_id)
-        if (compositorWindow?.icon_name !== iconName) return null
-        if (shellWindow?.icon_name !== iconName) return null
-        return { snapshots, compositorWindow, shellWindow }
+        const snapshots = await getSnapshots(base);
+        const compositorWindow = compositorWindowById(
+          snapshots.compositor,
+          named.window.window_id,
+        );
+        const shellWindow = shellWindowById(
+          snapshots.shell,
+          named.window.window_id,
+        );
+        if (compositorWindow?.icon_name !== iconName) return null;
+        if (shellWindow?.icon_name !== iconName) return null;
+        return { snapshots, compositorWindow, shellWindow };
       },
       5000,
       100,
-    )
-    assert(namedSnapshot.compositorWindow.title === named.window.title, 'icon name changed compositor title metadata')
-    assert(namedSnapshot.shellWindow.title === named.window.title, 'icon name changed shell title metadata')
-    assert(namedSnapshot.compositorWindow.app_id === 'derp.e2e.icon.name', 'icon name changed compositor app_id metadata')
-    assert(namedSnapshot.shellWindow.app_id === 'derp.e2e.icon.name', 'icon name changed shell app_id metadata')
+    );
+    assert(
+      namedSnapshot.compositorWindow.title === named.window.title,
+      "icon name changed compositor title metadata",
+    );
+    assert(
+      namedSnapshot.shellWindow.title === named.window.title,
+      "icon name changed shell title metadata",
+    );
+    assert(
+      namedSnapshot.compositorWindow.app_id === "derp.e2e.icon.name",
+      "icon name changed compositor app_id metadata",
+    );
+    assert(
+      namedSnapshot.shellWindow.app_id === "derp.e2e.icon.name",
+      "icon name changed shell app_id metadata",
+    );
 
     const buffered = await spawnNativeWindow(base, state.knownWindowIds, {
       title: `Derp Xdg Icon Buffer ${stamp}`,
-      appId: 'derp.e2e.icon.buffer',
+      appId: "derp.e2e.icon.buffer",
       token: `xdg-icon-buffer-${stamp}`,
-      strip: 'red',
+      strip: "red",
       xdgIconShm: true,
-    })
-    state.spawnedNativeWindowIds.add(buffered.window.window_id)
+    });
+    state.spawnedNativeWindowIds.add(buffered.window.window_id);
     const bufferedSnapshot = await waitFor(
-      'wait for shm xdg icon snapshot',
+      "wait for shm xdg icon snapshot",
       async () => {
-        const snapshots = await getSnapshots(base)
-        const compositorWindow = compositorWindowById(snapshots.compositor, buffered.window.window_id)
-        const shellWindow = shellWindowById(snapshots.shell, buffered.window.window_id)
-        const compositorBuffer = compositorWindow?.icon_buffers?.[0]
-        const shellBuffer = shellWindow?.icon_buffers?.[0]
-        if (!compositorBuffer || compositorBuffer.width !== 16 || compositorBuffer.height !== 16 || compositorBuffer.scale !== 1) return null
-        if (!shellBuffer || shellBuffer.width !== 16 || shellBuffer.height !== 16 || shellBuffer.scale !== 1) return null
-        return { snapshots, compositorWindow, shellWindow }
+        const snapshots = await getSnapshots(base);
+        const compositorWindow = compositorWindowById(
+          snapshots.compositor,
+          buffered.window.window_id,
+        );
+        const shellWindow = shellWindowById(
+          snapshots.shell,
+          buffered.window.window_id,
+        );
+        const compositorBuffer = compositorWindow?.icon_buffers?.[0];
+        const shellBuffer = shellWindow?.icon_buffers?.[0];
+        if (
+          !compositorBuffer ||
+          compositorBuffer.width !== 16 ||
+          compositorBuffer.height !== 16 ||
+          compositorBuffer.scale !== 1
+        )
+          return null;
+        if (
+          !shellBuffer ||
+          shellBuffer.width !== 16 ||
+          shellBuffer.height !== 16 ||
+          shellBuffer.scale !== 1
+        )
+          return null;
+        return { snapshots, compositorWindow, shellWindow };
       },
       5000,
       100,
-    )
-    assert(bufferedSnapshot.compositorWindow.title === buffered.window.title, 'shm icon changed compositor title metadata')
-    assert(bufferedSnapshot.shellWindow.title === buffered.window.title, 'shm icon changed shell title metadata')
-    assert(bufferedSnapshot.compositorWindow.app_id === 'derp.e2e.icon.buffer', 'shm icon changed compositor app_id metadata')
-    assert(bufferedSnapshot.shellWindow.app_id === 'derp.e2e.icon.buffer', 'shm icon changed shell app_id metadata')
-    await writeJsonArtifact('wayland-protocols-xdg-toplevel-icon.json', {
+    );
+    assert(
+      bufferedSnapshot.compositorWindow.title === buffered.window.title,
+      "shm icon changed compositor title metadata",
+    );
+    assert(
+      bufferedSnapshot.shellWindow.title === buffered.window.title,
+      "shm icon changed shell title metadata",
+    );
+    assert(
+      bufferedSnapshot.compositorWindow.app_id === "derp.e2e.icon.buffer",
+      "shm icon changed compositor app_id metadata",
+    );
+    assert(
+      bufferedSnapshot.shellWindow.app_id === "derp.e2e.icon.buffer",
+      "shm icon changed shell app_id metadata",
+    );
+    await writeJsonArtifact("wayland-protocols-xdg-toplevel-icon.json", {
       named: {
         compositor: namedSnapshot.compositorWindow,
         shell: namedSnapshot.shellWindow,
@@ -1067,61 +1433,78 @@ export default defineGroup(import.meta.url, ({ test }) => {
         compositor: bufferedSnapshot.compositorWindow,
         shell: bufferedSnapshot.shellWindow,
       },
-    })
-  })
+    });
+  });
 
-  test('native cursor-shape pointer uses selected XCursor theme', async ({ base, state }) => {
-    const beforeSettings = await getJson<{ theme: string; size: number }>(base, '/settings_cursor')
+  test("native cursor-shape pointer uses selected XCursor theme", async ({
+    base,
+    state,
+  }) => {
+    const beforeSettings = await getJson<{ theme: string; size: number }>(
+      base,
+      "/settings_cursor",
+    );
     const nextSettings = {
-      theme: beforeSettings.theme || 'default',
+      theme: beforeSettings.theme || "default",
       size: Math.max(24, Math.min(48, beforeSettings.size || 24)),
-    }
-    await postJson(base, '/settings_cursor', nextSettings)
-    const title = `Derp Cursor Shape Probe ${Date.now()}`
+    };
+    await postJson(base, "/settings_cursor", nextSettings);
+    const title = `Derp Cursor Shape Probe ${Date.now()}`;
     const command = [
       shellQuote(nativeBin()),
-      '--title',
+      "--title",
       shellQuote(title),
-      '--token',
-      'cursor-shape-pointer',
-      '--width',
-      '360',
-      '--height',
-      '240',
-      '--cursor-shape-pointer',
-    ].join(' ')
-    let windowId: number | null = null
+      "--token",
+      "cursor-shape-pointer",
+      "--width",
+      "360",
+      "--height",
+      "240",
+      "--cursor-shape-pointer",
+    ].join(" ");
+    let windowId: number | null = null;
     try {
-      await spawnCommand(base, command)
+      await spawnCommand(base, command);
       const spawned = await waitFor(
-        'wait for cursor shape probe',
+        "wait for cursor shape probe",
         async () => {
-          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
           const window = compositor.windows.find(
-            (entry) => !entry.shell_hosted && !state.knownWindowIds.has(entry.window_id) && entry.title.includes(title),
-          )
-          return window ? { compositor, window } : null
+            (entry) =>
+              !entry.shell_hosted &&
+              !state.knownWindowIds.has(entry.window_id) &&
+              entry.title.includes(title),
+          );
+          return window ? { compositor, window } : null;
         },
         5000,
         100,
-      )
-      windowId = spawned.window.window_id
-      state.knownWindowIds.add(spawned.window.window_id)
+      );
+      windowId = spawned.window.window_id;
+      state.knownWindowIds.add(spawned.window.window_id);
       await movePoint(
         base,
         spawned.window.x + Math.floor(spawned.window.width / 2),
         spawned.window.y + Math.floor(spawned.window.height / 2),
-      )
+      );
       const shaped = await waitFor(
-        'wait for pointer cursor shape',
+        "wait for pointer cursor shape",
         async () => {
-          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-          return compositor.cursor_shape === 'pointer' && compositor.cursor_name ? compositor : null
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          return compositor.cursor_shape === "pointer" && compositor.cursor_name
+            ? compositor
+            : null;
         },
         3000,
         100,
-      )
-      await writeJsonArtifact('cursor-shape-pointer.json', {
+      );
+      await writeJsonArtifact("cursor-shape-pointer.json", {
         windowId: spawned.window.window_id,
         settings: nextSettings,
         cursorTheme: shaped.cursor_theme,
@@ -1129,14 +1512,13 @@ export default defineGroup(import.meta.url, ({ test }) => {
         cursorShape: shaped.cursor_shape,
         cursorName: shaped.cursor_name,
         cursorSourcePath: shaped.cursor_source_path,
-      })
+      });
     } finally {
       if (windowId !== null) {
-        await closeWindow(base, windowId)
-        await waitForWindowGone(base, windowId, 5000)
+        await closeWindow(base, windowId);
+        await waitForWindowGone(base, windowId, 5000);
       }
-      await postJson(base, '/settings_cursor', beforeSettings)
+      await postJson(base, "/settings_cursor", beforeSettings);
     }
-  })
-
-})
+  });
+});

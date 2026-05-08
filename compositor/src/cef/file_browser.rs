@@ -480,7 +480,9 @@ fn collect_mounted_volume_roots(
 
 fn mounted_volume_roots() -> Vec<FileBrowserRootEntry> {
     let mut out = fs::read_to_string("/proc/self/mountinfo")
-        .map(|body| collect_mounted_volume_roots(&parse_mountinfo_entries(&body), &read_fstab_mount_hints()))
+        .map(|body| {
+            collect_mounted_volume_roots(&parse_mountinfo_entries(&body), &read_fstab_mount_hints())
+        })
         .unwrap_or_default();
     out.extend(test_file_browser_mount_roots());
     out
@@ -1424,7 +1426,10 @@ mod mount_roots_tests {
             "42 24 8:1 / /run/media/crab/USB\\040Disk rw,nosuid - ext4 /dev/sdb1 rw\n",
         );
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].mount_path, PathBuf::from("/run/media/crab/USB Disk"));
+        assert_eq!(
+            entries[0].mount_path,
+            PathBuf::from("/run/media/crab/USB Disk")
+        );
         assert_eq!(entries[0].source, "/dev/sdb1");
         assert_eq!(entries[0].fs_type, "ext4");
     }
@@ -1442,17 +1447,28 @@ mod mount_roots_tests {
                 hide: false,
             })
         );
-        assert!(hints.get(Path::new("/srv/hidden")).is_some_and(|hint| hint.hide));
+        assert!(hints
+            .get(Path::new("/srv/hidden"))
+            .is_some_and(|hint| hint.hide));
     }
 
     #[test]
     fn user_visible_paths_match_gnome_places() {
         let old_runtime = std::env::var("XDG_RUNTIME_DIR").ok();
         std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1234");
-        assert!(mount_path_is_user_visible(Path::new("/media/crab/USB"), None));
-        assert!(mount_path_is_user_visible(Path::new("/run/media/crab/USB"), None));
+        assert!(mount_path_is_user_visible(
+            Path::new("/media/crab/USB"),
+            None
+        ));
+        assert!(mount_path_is_user_visible(
+            Path::new("/run/media/crab/USB"),
+            None
+        ));
         assert!(mount_path_is_user_visible(Path::new("/mnt/data"), None));
-        assert!(mount_path_is_user_visible(Path::new("/run/user/1234/gvfs/smb-share:server=n"), None));
+        assert!(mount_path_is_user_visible(
+            Path::new("/run/user/1234/gvfs/smb-share:server=n"),
+            None
+        ));
         assert!(!mount_path_is_user_visible(Path::new("/srv/data"), None));
         if let Some(value) = old_runtime {
             std::env::set_var("XDG_RUNTIME_DIR", value);
@@ -1509,7 +1525,10 @@ mod mount_roots_tests {
         assert_eq!(roots[0].label, "Visible Disk");
         assert_eq!(
             roots[0].path,
-            visible.canonicalize().expect("canonical visible").to_string_lossy()
+            visible
+                .canonicalize()
+                .expect("canonical visible")
+                .to_string_lossy()
         );
         assert_eq!(roots[0].kind, "mount");
     }

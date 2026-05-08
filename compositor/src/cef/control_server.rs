@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -754,6 +755,27 @@ fn json_optional_string_field(v: &serde_json::Value, key: &str) -> Result<Option
     }
 }
 
+fn run_test_command(v: &serde_json::Value) -> Result<String, String> {
+    let command = v
+        .get("command")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "run_command: missing command".to_string())?;
+    if command.len() > shell_wire::MAX_SPAWN_COMMAND_BYTES as usize {
+        return Err("run_command: command too long".to_string());
+    }
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(command)
+        .output()
+        .map_err(|error| format!("run_command: {error}"))?;
+    serde_json::to_string(&serde_json::json!({
+        "status": output.status.code(),
+        "stdout": String::from_utf8_lossy(&output.stdout),
+        "stderr": String::from_utf8_lossy(&output.stderr),
+    }))
+    .map_err(|error| format!("run_command: serialize output: {error}"))
+}
+
 fn handle_one(
     stream: &mut std::net::TcpStream,
     uplink: &UplinkToCompositor,
@@ -1274,6 +1296,12 @@ fn handle_one(
                 write_http_json(stream, 500, &body).map_err(|e| e.to_string())?;
             }
         }
+        return Ok(());
+    }
+
+    if req_path == "/test/run_command" {
+        let json = run_test_command(&v)?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
 

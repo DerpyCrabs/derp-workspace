@@ -1,9 +1,7 @@
 use super::*;
 use serde::Serialize;
 use smithay::backend::renderer::sync::SyncPoint;
-use smithay::reexports::calloop::{
-    generic::Generic, Interest, Mode, PostAction,
-};
+use smithay::reexports::calloop::{generic::Generic, Interest, Mode, PostAction};
 use smithay::wayland::drm_syncobj::{DrmSyncPoint, DrmSyncobjCachedState};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -178,7 +176,9 @@ impl ExplicitSyncState {
         }
     }
 
-    pub(crate) fn take_frame_sampled_releases(&mut self) -> Vec<(Vec<SyncPoint>, Vec<DrmSyncPoint>)> {
+    pub(crate) fn take_frame_sampled_releases(
+        &mut self,
+    ) -> Vec<(Vec<SyncPoint>, Vec<DrmSyncPoint>)> {
         let sampled: Vec<_> = self.frame_sampled.drain().collect();
         let mut out = Vec::new();
         for (key, syncs) in sampled {

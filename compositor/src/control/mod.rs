@@ -523,7 +523,10 @@ fn handle_subscribe(
         let domains = ControlDomains::from_params(request.params.as_ref())?;
         let revisions = state.control_revision_snapshot();
         let snapshot = state.control_state_value(domains)?;
-        let rx = state.session_services.control_event_hub.subscribe(domains, revisions);
+        let rx = state
+            .session_services
+            .control_event_hub
+            .subscribe(domains, revisions);
         let line = json!({
             "event": "snapshot",
             "revision": revisions.overall(),
@@ -1036,7 +1039,9 @@ fn validate_workspace_mutation_json(raw: &str) -> Result<(), String> {
 }
 
 fn ensure_window(state: &CompositorState, window_id: u32) -> Result<(), String> {
-    state.windows.window_registry
+    state
+        .windows
+        .window_registry
         .window_info(window_id)
         .map(|_| ())
         .ok_or_else(|| format!("unknown window {window_id}"))
@@ -1046,10 +1051,14 @@ impl CompositorState {
     pub(crate) fn control_revision_snapshot(&self) -> ControlRevisions {
         ControlRevisions {
             outputs: self.output_topology.shell_output_topology_revision,
-            windows: self.windows.shell_window_domain_revision
+            windows: self
+                .windows
+                .shell_window_domain_revision
                 .max(self.windows.window_registry.revision())
                 .max(self.windows.control_windows_revision),
-            workspace: self.workspace_layout.shell_workspace_revision
+            workspace: self
+                .workspace_layout
+                .shell_workspace_revision
                 .max(self.workspace_layout.control_workspace_revision),
             settings: self.session_services.control_settings_revision(),
             palette: self.session_services.command_palette_revision(),
@@ -1057,11 +1066,16 @@ impl CompositorState {
     }
 
     fn control_bump_windows_revision(&mut self) {
-        self.windows.control_windows_revision = self.windows.control_windows_revision.wrapping_add(1).max(1);
+        self.windows.control_windows_revision =
+            self.windows.control_windows_revision.wrapping_add(1).max(1);
     }
 
     fn control_bump_workspace_revision(&mut self) {
-        self.workspace_layout.control_workspace_revision = self.workspace_layout.control_workspace_revision.wrapping_add(1).max(1);
+        self.workspace_layout.control_workspace_revision = self
+            .workspace_layout
+            .control_workspace_revision
+            .wrapping_add(1)
+            .max(1);
     }
 
     pub(crate) fn control_state_value(&self, domains: ControlDomains) -> Result<Value, String> {
@@ -1092,13 +1106,16 @@ impl CompositorState {
     }
 
     fn control_outputs_value(&self) -> Value {
-        let outputs = self.output_topology.space
+        let outputs = self
+            .output_topology
+            .space
             .outputs()
             .filter_map(|output| {
                 let geometry = self.output_topology.space.output_geometry(output)?;
                 let mode = output.current_mode();
                 let name = output.name();
-                let primary = self.output_topology.shell_primary_output_name.as_deref() == Some(name.as_str());
+                let primary = self.output_topology.shell_primary_output_name.as_deref()
+                    == Some(name.as_str());
                 Some(json!({
                     "name": name,
                     "identity": Self::shell_output_identity(output),
@@ -1166,13 +1183,17 @@ impl CompositorState {
         &mut self,
         category: CommandPaletteCategory,
     ) -> Result<(), String> {
-        self.session_services.command_palette_registry.upsert_category(category)?;
+        self.session_services
+            .command_palette_registry
+            .upsert_category(category)?;
         self.control_bump_palette_revision();
         Ok(())
     }
 
     pub(crate) fn control_palette_remove_category(&mut self, owner: &str, id: &str) {
-        self.session_services.command_palette_registry.remove_category(owner, id);
+        self.session_services
+            .command_palette_registry
+            .remove_category(owner, id);
         self.control_bump_palette_revision();
     }
 
@@ -1180,31 +1201,41 @@ impl CompositorState {
         &mut self,
         action: CommandPaletteAction,
     ) -> Result<(), String> {
-        self.session_services.command_palette_registry.upsert_action(action)?;
+        self.session_services
+            .command_palette_registry
+            .upsert_action(action)?;
         self.control_bump_palette_revision();
         Ok(())
     }
 
     pub(crate) fn control_palette_remove_action(&mut self, owner: &str, id: &str) {
-        self.session_services.command_palette_registry.remove_action(owner, id);
+        self.session_services
+            .command_palette_registry
+            .remove_action(owner, id);
         self.control_bump_palette_revision();
     }
 
     pub(crate) fn control_palette_clear_owner(&mut self, owner: &str) {
-        self.session_services.command_palette_registry.clear_owner(owner);
+        self.session_services
+            .command_palette_registry
+            .clear_owner(owner);
         self.control_bump_palette_revision();
     }
 
     pub(crate) fn control_palette_activate(&mut self, owner: &str, id: &str) -> Result<(), String> {
         validate_palette_identifier(owner, "owner")?;
         validate_palette_identifier(id, "id")?;
-        let action = self.session_services.command_palette_registry
+        let action = self
+            .session_services
+            .command_palette_registry
             .action(owner, id)
             .ok_or_else(|| format!("unknown palette action {owner}/{id}"))?;
         if action.disabled {
             return Err(format!("palette action {owner}/{id} is disabled"));
         }
-        if !self.session_services.command_palette_registry
+        if !self
+            .session_services
+            .command_palette_registry
             .category_exists(&action.owner, &action.category_id)
         {
             return Err(format!("unknown palette category {}", action.category_id));
@@ -1240,11 +1271,17 @@ impl CompositorState {
     }
 
     pub fn control_publish_if_changed(&mut self) {
-        if self.session_services.control_event_hub.subscribers.is_empty() {
+        if self
+            .session_services
+            .control_event_hub
+            .subscribers
+            .is_empty()
+        {
             return;
         }
         let revisions = self.control_revision_snapshot();
-        let mut subscribers = std::mem::take(&mut self.session_services.control_event_hub.subscribers);
+        let mut subscribers =
+            std::mem::take(&mut self.session_services.control_event_hub.subscribers);
         let mut keep = Vec::with_capacity(subscribers.len());
         for mut subscriber in subscribers.drain(..) {
             let changed = revisions

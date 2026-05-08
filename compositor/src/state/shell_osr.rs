@@ -64,8 +64,7 @@ pub(crate) struct ShellFrameApply {
 
 impl ShellOsrState {
     pub(crate) fn next_shell_hosted_app_state_revision(&mut self) -> u64 {
-        self.shell_hosted_app_state_revision =
-            self.shell_hosted_app_state_revision.wrapping_add(1);
+        self.shell_hosted_app_state_revision = self.shell_hosted_app_state_revision.wrapping_add(1);
         self.shell_hosted_app_state_revision
     }
 
@@ -140,10 +139,7 @@ impl ShellOsrState {
         false
     }
 
-    pub(crate) fn shell_placement_stack_z(
-        placement: &ShellUiWindowPlacement,
-        stack_z: u32,
-    ) -> u32 {
+    pub(crate) fn shell_placement_stack_z(placement: &ShellUiWindowPlacement, stack_z: u32) -> u32 {
         if stack_z > 0 {
             stack_z
         } else {
@@ -532,7 +528,10 @@ impl ShellOsrState {
     }
 
     pub(crate) fn shell_cef_active(&self) -> bool {
-        self.shell_to_cef.lock().map(|g| g.is_some()).unwrap_or(false)
+        self.shell_to_cef
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
     }
 
     pub(crate) fn shell_nudge_cef_repaint(&self) {
@@ -597,7 +596,8 @@ impl ShellOsrState {
     {
         let (surface_id, window_id) = self.shell_last_sent_focus_pair.unwrap_or((None, None));
         let window_id = window_id.filter(|window_id| window_is_valid(*window_id));
-        let surface_id = window_id.and_then(|window_id| surface_id_for_window(window_id).or(surface_id));
+        let surface_id =
+            window_id.and_then(|window_id| surface_id_for_window(window_id).or(surface_id));
         Self::shell_focus_message(window_id, surface_id)
     }
 
@@ -891,7 +891,13 @@ impl ShellOsrState {
         } else {
             self.shell_dmabuf_dirty_buffer = buffer_rects;
         }
-        (force_full, force_env, pending_force_full, bbox_full, dirty_supplied_len)
+        (
+            force_full,
+            force_env,
+            pending_force_full,
+            bbox_full,
+            dirty_supplied_len,
+        )
     }
 
     pub(crate) fn apply_shell_frame_dmabuf(

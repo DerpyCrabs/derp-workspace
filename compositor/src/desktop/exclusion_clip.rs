@@ -15,8 +15,7 @@ impl ShellExclusionClipCtx {
     ) -> Rectangle<i32, Logical> {
         let scale = Scale::<f64>::from(self.scale_f);
         let out = &self.output_logical;
-        let tl =
-            Point::<f64, Physical>::from((r.loc.x as f64, r.loc.y as f64)).to_logical(scale);
+        let tl = Point::<f64, Physical>::from((r.loc.x as f64, r.loc.y as f64)).to_logical(scale);
         let br = Point::<f64, Physical>::from((
             (r.loc.x + r.size.w) as f64,
             (r.loc.y + r.size.h) as f64,

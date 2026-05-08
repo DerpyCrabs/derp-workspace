@@ -24,7 +24,8 @@ pub fn init_wayland_listener(
 
     loop_handle
         .insert_source(listening_socket, move |client_stream, _, state| {
-            if let Err(e) = state.display_handle
+            if let Err(e) = state
+                .display_handle
                 .insert_client(client_stream, Arc::new(ClientState::default()))
             {
                 tracing::warn!(?e, "wayland client insert failed");

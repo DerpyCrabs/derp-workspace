@@ -91,7 +91,8 @@ impl ScreencopyManagerState {
 
 impl CompositorState {
     fn capture_output_scales(&self) -> HashMap<String, f64> {
-        self.output_topology.space
+        self.output_topology
+            .space
             .outputs()
             .map(|output| (output.name(), output.current_scale().fractional_scale()))
             .collect()
@@ -113,7 +114,9 @@ impl CompositorState {
         &self,
         record: &crate::window_registry::WindowRecord,
     ) -> CachedCaptureWindowSource {
-        let logical_rect = self.output_topology.space
+        let logical_rect = self
+            .output_topology
+            .space
             .elements()
             .find(|elem| self.derp_elem_window_id(elem) == Some(record.info.window_id))
             .and_then(|elem| self.output_topology.space.element_geometry(elem))
@@ -152,7 +155,9 @@ impl CompositorState {
         record: &crate::window_registry::WindowRecord,
         output_scales: &HashMap<String, f64>,
     ) -> CaptureSourceDescriptor {
-        let cached = self.capture.capture_window_source_cache
+        let cached = self
+            .capture
+            .capture_window_source_cache
             .get(&record.info.window_id)
             .cloned()
             .unwrap_or_else(|| self.capture_cached_window_source_fallback(record));
@@ -206,15 +211,14 @@ impl CompositorState {
 
     pub(crate) fn capture_window_sources(&self) -> Vec<CaptureSourceDescriptor> {
         let output_scales = self.capture_output_scales();
-        self.windows.window_registry
+        self.windows
+            .window_registry
             .all_records()
             .into_iter()
             .filter(|record| !self.window_info_is_solid_shell_host(&record.info))
             .filter(|record| record.kind != crate::window_registry::WindowKind::ShellHosted)
             .filter(|record| shell_window_row_should_show(&record.info))
-            .filter(|record| {
-                !self.window_id_is_deferred_initial_map(record.info.window_id)
-            })
+            .filter(|record| !self.window_id_is_deferred_initial_map(record.info.window_id))
             .map(|record| {
                 self.capture_window_source_descriptor_from_record(&record, &output_scales)
             })
@@ -244,13 +248,26 @@ impl CompositorState {
                 continue;
             };
             active.insert(window_id);
-            if !self.capture.capture_toplevel_handles.contains_key(&window_id) {
-                let handle = self.capture.foreign_toplevel_list_state
+            if !self
+                .capture
+                .capture_toplevel_handles
+                .contains_key(&window_id)
+            {
+                let handle = self
+                    .capture
+                    .foreign_toplevel_list_state
                     .new_toplevel::<Self>(source.title.clone(), source.app_id.clone());
                 crate::render::capture_ext::capture_tag_toplevel_handle(&handle, window_id);
-                self.capture.capture_toplevel_handles.insert(window_id, handle);
+                self.capture
+                    .capture_toplevel_handles
+                    .insert(window_id, handle);
             }
-            let Some(handle) = self.capture.capture_toplevel_handles.get(&window_id).cloned() else {
+            let Some(handle) = self
+                .capture
+                .capture_toplevel_handles
+                .get(&window_id)
+                .cloned()
+            else {
                 continue;
             };
             handle.send_title(&source.title);
@@ -258,17 +275,23 @@ impl CompositorState {
             handle.send_done();
         }
 
-        let stale: Vec<u32> = self.capture.capture_toplevel_handles
+        let stale: Vec<u32> = self
+            .capture
+            .capture_toplevel_handles
             .keys()
             .copied()
             .filter(|window_id| !active.contains(window_id))
             .collect();
         for window_id in stale {
             if let Some(handle) = self.capture.capture_toplevel_handles.remove(&window_id) {
-                self.capture.foreign_toplevel_list_state.remove_toplevel(&handle);
+                self.capture
+                    .foreign_toplevel_list_state
+                    .remove_toplevel(&handle);
             }
         }
-        self.capture.foreign_toplevel_list_state.cleanup_closed_handles();
+        self.capture
+            .foreign_toplevel_list_state
+            .cleanup_closed_handles();
     }
 
     pub(crate) fn process_screencopy_output_if_needed(
@@ -393,7 +416,8 @@ impl IdleInhibitHandler for CompositorState {
         surface: smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     ) {
         if let Some(client) = surface.client() {
-            self.input_routing.idle_inhibit_surfaces
+            self.input_routing
+                .idle_inhibit_surfaces
                 .insert((client.id(), surface.id().protocol_id()));
         }
     }
@@ -403,7 +427,8 @@ impl IdleInhibitHandler for CompositorState {
         surface: smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     ) {
         if let Some(client) = surface.client() {
-            self.input_routing.idle_inhibit_surfaces
+            self.input_routing
+                .idle_inhibit_surfaces
                 .remove(&(client.id(), surface.id().protocol_id()));
         }
     }
@@ -587,14 +612,18 @@ fn queue_screencopy_copy(
 
     match validate_screencopy_buffer(&buffer, data) {
         Ok(()) => {
-            state.capture.pending_screencopy_copies.push(PendingScreencopyCopy {
-                frame: frame.clone(),
-                output_name: data.output_name.clone(),
-                logical_region: data.logical_region,
-                buffer,
-                with_damage,
-            });
-            state.capture.capture_force_full_damage_frames = state.capture.capture_force_full_damage_frames.max(8);
+            state
+                .capture
+                .pending_screencopy_copies
+                .push(PendingScreencopyCopy {
+                    frame: frame.clone(),
+                    output_name: data.output_name.clone(),
+                    logical_region: data.logical_region,
+                    buffer,
+                    with_damage,
+                });
+            state.capture.capture_force_full_damage_frames =
+                state.capture.capture_force_full_damage_frames.max(8);
             state.core.loop_signal.wakeup();
         }
         Err(error) => {

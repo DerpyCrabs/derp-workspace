@@ -939,6 +939,16 @@ function decodeWorkspaceStateBinary(bytes: Uint8Array, view: DataView, offset: n
       }
       customSlots.push({ slotId, x, y, width, height, rules })
     }
+    const snapLayout = cursor.string()
+    const customLayoutsJson = cursor.string()
+    if (snapLayout === null || customLayoutsJson === null) return null
+    let customLayouts: unknown[] = []
+    try {
+      const parsed = JSON.parse(customLayoutsJson || '[]')
+      if (Array.isArray(parsed)) customLayouts = parsed
+    } catch {
+      customLayouts = []
+    }
     monitorLayouts.push({
       outputId,
       outputName,
@@ -949,6 +959,8 @@ function decodeWorkspaceStateBinary(bytes: Uint8Array, view: DataView, offset: n
         ...(customLayoutId ? { customLayoutId } : {}),
         ...(customSlots.length > 0 ? { customSlots } : {}),
       },
+      ...(snapLayout ? { snapLayout } : {}),
+      ...(customLayouts.length > 0 ? { customLayouts } : {}),
     })
   }
   const preTileCount = cursor.u32()

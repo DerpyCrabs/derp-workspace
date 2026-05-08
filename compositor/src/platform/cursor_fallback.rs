@@ -12,8 +12,7 @@ use smithay::{
 };
 
 use crate::{
-    render::shell_overlay::SHELL_OSR_MEMORY_FOURCC,
-    session::settings_config::CursorSettingsFile,
+    render::shell_overlay::SHELL_OSR_MEMORY_FOURCC, session::settings_config::CursorSettingsFile,
 };
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -245,7 +244,8 @@ fn image_to_buffer(
         return None;
     }
     let bgra = rgba_strip_to_shell_bgra(img.width, img.height, &img.pixels_rgba)?;
-    let mut buf = MemoryRenderBuffer::new(SHELL_OSR_MEMORY_FOURCC, (w, h), 1, Transform::Normal, None);
+    let mut buf =
+        MemoryRenderBuffer::new(SHELL_OSR_MEMORY_FOURCC, (w, h), 1, Transform::Normal, None);
     {
         let mut ctx = buf.render();
         ctx.draw(|mem| {
@@ -268,7 +268,8 @@ fn image_to_buffer(
 fn build_vector_fallback(name: &str) -> CursorImageBuffer {
     const W: i32 = 24;
     const H: i32 = 24;
-    let mut buf = MemoryRenderBuffer::new(SHELL_OSR_MEMORY_FOURCC, (W, H), 1, Transform::Normal, None);
+    let mut buf =
+        MemoryRenderBuffer::new(SHELL_OSR_MEMORY_FOURCC, (W, H), 1, Transform::Normal, None);
     {
         let mut ctx = buf.render();
         ctx.draw(|mem| {
@@ -377,7 +378,9 @@ impl CursorThemeManager {
         let mut inner = self.inner.lock().ok()?;
         let key = CursorCacheKey { icon, scale_milli };
         if !inner.cache.contains_key(&key) {
-            let target = ((inner.settings.size as f64) * scale.max(0.25)).round().max(1.0) as u32;
+            let target = ((inner.settings.size as f64) * scale.max(0.25))
+                .round()
+                .max(1.0) as u32;
             let buf = load_icon_buffer(&inner.theme, icon, target);
             inner.cache.insert(key.clone(), buf);
         }
@@ -458,10 +461,8 @@ mod tests {
 
     #[test]
     fn discovers_cursor_theme_dirs() {
-        let root = std::env::temp_dir().join(format!(
-            "derp-cursor-theme-list-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("derp-cursor-theme-list-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("ThemeA").join("cursors")).unwrap();
         std::fs::create_dir_all(root.join("ThemeB")).unwrap();

@@ -1137,13 +1137,10 @@ function tilingConfigCleared(shell: ShellSnapshot): boolean {
   if (shell.session_snapshot_error) return false
   const sessionSnapshot = shell.session_snapshot as
     | {
-        tilingConfig?: {
-          monitors?: Record<string, unknown> | null
-        } | null
+        monitorLayouts?: unknown[] | null
       }
     | null
-  const monitors = sessionSnapshot?.tilingConfig?.monitors
-  return !!monitors && Object.keys(monitors).length === 0
+  return Array.isArray(sessionSnapshot?.monitorLayouts) && sessionSnapshot.monitorLayouts.length === 0
 }
 
 export async function resetShellTilingConfig(base: string): Promise<ShellSnapshot> {
@@ -1730,6 +1727,22 @@ export async function waitFor<T>(description: string, fn: () => Promise<T | null
     const remainingMs = timeoutMs - (Date.now() - started)
     if (remainingMs <= 0) break
     await new Promise((resolve) => setTimeout(resolve, Math.min(remainingMs, waitIntervalMs(intervalMs, attempts))))
+  }
+  attempts += 1
+  try {
+    const value = await fn()
+    if (value) {
+      recordTimingEvent({
+        kind: 'wait',
+        label: description,
+        elapsedMs: Date.now() - started,
+        attempts,
+        status: 'passed',
+      })
+      return value
+    }
+  } catch (error) {
+    lastError = error
   }
   recordTimingEvent({
     kind: 'wait',

@@ -161,7 +161,8 @@ impl OutputTopologyState {
         if dx == 0 && dy == 0 {
             return Vec::new();
         }
-        let elem_targets: Vec<(DerpSpaceElem, i32, i32)> = self.space
+        let elem_targets: Vec<(DerpSpaceElem, i32, i32)> = self
+            .space
             .elements()
             .filter_map(|e| {
                 let loc = self.space.element_location(e)?;
@@ -267,7 +268,8 @@ impl OutputTopologyState {
         w: i32,
         h: i32,
     ) -> Option<String> {
-        let pairs: Vec<(String, Rectangle<i32, Logical>)> = self.space
+        let pairs: Vec<(String, Rectangle<i32, Logical>)> = self
+            .space
             .outputs()
             .filter_map(|o| {
                 let g = self.space.output_geometry(o)?;
@@ -312,7 +314,8 @@ impl OutputTopologyState {
         let rg = self.space.output_geometry(remove)?;
         let rcx = rg.loc.x.saturating_add(rg.size.w.saturating_div(2));
         let rcy = rg.loc.y.saturating_add(rg.size.h.saturating_div(2));
-        let mut scored: Vec<(i32, i32, Output)> = self.space
+        let mut scored: Vec<(i32, i32, Output)> = self
+            .space
             .outputs()
             .filter(|o| o.name() != removed_name)
             .filter_map(|o| {
@@ -383,7 +386,8 @@ impl OutputTopologyState {
         let (pw, ph) = shell_window_physical_px;
         let physical_w = u32::try_from(pw).unwrap_or(lw).max(1);
         let physical_h = u32::try_from(ph).unwrap_or(lh).max(1);
-        let screens: Vec<shell_wire::OutputLayoutScreen> = self.space
+        let screens: Vec<shell_wire::OutputLayoutScreen> = self
+            .space
             .outputs()
             .filter_map(|o| {
                 let g = self.space.output_geometry(o)?;
@@ -520,11 +524,19 @@ impl OutputTopologyState {
         output_name: String,
         side: ShellTaskbarSide,
     ) -> OutputTopologyMutation {
-        if !self.space.outputs().any(|o| o.name() == output_name.as_str()) {
+        if !self
+            .space
+            .outputs()
+            .any(|o| o.name() == output_name.as_str())
+        {
             return OutputTopologyMutation::Unchanged;
         }
         if side == ShellTaskbarSide::Bottom {
-            if self.taskbar_side_by_output_name.remove(&output_name).is_none() {
+            if self
+                .taskbar_side_by_output_name
+                .remove(&output_name)
+                .is_none()
+            {
                 return OutputTopologyMutation::Unchanged;
             }
         } else if self.taskbar_side_by_output_name.get(&output_name).copied() == Some(side) {
@@ -539,10 +551,7 @@ impl OutputTopologyState {
         }
     }
 
-    pub(crate) fn set_shell_primary_output_name(
-        &mut self,
-        name: String,
-    ) -> OutputTopologyMutation {
+    pub(crate) fn set_shell_primary_output_name(&mut self, name: String) -> OutputTopologyMutation {
         let pref = if name.is_empty() {
             None
         } else {

@@ -451,7 +451,11 @@ pub fn apply_messages(
             &mut snapshot_notify_pending,
         );
     }
-    flush_shell_updates(browser.as_ref(), &mut pending_details, &mut snapshot_notify_pending);
+    flush_shell_updates(
+        browser.as_ref(),
+        &mut pending_details,
+        &mut snapshot_notify_pending,
+    );
 }
 
 fn apply_message(

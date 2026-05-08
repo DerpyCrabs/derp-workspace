@@ -306,7 +306,10 @@ pub fn apply_stored_from_heads(
     for s in &cfg.screens {
         if let Some(n) = resolve_entry(&s.connector, s.monitor_id.as_ref(), &live) {
             if s.taskbar_side != ShellTaskbarSide::Bottom {
-                state.output_topology.taskbar_side_by_output_name.insert(n, s.taskbar_side);
+                state
+                    .output_topology
+                    .taskbar_side_by_output_name
+                    .insert(n, s.taskbar_side);
             }
         }
     }

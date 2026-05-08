@@ -32,7 +32,6 @@ pub(crate) struct CachedShellRenderOutput {
     >,
 }
 
-
 impl CompositorState {
     pub(crate) fn apply_desktop_background_from_display_file(
         &mut self,

@@ -219,14 +219,12 @@ where
         alpha: f32,
     ) -> Vec<C> {
         match self {
-            DerpSpaceElem::Wayland(window) => {
-                render_window_elements_with_exclusion_mode(
-                    window, None, renderer, location, scale, alpha,
-                )
-                .into_iter()
-                .map(|(el, _)| C::from(el))
-                .collect()
-            }
+            DerpSpaceElem::Wayland(window) => render_window_elements_with_exclusion_mode(
+                window, None, renderer, location, scale, alpha,
+            )
+            .into_iter()
+            .map(|(el, _)| C::from(el))
+            .collect(),
             DerpSpaceElem::X11(x11) => {
                 AsRenderElements::render_elements(x11, renderer, location, scale, alpha)
                     .into_iter()

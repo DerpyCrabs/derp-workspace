@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub const WORKSPACE_SPLIT_PANE_FRACTION_MIN: f64 = 0.3;
 pub const WORKSPACE_SPLIT_PANE_FRACTION_MAX: f64 = 0.7;
@@ -161,6 +162,18 @@ pub struct WorkspaceMonitorLayoutState {
     pub layout: WorkspaceMonitorLayoutType,
     #[serde(default)]
     pub params: WorkspaceMonitorLayoutParams,
+    #[serde(
+        default,
+        rename = "snapLayout",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub snap_layout: String,
+    #[serde(
+        default,
+        rename = "customLayouts",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub custom_layouts: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -316,6 +329,10 @@ pub enum WorkspaceMutation {
         layout: WorkspaceMonitorLayoutType,
         #[serde(default)]
         params: WorkspaceMonitorLayoutParams,
+        #[serde(default, rename = "snapLayout")]
+        snap_layout: Option<String>,
+        #[serde(default, rename = "customLayouts")]
+        custom_layouts: Vec<Value>,
     },
     SetMonitorLayouts {
         layouts: Vec<WorkspaceMonitorLayoutState>,
@@ -332,6 +349,8 @@ pub enum WorkspaceMutation {
         monitor_tiles: Vec<WorkspaceMonitorTileState>,
         #[serde(default, rename = "preTileGeometry")]
         pre_tile_geometry: Vec<WorkspacePreTileGeometry>,
+        #[serde(default, rename = "monitorLayouts")]
+        monitor_layouts: Option<Vec<WorkspaceMonitorLayoutState>>,
         #[serde(default, rename = "nextGroupSeq")]
         next_group_seq: Option<u32>,
     },
@@ -394,6 +413,8 @@ mod tests {
                 output_name: "DP-1".to_string(),
                 layout: WorkspaceMonitorLayoutType::Columns,
                 params: WorkspaceMonitorLayoutParams::default(),
+                snap_layout: String::new(),
+                custom_layouts: Vec::new(),
             }],
             pre_tile_geometry: Vec::new(),
             taskbar_pins: Vec::new(),
@@ -408,6 +429,14 @@ mod tests {
                 left_pane_fraction: Some(0.65),
             }],
             pinned_window_ids: vec![2],
+            monitor_layouts: Some(vec![WorkspaceMonitorLayoutState {
+                output_id: "layout-id".to_string(),
+                output_name: "DP-1".to_string(),
+                layout: WorkspaceMonitorLayoutType::ManualSnap,
+                params: WorkspaceMonitorLayoutParams::default(),
+                snap_layout: "3x3".to_string(),
+                custom_layouts: Vec::new(),
+            }]),
             monitor_tiles: vec![WorkspaceMonitorTileState {
                 output_id: "new-id".to_string(),
                 output_name: "DP-1".to_string(),
@@ -482,6 +511,7 @@ mod tests {
                     left_pane_fraction: Some(0.1),
                 }],
                 pinned_window_ids: vec![2, 99],
+                monitor_layouts: None,
                 monitor_tiles: vec![WorkspaceMonitorTileState {
                     output_id: "id".to_string(),
                     output_name: "DP-1".to_string(),
@@ -532,6 +562,39 @@ mod tests {
     }
 
     #[test]
+    fn restore_session_workspace_clears_explicit_empty_monitor_layouts() {
+        let state = WorkspaceState {
+            groups: Vec::new(),
+            active_tab_by_group_id: HashMap::new(),
+            pinned_window_ids: Vec::new(),
+            split_by_group_id: HashMap::new(),
+            monitor_tiles: Vec::new(),
+            monitor_layouts: vec![WorkspaceMonitorLayoutState {
+                output_id: "old-id".to_string(),
+                output_name: "DP-1".to_string(),
+                layout: WorkspaceMonitorLayoutType::Grid,
+                params: WorkspaceMonitorLayoutParams::default(),
+                snap_layout: "2x2".to_string(),
+                custom_layouts: Vec::new(),
+            }],
+            pre_tile_geometry: Vec::new(),
+            taskbar_pins: Vec::new(),
+            next_group_seq: 1,
+        };
+        let next = state
+            .apply_mutation(&WorkspaceMutation::RestoreSessionWorkspace {
+                groups: Vec::new(),
+                pinned_window_ids: Vec::new(),
+                monitor_layouts: Some(Vec::new()),
+                monitor_tiles: Vec::new(),
+                pre_tile_geometry: Vec::new(),
+                next_group_seq: None,
+            })
+            .expect("restore changes state");
+        assert!(next.monitor_layouts.is_empty());
+    }
+
+    #[test]
     fn set_monitor_layouts_replaces_layouts_and_clears_manual_tiles() {
         let state = WorkspaceState {
             groups: vec![group("group-1", &[1])],
@@ -573,6 +636,8 @@ mod tests {
                 output_name: "HDMI-A-1".to_string(),
                 layout: WorkspaceMonitorLayoutType::Grid,
                 params: WorkspaceMonitorLayoutParams::default(),
+                snap_layout: String::new(),
+                custom_layouts: Vec::new(),
             }],
             pre_tile_geometry: Vec::new(),
             taskbar_pins: Vec::new(),
@@ -586,6 +651,8 @@ mod tests {
                         output_name: "DP-1".to_string(),
                         layout: WorkspaceMonitorLayoutType::ManualSnap,
                         params: WorkspaceMonitorLayoutParams::default(),
+                        snap_layout: "3x2".to_string(),
+                        custom_layouts: Vec::new(),
                     },
                     WorkspaceMonitorLayoutState {
                         output_id: "auto-id".to_string(),
@@ -595,12 +662,16 @@ mod tests {
                             max_columns: Some(2),
                             ..WorkspaceMonitorLayoutParams::default()
                         },
+                        snap_layout: String::new(),
+                        custom_layouts: Vec::new(),
                     },
                     WorkspaceMonitorLayoutState {
                         output_id: "auto-id".to_string(),
                         output_name: "DP-2-renamed".to_string(),
                         layout: WorkspaceMonitorLayoutType::Grid,
                         params: WorkspaceMonitorLayoutParams::default(),
+                        snap_layout: String::new(),
+                        custom_layouts: Vec::new(),
                     },
                 ],
             })
@@ -905,6 +976,22 @@ fn output_key(output_name: &str, output_id: &str) -> String {
     }
 }
 
+fn sanitize_monitor_layouts(
+    layouts: &[WorkspaceMonitorLayoutState],
+) -> Vec<WorkspaceMonitorLayoutState> {
+    let mut seen = HashSet::new();
+    layouts
+        .iter()
+        .filter(|entry| {
+            if entry.output_name.is_empty() && entry.output_id.is_empty() {
+                return false;
+            }
+            seen.insert(output_key(&entry.output_name, &entry.output_id))
+        })
+        .cloned()
+        .collect()
+}
+
 pub fn reconcile_workspace_state(
     state: &WorkspaceState,
     live_window_ids: &[u32],
@@ -1013,6 +1100,7 @@ fn restore_session_workspace_state(
     current: &WorkspaceState,
     groups: &[WorkspaceRestoreGroup],
     pinned_window_ids: &[u32],
+    monitor_layouts: Option<&[WorkspaceMonitorLayoutState]>,
     monitor_tiles: &[WorkspaceMonitorTileState],
     pre_tile_geometry: &[WorkspacePreTileGeometry],
     requested_next_group_seq: Option<u32>,
@@ -1029,7 +1117,9 @@ fn restore_session_workspace_state(
         pinned_window_ids: Vec::new(),
         split_by_group_id: HashMap::new(),
         monitor_tiles: Vec::new(),
-        monitor_layouts: current.monitor_layouts.clone(),
+        monitor_layouts: monitor_layouts
+            .map(sanitize_monitor_layouts)
+            .unwrap_or_else(|| current.monitor_layouts.clone()),
         pre_tile_geometry: Vec::new(),
         taskbar_pins: current.taskbar_pins.clone(),
         next_group_seq,
@@ -1795,6 +1885,8 @@ impl WorkspaceState {
                 output_name,
                 layout,
                 params,
+                snap_layout,
+                custom_layouts,
             } => {
                 let mut next = self.clone();
                 next.monitor_layouts.retain(|entry| {
@@ -1810,6 +1902,8 @@ impl WorkspaceState {
                     output_name: output_name.clone(),
                     layout: layout.clone(),
                     params: params.clone(),
+                    snap_layout: snap_layout.clone().unwrap_or_default(),
+                    custom_layouts: custom_layouts.clone(),
                 });
                 if *layout == WorkspaceMonitorLayoutType::ManualSnap {
                     next.monitor_tiles.retain(|monitor| {
@@ -1828,17 +1922,7 @@ impl WorkspaceState {
             }
             WorkspaceMutation::SetMonitorLayouts { layouts } => {
                 let mut next = self.clone();
-                let mut seen = HashSet::new();
-                next.monitor_layouts = layouts
-                    .iter()
-                    .filter(|entry| {
-                        if entry.output_name.is_empty() && entry.output_id.is_empty() {
-                            return false;
-                        }
-                        seen.insert(output_key(&entry.output_name, &entry.output_id))
-                    })
-                    .cloned()
-                    .collect();
+                next.monitor_layouts = sanitize_monitor_layouts(layouts);
                 for layout in &next.monitor_layouts {
                     if layout.layout != WorkspaceMonitorLayoutType::ManualSnap {
                         continue;
@@ -1869,6 +1953,7 @@ impl WorkspaceState {
             WorkspaceMutation::RestoreSessionWorkspace {
                 groups,
                 pinned_window_ids,
+                monitor_layouts,
                 monitor_tiles,
                 pre_tile_geometry,
                 next_group_seq,
@@ -1877,6 +1962,7 @@ impl WorkspaceState {
                     self,
                     groups,
                     pinned_window_ids,
+                    monitor_layouts.as_deref(),
                     monitor_tiles,
                     pre_tile_geometry,
                     *next_group_seq,

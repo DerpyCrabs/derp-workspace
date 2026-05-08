@@ -1,27 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { resolveBackedWindowClientAreaGlobal } from './backedShellWindowActions'
 import type { DerpWindow } from '@/host/appWindowState'
 import type { LayoutScreen } from '@/host/types'
-
-const STORAGE_KEY = 'derp-tiling-config'
-
-function stubLocalStorage() {
-  const store = new Map<string, string>()
-  const localStorage = {
-    getItem: vi.fn((key: string) => store.get(key) ?? null),
-    setItem: vi.fn((key: string, value: string) => {
-      store.set(key, value)
-    }),
-    removeItem: vi.fn((key: string) => {
-      store.delete(key)
-    }),
-    clear: vi.fn(() => {
-      store.clear()
-    }),
-  }
-  vi.stubGlobal('localStorage', localStorage)
-  return localStorage
-}
 
 function shellWindow(windowId: number, outputName = 'DP-1'): DerpWindow {
   return {
@@ -66,14 +46,6 @@ const monitor: LayoutScreen = {
 }
 
 describe('backedShellWindowActions', () => {
-  beforeEach(() => {
-    stubLocalStorage()
-  })
-
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
-
   it('keeps centered floating defaults on manual-snap monitors', () => {
     const rect = resolveBackedWindowClientAreaGlobal({
       windowId: 9100,
@@ -90,18 +62,7 @@ describe('backedShellWindowActions', () => {
     expect(rect).toEqual({ x: 360, y: 319, w: 480, h: 266 })
   })
 
-  it('keeps shell-hosted open payloads staggered even on auto-layout monitors', () => {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        monitors: {
-          'DP-1': {
-            layout: 'grid',
-          },
-        },
-      }),
-    )
-
+  it('keeps shell-hosted open payloads staggered with existing hosted windows', () => {
     const rect = resolveBackedWindowClientAreaGlobal({
       windowId: 9101,
       kind: 'test',

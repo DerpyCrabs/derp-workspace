@@ -1327,9 +1327,9 @@ mod tests {
         normalize_hotkey_chord, read_cursor_settings, read_hotkey_settings, read_keyboard_settings,
         read_theme_settings, sanitize_cursor_settings, sanitize_hotkey_settings_for_write,
         sanitize_keyboard_settings, sanitize_theme_settings, settings_config_path,
-        write_cursor_settings, write_hotkey_settings, write_keyboard_settings, write_theme_settings,
-        CursorSettingsFile, HotkeyActionFile, HotkeyBindingFile, HotkeySettingsFile,
-        KeyboardLayoutEntryFile, KeyboardSettingsFile, ThemeSettingsFile,
+        write_cursor_settings, write_hotkey_settings, write_keyboard_settings,
+        write_theme_settings, CursorSettingsFile, HotkeyActionFile, HotkeyBindingFile,
+        HotkeySettingsFile, KeyboardLayoutEntryFile, KeyboardSettingsFile, ThemeSettingsFile,
     };
 
     fn env_lock() -> &'static Mutex<()> {

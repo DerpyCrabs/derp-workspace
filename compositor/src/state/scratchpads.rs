@@ -69,7 +69,8 @@ impl CompositorState {
         &self,
         scratchpad_id: &str,
     ) -> Option<&crate::session::settings_config::ScratchpadFile> {
-        self.workspace_layout.scratchpad_settings
+        self.workspace_layout
+            .scratchpad_settings
             .items
             .iter()
             .find(|item| item.id == scratchpad_id)
@@ -81,13 +82,17 @@ impl CompositorState {
     ) -> Option<Output> {
         match cfg.placement.monitor.as_str() {
             "primary" => self.shell_effective_primary_output(),
-            "pointer" => self.input_routing.seat
+            "pointer" => self
+                .input_routing
+                .seat
                 .get_pointer()
                 .and_then(|pointer| self.output_containing_global_point(pointer.current_location()))
                 .or_else(|| self.shell_effective_primary_output())
                 .or_else(|| self.leftmost_output()),
             "focused" | "" => self.new_toplevel_placement_output(None),
-            name => self.output_topology.space
+            name => self
+                .output_topology
+                .space
                 .outputs()
                 .find(|output| output.name() == name)
                 .cloned()
@@ -96,7 +101,12 @@ impl CompositorState {
     }
 
     fn scratchpad_place_window(&mut self, window_id: u32) {
-        let Some(sp) = self.workspace_layout.scratchpad_windows.get(&window_id).cloned() else {
+        let Some(sp) = self
+            .workspace_layout
+            .scratchpad_windows
+            .get(&window_id)
+            .cloned()
+        else {
             return;
         };
         let Some(cfg) = self.scratchpad_config_by_id(&sp.scratchpad_id).cloned() else {
@@ -142,7 +152,9 @@ impl CompositorState {
 
     fn scratchpad_show_window(&mut self, window_id: u32) {
         self.scratchpad_place_window(window_id);
-        if self.windows.window_registry
+        if self
+            .windows
+            .window_registry
             .window_info(window_id)
             .is_some_and(|info| info.minimized)
         {
@@ -151,7 +163,8 @@ impl CompositorState {
             self.shell_raise_and_focus_window(window_id);
         }
         if let Some(sp) = self.workspace_layout.scratchpad_windows.get(&window_id) {
-            self.workspace_layout.scratchpad_last_window_by_id
+            self.workspace_layout
+                .scratchpad_last_window_by_id
                 .insert(sp.scratchpad_id.clone(), window_id);
         }
         self.shell_reply_window_list();
@@ -168,7 +181,9 @@ impl CompositorState {
         let matched = self.scratchpad_match_for_window(window_id, &info);
         match matched {
             Some(scratchpad_id) => {
-                let was = self.workspace_layout.scratchpad_windows
+                let was = self
+                    .workspace_layout
+                    .scratchpad_windows
                     .get(&window_id)
                     .map(|state| state.scratchpad_id.as_str());
                 let new_assignment = was != Some(scratchpad_id.as_str());
@@ -196,7 +211,12 @@ impl CompositorState {
                 }
             }
             None => {
-                if self.workspace_layout.scratchpad_windows.remove(&window_id).is_some() {
+                if self
+                    .workspace_layout
+                    .scratchpad_windows
+                    .remove(&window_id)
+                    .is_some()
+                {
                     self.shell_reply_window_list();
                 }
             }
@@ -214,7 +234,9 @@ impl CompositorState {
         let settings = crate::session::settings_config::sanitize_scratchpad_settings(settings);
         crate::session::settings_config::write_scratchpad_settings(settings.clone())?;
         self.workspace_layout.set_scratchpad_settings(settings);
-        let window_ids: Vec<u32> = self.windows.window_registry
+        let window_ids: Vec<u32> = self
+            .windows
+            .window_registry
             .all_infos()
             .into_iter()
             .map(|info| info.window_id)
@@ -231,7 +253,8 @@ impl CompositorState {
         settings: crate::session::settings_config::HotkeySettingsFile,
     ) -> Result<(), String> {
         crate::session::settings_config::write_hotkey_settings(settings)?;
-        self.input_routing.hotkey_settings = crate::session::settings_config::read_hotkey_settings();
+        self.input_routing.hotkey_settings =
+            crate::session::settings_config::read_hotkey_settings();
         Ok(())
     }
 
@@ -239,17 +262,25 @@ impl CompositorState {
         if self.scratchpad_config_by_id(scratchpad_id).is_none() {
             return;
         }
-        let mut windows: Vec<u32> = self.workspace_layout.scratchpad_windows
+        let mut windows: Vec<u32> = self
+            .workspace_layout
+            .scratchpad_windows
             .iter()
             .filter_map(|(window_id, state)| {
                 (state.scratchpad_id == scratchpad_id)
                     .then_some(*window_id)
-                    .filter(|window_id| self.windows.window_registry.window_info(*window_id).is_some())
+                    .filter(|window_id| {
+                        self.windows
+                            .window_registry
+                            .window_info(*window_id)
+                            .is_some()
+                    })
             })
             .collect();
         windows.sort_by_key(|window_id| self.shell_window_stack_z(*window_id));
         if let Some(visible) = windows.iter().rev().copied().find(|window_id| {
-            self.windows.window_registry
+            self.windows
+                .window_registry
                 .window_info(*window_id)
                 .is_some_and(|info| !info.minimized)
         }) {
@@ -257,7 +288,9 @@ impl CompositorState {
             self.shell_reply_window_list();
             return;
         }
-        let preferred = self.workspace_layout.scratchpad_last_window_by_id
+        let preferred = self
+            .workspace_layout
+            .scratchpad_last_window_by_id
             .get(scratchpad_id)
             .copied()
             .filter(|window_id| windows.contains(window_id))

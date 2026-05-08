@@ -12,18 +12,26 @@ describe('sessionSnapshot', () => {
         version: 99,
         nextNativeWindowSeq: '3',
         workspace: {
-        groups: [
-          {
-            id: 'group-1',
-            windowRefs: ['bad', shellWindowRef(9002)],
-            activeWindowRef: 'bad',
-            splitLeftWindowRef: 'bad',
-            leftPaneFraction: 0.5,
-          },
-        ],
+          groups: [
+            {
+              id: 'group-1',
+              windowRefs: ['bad', shellWindowRef(9002)],
+              activeWindowRef: 'bad',
+              splitLeftWindowRef: 'bad',
+              leftPaneFraction: 0.5,
+            },
+          ],
           pinnedWindowRefs: ['bad', nativeWindowRef(2)],
           nextGroupSeq: '4',
         },
+        monitorLayouts: [
+          {
+            outputId: 'make:model:serial-1',
+            outputName: 'DP-1',
+            layout: 'manual-snap',
+            snapLayout: '2x2',
+          },
+        ],
         shellWindows: [
           {
             windowId: 9002,
@@ -69,7 +77,15 @@ describe('sessionSnapshot', () => {
         pinnedWindowRefs: [nativeWindowRef(2)],
         nextGroupSeq: 4,
       },
-      tilingConfig: { monitors: {} },
+      monitorLayouts: [
+        {
+          outputId: 'make:model:serial-1',
+          outputName: 'DP-1',
+          layout: 'manual-snap',
+          params: {},
+          snapLayout: '2x2',
+        },
+      ],
       monitorTiles: [],
       preTileGeometry: [],
       shellWindows: [

@@ -5,8 +5,7 @@ pub(crate) struct TrayNotificationsState {
     sni_tray_cmd_tx: Option<std::sync::mpsc::Sender<crate::tray::sni_tray::SniTrayCmd>>,
     sni_tray_slot_count: u32,
     sni_tray_items: Vec<shell_wire::TraySniItemWire>,
-    notifications_cmd_tx:
-        Option<std::sync::mpsc::Sender<crate::notifications::NotificationsCmd>>,
+    notifications_cmd_tx: Option<std::sync::mpsc::Sender<crate::notifications::NotificationsCmd>>,
     notifications_state_json: String,
     pub(crate) shell_tray_hidden_x11_windows: HashMap<u32, X11Surface>,
     pub(crate) shell_tray_hidden_x11_window_ids: HashSet<u32>,
@@ -43,10 +42,7 @@ impl TrayNotificationsState {
         self.shell_tray_strip_global
     }
 
-    pub(crate) fn set_shell_tray_strip_global(
-        &mut self,
-        rect: Option<Rectangle<i32, Logical>>,
-    ) {
+    pub(crate) fn set_shell_tray_strip_global(&mut self, rect: Option<Rectangle<i32, Logical>>) {
         self.shell_tray_strip_global = rect;
     }
 
@@ -120,12 +116,7 @@ impl TrayNotificationsState {
         }
     }
 
-    pub(crate) fn notifications_invoke_action(
-        &self,
-        id: u32,
-        action_key: String,
-        source: String,
-    ) {
+    pub(crate) fn notifications_invoke_action(&self, id: u32, action_key: String, source: String) {
         if let Some(tx) = &self.notifications_cmd_tx {
             let _ = tx.send(crate::notifications::NotificationsCmd::InvokeAction {
                 id,
@@ -235,8 +226,7 @@ impl TrayNotificationsState {
         let item_title = Self::tray_match_token(&item.title);
         let item_id = Self::tray_match_token(&item.id);
         window_tokens.iter().any(|token| {
-            (item_title.len() >= 4
-                && (item_title.contains(token) || token.contains(&item_title)))
+            (item_title.len() >= 4 && (item_title.contains(token) || token.contains(&item_title)))
                 || (item_id.len() >= 4 && (item_id.contains(token) || token.contains(&item_id)))
         })
     }
@@ -335,10 +325,9 @@ impl TrayNotificationsState {
                     && (matches!(
                         (info.wayland_client_pid, item_pid),
                         (Some(window_pid), Some(item_pid)) if window_pid == item_pid
-                    )
-                        || item
-                            .map(|item| Self::sni_item_matches_window_info(item, info))
-                            .unwrap_or(false))
+                    ) || item
+                        .map(|item| Self::sni_item_matches_window_info(item, info))
+                        .unwrap_or(false))
             })
             .map(|info| info.window_id)
     }

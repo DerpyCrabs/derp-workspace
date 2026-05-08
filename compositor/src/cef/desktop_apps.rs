@@ -65,7 +65,8 @@ pub fn list_applications_json() -> Result<String, String> {
 
 pub fn read_desktop_icon_bytes(name: &str) -> Result<(Vec<u8>, &'static str), String> {
     let path = resolve_desktop_icon_path(name)?;
-    let content_type = icon_content_type(&path).ok_or_else(|| "desktop_icon: unsupported type".to_string())?;
+    let content_type =
+        icon_content_type(&path).ok_or_else(|| "desktop_icon: unsupported type".to_string())?;
     let bytes = fs::read(&path).map_err(|e| format!("desktop_icon: {e}"))?;
     Ok((bytes, content_type))
 }
@@ -257,7 +258,13 @@ fn icon_base_dirs() -> Vec<PathBuf> {
 }
 
 fn icon_content_type(path: &Path) -> Option<&'static str> {
-    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "png" => Some("image/png"),
         "svg" => Some("image/svg+xml"),
         "xpm" => Some("image/x-xpixmap"),
@@ -315,7 +322,10 @@ fn find_icon_candidate(dir: &Path, name: &str, best: &mut Option<(u32, PathBuf)>
             continue;
         }
         let score = icon_candidate_score(&path);
-        if best.as_ref().is_none_or(|(best_score, _)| score > *best_score) {
+        if best
+            .as_ref()
+            .is_none_or(|(best_score, _)| score > *best_score)
+        {
             *best = Some((score, path));
         }
     }
@@ -340,7 +350,13 @@ fn icon_candidate_score(path: &Path) -> u32 {
             break;
         }
     }
-    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "png" => score + 30,
         "svg" => score + 20,
         "xpm" => score + 10,

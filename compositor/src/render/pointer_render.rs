@@ -31,30 +31,33 @@ fn push_named_cursor_fallback(
     scale_f: f64,
     out: &mut Vec<Desk<'_>>,
 ) {
-    let _ = state.input_routing.cursor_theme.with_cursor(icon, scale_f, |cursor, _, _| {
-        let (hx, hy) = cursor.hotspot_physical;
-        let top_left = Point::from((
-            pos_output_local.x - hx as f64 / scale_f.max(0.25),
-            pos_output_local.y - hy as f64 / scale_f.max(0.25),
-        ));
-        let phys_i: Point<i32, Physical> =
-            top_left.to_physical_precise_round(Scale::from(scale_f));
-        let phys = phys_i.to_f64();
-        match MemoryRenderBufferRenderElement::from_buffer(
-            renderer,
-            phys,
-            &cursor.buffer,
-            None,
-            None,
-            None,
-            Kind::Cursor,
-        ) {
-            Ok(el) => out.push(DesktopStack::CursorTex(FractionalDamageElement::new(
-                el, scale_f,
-            ))),
-            Err(e) => tracing::warn!(?e, "cursor fallback MemoryRenderBufferRenderElement"),
-        }
-    });
+    let _ = state
+        .input_routing
+        .cursor_theme
+        .with_cursor(icon, scale_f, |cursor, _, _| {
+            let (hx, hy) = cursor.hotspot_physical;
+            let top_left = Point::from((
+                pos_output_local.x - hx as f64 / scale_f.max(0.25),
+                pos_output_local.y - hy as f64 / scale_f.max(0.25),
+            ));
+            let phys_i: Point<i32, Physical> =
+                top_left.to_physical_precise_round(Scale::from(scale_f));
+            let phys = phys_i.to_f64();
+            match MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                phys,
+                &cursor.buffer,
+                None,
+                None,
+                None,
+                Kind::Cursor,
+            ) {
+                Ok(el) => out.push(DesktopStack::CursorTex(FractionalDamageElement::new(
+                    el, scale_f,
+                ))),
+                Err(e) => tracing::warn!(?e, "cursor fallback MemoryRenderBufferRenderElement"),
+            }
+        });
 }
 
 /// Append pointer layers. Caller should place these **first** in the `elements` slice passed to

@@ -1,4 +1,5 @@
 import type { Rect, SnapZone } from '@/features/tiling/tileZones'
+import { sanitizeCustomLayouts } from '@/features/tiling/customLayouts'
 import {
   WORKSPACE_MONITOR_LAYOUT_TYPES,
   type WorkspaceCustomAutoSlot,
@@ -61,6 +62,10 @@ export function cloneWorkspaceSnapshot(state: WorkspaceSnapshot): WorkspaceSnaps
       outputName: entry.outputName,
       layout: entry.layout,
       params: { ...entry.params },
+      ...(entry.snapLayout ? { snapLayout: entry.snapLayout } : {}),
+      ...(entry.customLayouts && entry.customLayouts.length > 0
+        ? { customLayouts: entry.customLayouts.map((layout) => ({ ...layout })) }
+        : {}),
     })),
     preTileGeometry: state.preTileGeometry.map((entry) => ({
       windowId: entry.windowId,
@@ -176,6 +181,10 @@ export function workspaceSnapshotsEqual(a: WorkspaceSnapshot, b: WorkspaceSnapsh
     if (layoutA.params.masterRatio !== layoutB.params.masterRatio) return false
     if (layoutA.params.maxColumns !== layoutB.params.maxColumns) return false
     if (layoutA.params.customLayoutId !== layoutB.params.customLayoutId) return false
+    if ((layoutA.snapLayout ?? '') !== (layoutB.snapLayout ?? '')) return false
+    const customLayoutsA = layoutA.customLayouts ?? []
+    const customLayoutsB = layoutB.customLayouts ?? []
+    if (JSON.stringify(customLayoutsA) !== JSON.stringify(customLayoutsB)) return false
     const slotsA = layoutA.params.customSlots ?? []
     const slotsB = layoutB.params.customSlots ?? []
     if (slotsA.length !== slotsB.length) return false
@@ -456,7 +465,16 @@ function normalizeMonitorLayouts(raw: unknown): WorkspaceMonitorLayoutState[] {
         if (customSlots.length > 0) params.customSlots = customSlots
       }
     }
-    out.push({ outputId, outputName, layout, params })
+    const customLayouts = sanitizeCustomLayouts(record.customLayouts)
+    const snapLayout = typeof record.snapLayout === 'string' && record.snapLayout.trim() ? record.snapLayout.trim() : undefined
+    out.push({
+      outputId,
+      outputName,
+      layout,
+      params,
+      ...(snapLayout ? { snapLayout } : {}),
+      ...(customLayouts.length > 0 ? { customLayouts } : {}),
+    })
   }
   return out
 }

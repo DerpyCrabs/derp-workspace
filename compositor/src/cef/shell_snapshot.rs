@@ -626,6 +626,11 @@ pub(crate) fn encode_workspace_state_binary_payload(state: &WorkspaceState) -> O
                 push_wire_string(&mut body, &rule.value)?;
             }
         }
+        push_wire_string(&mut body, &layout.snap_layout)?;
+        push_wire_string(
+            &mut body,
+            &serde_json::to_string(&layout.custom_layouts).ok()?,
+        )?;
     }
     body.extend_from_slice(
         &u32::try_from(state.pre_tile_geometry.len())
@@ -780,6 +785,14 @@ fn encode_workspace_state_binary(revision: u64, state_json: &str) -> Option<Vec<
                 push_json_string(&mut body, rule.get("value"))?;
             }
         }
+        push_json_string(&mut body, layout.get("snapLayout"))?;
+        let custom_layouts_json = serde_json::to_string(
+            layout
+                .get("customLayouts")
+                .unwrap_or(&serde_json::Value::Array(Vec::new())),
+        )
+        .ok()?;
+        push_wire_string(&mut body, &custom_layouts_json)?;
     }
     let pre_tiles = json_array(object.get("preTileGeometry"));
     body.extend_from_slice(&u32::try_from(pre_tiles.len()).ok()?.to_le_bytes());
@@ -1437,5 +1450,4 @@ mod tests {
             2
         );
     }
-
 }

@@ -7,100 +7,98 @@ import {
   For,
   Show,
   type JSX,
-} from 'solid-js'
-import { createStore } from 'solid-js/store'
-import {
-  CHROME_BORDER_PX,
-  CHROME_TITLEBAR_PX,
-} from '@/lib/chromeConstants'
+} from "solid-js";
+import { createStore } from "solid-js/store";
+import { CHROME_BORDER_PX, CHROME_TITLEBAR_PX } from "@/lib/chromeConstants";
 import {
   canvasRectToClientCss,
   clientPointToGlobalLogical,
   globalPointToClientCss,
-} from '@/lib/shellCoords'
-import { defaultAudioDevice, useShellAudioState } from '@/apps/settings/useShellAudioState'
-import { useShellBatteryState } from '@/apps/settings/useShellBatteryState'
+} from "@/lib/shellCoords";
+import {
+  defaultAudioDevice,
+  useShellAudioState,
+} from "@/apps/settings/useShellAudioState";
+import { useShellBatteryState } from "@/apps/settings/useShellBatteryState";
 import {
   settingsActivePage,
   setSettingsActivePage,
   type SettingsPageId,
-} from '@/apps/settings/settingsNavigation'
+} from "@/apps/settings/settingsNavigation";
 import {
   flushShellUiWindowsSyncNow,
   invalidateAllShellUiWindows,
   SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
-} from '@/features/shell-ui/shellUiWindows'
-import { createBackedShellWindowActions } from '@/features/shell-ui/backedShellWindowActions'
-import { renderShellHostedWindowContent } from '@/features/shell-ui/shellHostedWindowContent'
-import type { ShellCompositorWireOp, ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
-import { createShellSurfaceRuntime } from '@/features/shell-ui/shellSurfaceRuntime'
-import { createShellWindowGestureRuntime } from '@/features/shell-ui/shellWindowGestureRuntime'
-import { CustomLayoutOverlay, type CustomLayoutOverlayState } from '@/features/tiling/CustomLayoutOverlay'
+} from "@/features/shell-ui/shellUiWindows";
+import { createBackedShellWindowActions } from "@/features/shell-ui/backedShellWindowActions";
+import { renderShellHostedWindowContent } from "@/features/shell-ui/shellHostedWindowContent";
+import type {
+  ShellCompositorWireOp,
+  ShellCompositorWireSend,
+} from "@/features/shell-ui/shellWireSendType";
+import { createShellSurfaceRuntime } from "@/features/shell-ui/shellSurfaceRuntime";
+import { createShellWindowGestureRuntime } from "@/features/shell-ui/shellWindowGestureRuntime";
 import {
-  customAutoLayoutParamsForMonitor,
-  getMonitorLayout,
+  CustomLayoutOverlay,
+  type CustomLayoutOverlayState,
+} from "@/features/tiling/CustomLayoutOverlay";
+import {
+  configureWorkspaceTilingConfig,
   resetTilingConfig as resetPersistedTilingConfig,
   setMonitorCustomLayouts,
-  setMonitorSnapLayout,
-} from '@/features/tiling/tilingConfig'
-import { ShellFloatingProvider, type ShellFloatingRegistry } from '@/features/floating/ShellFloatingContext'
-import { createFloatingLayerStore } from '@/features/floating/floatingLayers'
-import { createShellOverlayRegistry } from '@/features/floating/shellOverlay'
+} from "@/features/tiling/tilingConfig";
 import {
-  spawnViaShellHttp,
-} from '@/features/bridge/shellBridge'
-import { shellHttpBase } from '@/features/bridge/shellHttp'
-import { startThemeDomSync } from '@/features/theme/themeDom'
-import { refreshThemeSettingsFromRemote } from '@/features/theme/themeStore'
-import { ShellContextMenusProvider } from '@/host/ShellContextMenusContext'
-import { createShellContextMenus } from '@/host/createShellContextMenus'
-import { ShellContextMenuLayer } from '@/host/ShellContextMenuLayer'
-import { WindowSwitcherContextMenu } from '@/host/WindowSwitcherContextMenu'
-import { createDebugHudRuntime } from '@/apps/debug/debugHudRuntime'
+  ShellFloatingProvider,
+  type ShellFloatingRegistry,
+} from "@/features/floating/ShellFloatingContext";
+import { createFloatingLayerStore } from "@/features/floating/floatingLayers";
+import { createShellOverlayRegistry } from "@/features/floating/shellOverlay";
+import { spawnViaShellHttp } from "@/features/bridge/shellBridge";
+import { shellHttpBase } from "@/features/bridge/shellHttp";
+import { startThemeDomSync } from "@/features/theme/themeDom";
+import { refreshThemeSettingsFromRemote } from "@/features/theme/themeStore";
+import { ShellContextMenusProvider } from "@/host/ShellContextMenusContext";
+import { createShellContextMenus } from "@/host/createShellContextMenus";
+import { ShellContextMenuLayer } from "@/host/ShellContextMenuLayer";
+import { WindowSwitcherContextMenu } from "@/host/WindowSwitcherContextMenu";
+import { createDebugHudRuntime } from "@/apps/debug/debugHudRuntime";
 import {
   layoutScreenCssRect,
   monitorRefreshLabel,
   screensListForLayout,
   shellBuildLabelText,
   unionBBoxFromScreens,
-} from '@/host/appLayout'
-import {
-  type DerpWindow,
-  windowIsShellHosted,
-} from '@/host/appWindowState'
-import { useDesktopApplicationsState } from '@/features/desktop/desktopApplicationsState'
+} from "@/host/appLayout";
+import { type DerpWindow, windowIsShellHosted } from "@/host/appWindowState";
+import { useDesktopApplicationsState } from "@/features/desktop/desktopApplicationsState";
 import {
   DEFAULT_APPLICATIONS_FALLBACK,
   fileOpenCategoryForPath,
   optionById,
   useDefaultApplicationsState,
   type OpenWithOption,
-} from '@/apps/default-applications/defaultApplications'
-import type { TaskbarPin, TaskbarSniItem } from '@/features/taskbar/Taskbar'
+} from "@/apps/default-applications/defaultApplications";
+import type { TaskbarPin, TaskbarSniItem } from "@/features/taskbar/Taskbar";
 import {
   nativeWindowRef,
   type NativeLaunchMetadata,
   type SavedRect,
   type SessionSnapshot,
   type SessionWindowRef,
-} from '@/features/bridge/sessionSnapshot'
-import {
-  subscribeShellWindowState,
-} from '@/features/shell-ui/shellWindowState'
-import type {
-  LayoutScreen,
-} from '@/host/types'
-import { createCompositorModel } from '@/features/bridge/compositorModel'
-import { registerAppRuntimeBootstrap } from '@/features/bridge/appRuntimeBootstrap'
-import { createScreenshotPortalBridge } from '@/features/bridge/screenshotPortalBridge'
-import { createShellExclusionSync } from '@/features/bridge/shellExclusionSync'
-import { createShellSharedStateSync } from '@/features/bridge/shellSharedStateSync'
-import { createSessionPersistenceRuntime } from '@/features/bridge/sessionPersistenceRuntime'
-import { createSessionRuntime } from '@/features/bridge/sessionRuntime'
-import { createShellTransportBridge } from '@/features/bridge/shellTransportBridge'
-import type { CompositorOutputTopology } from '@/features/bridge/compositorBridgeRuntime'
-import { createWorkspaceActions } from '@/features/workspace/workspaceActions'
+} from "@/features/bridge/sessionSnapshot";
+import { subscribeShellWindowState } from "@/features/shell-ui/shellWindowState";
+import type { LayoutScreen } from "@/host/types";
+import { createCompositorModel } from "@/features/bridge/compositorModel";
+import { registerAppRuntimeBootstrap } from "@/features/bridge/appRuntimeBootstrap";
+import { createScreenshotPortalBridge } from "@/features/bridge/screenshotPortalBridge";
+import { createShellExclusionSync } from "@/features/bridge/shellExclusionSync";
+import { createShellSharedStateSync } from "@/features/bridge/shellSharedStateSync";
+import { createSessionPersistenceRuntime } from "@/features/bridge/sessionPersistenceRuntime";
+import { createSessionRuntime } from "@/features/bridge/sessionRuntime";
+import { createShellTransportBridge } from "@/features/bridge/shellTransportBridge";
+import type { CompositorOutputTopology } from "@/features/bridge/compositorBridgeRuntime";
+import { createWorkspaceActions } from "@/features/workspace/workspaceActions";
 import {
   getWorkspaceGroupSplit,
   isWorkspaceWindowPinned,
@@ -108,98 +106,131 @@ import {
   workspaceFindMonitorIdentityForTiledWindow,
   workspaceGetTiledZone,
   workspaceIsWindowTiled,
-} from '@/features/workspace/workspaceSnapshot'
-import type { WorkspaceMutation } from '@/features/workspace/workspaceProtocol'
-import { findMergeTarget, type TabMergeTarget } from '@/features/workspace/tabGroupOps'
-import { createWorkspaceSelectors } from '@/features/workspace/workspaceSelectors'
-import { createWorkspaceChrome, type WorkspaceExternalTabDropDrag } from '@/features/workspace/workspaceChrome'
-import { createWorkspaceLayoutBridge } from '@/features/workspace/workspaceLayoutBridge'
-import { isImageFilePath } from '@/apps/image-viewer/imageViewerCore'
-import { isPdfFilePath } from '@/apps/pdf-viewer/pdfViewerCore'
-import { isTextEditorFilePath } from '@/apps/text-editor/textEditorCore'
-import { isVideoFilePath } from '@/apps/video-viewer/videoViewerCore'
-import { DropdownMenu, DropdownMenuPortal } from '@/components/ui/dropdown-menu'
-import { ShellNotificationLayer } from '@/features/notifications/ShellNotificationLayer'
+} from "@/features/workspace/workspaceSnapshot";
+import type { WorkspaceMutation } from "@/features/workspace/workspaceProtocol";
+import {
+  findMergeTarget,
+  type TabMergeTarget,
+} from "@/features/workspace/tabGroupOps";
+import { createWorkspaceSelectors } from "@/features/workspace/workspaceSelectors";
+import {
+  createWorkspaceChrome,
+  type WorkspaceExternalTabDropDrag,
+} from "@/features/workspace/workspaceChrome";
+import { createWorkspaceLayoutBridge } from "@/features/workspace/workspaceLayoutBridge";
+import { isImageFilePath } from "@/apps/image-viewer/imageViewerCore";
+import { isPdfFilePath } from "@/apps/pdf-viewer/pdfViewerCore";
+import { isTextEditorFilePath } from "@/apps/text-editor/textEditorCore";
+import { isVideoFilePath } from "@/apps/video-viewer/videoViewerCore";
+import {
+  DropdownMenu,
+  DropdownMenuPortal,
+} from "@/components/ui/dropdown-menu";
+import { ShellNotificationLayer } from "@/features/notifications/ShellNotificationLayer";
 import {
   emptyNotificationsState,
   type ShellNotificationsState,
-} from '@/features/notifications/notificationsState'
-import { installShellNotificationsApi } from '@/features/notifications/shellNotifications'
+} from "@/features/notifications/notificationsState";
+import { installShellNotificationsApi } from "@/features/notifications/shellNotifications";
 
 declare global {
   interface Window {
     /** Injected by `cef_host` after load (`http://127.0.0.1:…/spawn`). */
-    __DERP_SPAWN_URL?: string
-    __DERP_SHELL_HTTP?: string
-    __DERP_COMPOSITOR_SNAPSHOT_PATH?: string | null
-    __DERP_SHELL_EXCLUSION_STATE_PATH?: string | null
-    __DERP_SHELL_UI_WINDOWS_STATE_PATH?: string | null
-    __DERP_SHELL_SHARED_STATE_ABI?: number
+    __DERP_SPAWN_URL?: string;
+    __DERP_SHELL_HTTP?: string;
+    __DERP_COMPOSITOR_SNAPSHOT_PATH?: string | null;
+    __DERP_SHELL_EXCLUSION_STATE_PATH?: string | null;
+    __DERP_SHELL_UI_WINDOWS_STATE_PATH?: string | null;
+    __DERP_SHELL_SHARED_STATE_ABI?: number;
     /** Registered by CEF render process: shell→compositor control. */
-    __derpShellWireSend?: ShellCompositorWireSend
+    __derpShellWireSend?: ShellCompositorWireSend;
     __derpShellSharedStateWrite?: (
       path: string,
       payload: ArrayBuffer,
       kind: number,
       abi?: number,
-    ) => boolean
-    __derpCompositorSnapshotVersion?: (path: string, abi?: number) => number | null
-    __derpCompositorSnapshotRead?: (path: string, abi?: number) => ArrayBuffer | null
+    ) => boolean;
+    __derpCompositorSnapshotVersion?: (
+      path: string,
+      abi?: number,
+    ) => number | null;
+    __derpCompositorSnapshotRead?: (
+      path: string,
+      abi?: number,
+    ) => ArrayBuffer | null;
     __derpCompositorSnapshotReadIfChanged?: (
       path: string,
       lastSequence: number,
       abi?: number,
-    ) => ArrayBuffer | null
-    __DERP_E2E_REQUEST_SNAPSHOT?: (requestId: number) => void
-    __DERP_E2E_REQUEST_HTML?: (requestId: number, selector?: string | null) => void
-    __DERP_E2E_REQUEST_PERF?: (requestId: number) => void
-    __DERP_E2E_OPEN_TEST_WINDOW_REQ?: (requestId: number) => void
-    __DERP_E2E_RESET_TILING_CONFIG_REQ?: (requestId: number) => void
-    __DERP_SHELL_PERF_SNAPSHOT?: () => Record<string, number>
-    __DERP_SHELL_PERF_RESET?: () => void
-    __DERP_BRIDGE_DEBUG?: Record<string, unknown>
-    __DERP_MOVE_DEBUG?: Record<string, unknown>
+    ) => ArrayBuffer | null;
+    __DERP_E2E_REQUEST_SNAPSHOT?: (requestId: number) => void;
+    __DERP_E2E_REQUEST_HTML?: (
+      requestId: number,
+      selector?: string | null,
+    ) => void;
+    __DERP_E2E_REQUEST_PERF?: (requestId: number) => void;
+    __DERP_E2E_OPEN_TEST_WINDOW_REQ?: (requestId: number) => void;
+    __DERP_E2E_RESET_TILING_CONFIG_REQ?: (requestId: number) => void;
+    __DERP_SHELL_PERF_SNAPSHOT?: () => Record<string, number>;
+    __DERP_SHELL_PERF_RESET?: () => void;
+    __DERP_BRIDGE_DEBUG?: Record<string, unknown>;
+    __DERP_MOVE_DEBUG?: Record<string, unknown>;
   }
 }
 
-function rectFromWindow(window: Pick<DerpWindow, 'x' | 'y' | 'width' | 'height'>): SavedRect {
+function rectFromWindow(
+  window: Pick<DerpWindow, "x" | "y" | "width" | "height">,
+): SavedRect {
   return {
     x: window.x,
     y: window.y,
     width: Math.max(1, window.width),
     height: Math.max(1, window.height),
-  }
+  };
 }
 
-const TASKBAR_HEIGHT = 36
+const TASKBAR_HEIGHT = 36;
 
-function sameStringList(left: readonly string[], right: readonly string[]): boolean {
-  if (left.length !== right.length) return false
+function sameStringList(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  if (left.length !== right.length) return false;
   for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) return false
+    if (left[index] !== right[index]) return false;
   }
-  return true
+  return true;
 }
 
 function shSingleQuotedForSpawn(text: string): string {
-  return `'${text.replace(/'/g, `'\\''`)}'`
+  return `'${text.replace(/'/g, `'\\''`)}'`;
 }
 
 function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
-  const now = typeof performance !== 'undefined' ? Math.round(performance.now()) : Date.now()
+  const now =
+    typeof performance !== "undefined"
+      ? Math.round(performance.now())
+      : Date.now();
   const current =
-    typeof window.__DERP_MOVE_DEBUG === 'object' && window.__DERP_MOVE_DEBUG !== null
+    typeof window.__DERP_MOVE_DEBUG === "object" &&
+    window.__DERP_MOVE_DEBUG !== null
       ? window.__DERP_MOVE_DEBUG
-      : { events: [] as Array<{ msg: string; at: number; detail: Record<string, unknown> | null }> }
-  const events = Array.isArray(current.events) ? current.events.slice(-31) : []
-  events.push({ msg, at: now, detail: detail ?? null })
-  window.__DERP_MOVE_DEBUG = { events }
+      : {
+          events: [] as Array<{
+            msg: string;
+            at: number;
+            detail: Record<string, unknown> | null;
+          }>,
+        };
+  const events = Array.isArray(current.events) ? current.events.slice(-31) : [];
+  events.push({ msg, at: now, detail: detail ?? null });
+  window.__DERP_MOVE_DEBUG = { events };
 }
 
 function nativeDragPreviewUrl(imagePath: string, generation: number) {
-  const base = shellHttpBase()
-  if (!base) return ''
-  return `${base}/native_drag_preview?p=${encodeURIComponent(imagePath)}&g=${generation}`
+  const base = shellHttpBase();
+  if (!base) return "";
+  return `${base}/native_drag_preview?p=${encodeURIComponent(imagePath)}&g=${generation}`;
 }
 
 const shellWireSend: ShellCompositorWireSend = function shellWireSend(
@@ -211,118 +242,145 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
   arg5?: number,
   arg6?: number,
 ): boolean {
-  const fn = window.__derpShellWireSend
-  const hasWire = typeof fn === 'function'
+  const fn = window.__derpShellWireSend;
+  const hasWire = typeof fn === "function";
   if (!hasWire) {
     if (
-      op === 'move_begin' ||
-      op === 'move_end' ||
-      op === 'resize_begin' ||
-      op === 'resize_delta' ||
-      op === 'resize_end' ||
-      op === 'resize_shell_grab_begin' ||
-      op === 'resize_shell_grab_end'
+      op === "move_begin" ||
+      op === "move_end" ||
+      op === "resize_begin" ||
+      op === "resize_delta" ||
+      op === "resize_end" ||
+      op === "resize_shell_grab_begin" ||
+      op === "resize_shell_grab_end"
     ) {
-      shellMoveLog('wire_missing', { op, arg, arg2 })
+      shellMoveLog("wire_missing", { op, arg, arg2 });
     }
-    return false
+    return false;
   }
-  if (op === 'resize_delta' && arg2 !== undefined) {
-    fn(op, arg as number, arg2)
-  } else if (op === 'resize_begin' && arg2 !== undefined) {
-    fn(op, arg as number, arg2)
+  if (op === "resize_delta" && arg2 !== undefined) {
+    fn(op, arg as number, arg2);
+  } else if (op === "resize_begin" && arg2 !== undefined) {
+    fn(op, arg as number, arg2);
   } else if (
-    op === 'set_geometry' &&
-    typeof arg === 'number' &&
+    op === "set_geometry" &&
+    typeof arg === "number" &&
     arg2 !== undefined &&
     arg3 !== undefined &&
     arg4 !== undefined &&
     arg5 !== undefined &&
     arg6 !== undefined
   ) {
-    fn(op, arg, arg2, arg3, arg4, arg5, arg6)
+    fn(op, arg, arg2, arg3, arg4, arg5, arg6);
   } else if (
-    (op === 'set_fullscreen' || op === 'set_maximized') &&
+    (op === "set_fullscreen" || op === "set_maximized") &&
     arg !== undefined &&
     arg2 !== undefined
   ) {
-    fn(op, arg as number, arg2)
+    fn(op, arg as number, arg2);
   } else if (
-    op === 'quit' ||
-    op === 'request_compositor_sync' ||
-    op === 'invalidate_view' ||
-    op === 'resize_shell_grab_end'
+    op === "quit" ||
+    op === "request_compositor_sync" ||
+    op === "invalidate_view" ||
+    op === "resize_shell_grab_end"
   ) {
-    fn(op)
-  } else if ((op === 'hosted_window_open' || op === 'backed_window_open') && typeof arg === 'string') {
-    fn(op, arg)
-  } else if (op === 'set_output_layout' && typeof arg === 'string') {
-    fn(op, arg)
-  } else if (op === 'set_desktop_background' && typeof arg === 'string') {
-    fn(op, arg)
+    fn(op);
   } else if (
-    (op === 'workspace_mutation' ||
-      op === 'taskbar_pin_add' ||
-      op === 'taskbar_pin_remove' ||
-      op === 'taskbar_pin_launch' ||
-      op === 'command_palette_activate') &&
-    typeof arg === 'string'
+    (op === "hosted_window_open" || op === "backed_window_open") &&
+    typeof arg === "string"
   ) {
-    fn(op, arg)
-  } else if (op === 'window_intent' && typeof arg === 'string') {
-    fn(op, arg)
-  } else if ((op === 'shell_hosted_window_state' || op === 'shell_hosted_window_title') && typeof arg === 'string') {
-    fn(op, arg)
-  } else if (op === 'set_shell_primary' && typeof arg === 'string') {
-    fn(op, arg)
-  } else if (op === 'set_ui_scale' && typeof arg === 'number') {
-    fn(op, arg)
-  } else if (op === 'set_output_vrr' && typeof arg === 'string' && typeof arg2 === 'number') {
-    fn(op, arg, arg2)
-  } else if (op === 'set_taskbar_auto_hide' && typeof arg === 'number') {
-    fn(op, arg)
-  } else if (op === 'set_taskbar_side' && typeof arg === 'string' && typeof arg2 === 'string') {
-    fn(op, arg, arg2)
+    fn(op, arg);
+  } else if (op === "set_output_layout" && typeof arg === "string") {
+    fn(op, arg);
+  } else if (op === "set_desktop_background" && typeof arg === "string") {
+    fn(op, arg);
   } else if (
-    op === 'native_drag_preview_ready' &&
-    typeof arg === 'number' &&
-    typeof arg2 === 'number'
+    (op === "workspace_mutation" ||
+      op === "taskbar_pin_add" ||
+      op === "taskbar_pin_remove" ||
+      op === "taskbar_pin_launch" ||
+      op === "command_palette_activate") &&
+    typeof arg === "string"
   ) {
-    fn(op, arg, arg2)
+    fn(op, arg);
+  } else if (op === "window_intent" && typeof arg === "string") {
+    fn(op, arg);
   } else if (
-    op === 'set_tile_preview' &&
-    typeof arg === 'number' &&
+    (op === "shell_hosted_window_state" ||
+      op === "shell_hosted_window_title") &&
+    typeof arg === "string"
+  ) {
+    fn(op, arg);
+  } else if (op === "set_shell_primary" && typeof arg === "string") {
+    fn(op, arg);
+  } else if (op === "set_ui_scale" && typeof arg === "number") {
+    fn(op, arg);
+  } else if (
+    op === "set_output_vrr" &&
+    typeof arg === "string" &&
+    typeof arg2 === "number"
+  ) {
+    fn(op, arg, arg2);
+  } else if (op === "set_taskbar_auto_hide" && typeof arg === "number") {
+    fn(op, arg);
+  } else if (
+    op === "set_taskbar_side" &&
+    typeof arg === "string" &&
+    typeof arg2 === "string"
+  ) {
+    fn(op, arg, arg2);
+  } else if (
+    op === "native_drag_preview_ready" &&
+    typeof arg === "number" &&
+    typeof arg2 === "number"
+  ) {
+    fn(op, arg, arg2);
+  } else if (
+    op === "set_tile_preview" &&
+    typeof arg === "number" &&
     arg2 !== undefined &&
     arg3 !== undefined &&
     arg4 !== undefined &&
     arg5 !== undefined
   ) {
-    fn(op, arg, arg2, arg3, arg4, arg5)
-  } else if (op === 'set_chrome_metrics' && typeof arg === 'number' && arg2 !== undefined) {
-    fn(op, arg, arg2)
-  } else if (op === 'sni_tray_activate' && typeof arg === 'string') {
-    fn(op, arg)
-  } else if (op === 'sni_tray_open_menu' && typeof arg === 'string' && typeof arg2 === 'number') {
-    fn(op, arg, arg2)
+    fn(op, arg, arg2, arg3, arg4, arg5);
   } else if (
-    op === 'sni_tray_menu_event' &&
-    typeof arg === 'string' &&
-    typeof arg2 === 'string' &&
+    op === "set_chrome_metrics" &&
+    typeof arg === "number" &&
+    arg2 !== undefined
+  ) {
+    fn(op, arg, arg2);
+  } else if (op === "sni_tray_activate" && typeof arg === "string") {
+    fn(op, arg);
+  } else if (
+    op === "sni_tray_open_menu" &&
+    typeof arg === "string" &&
+    typeof arg2 === "number"
+  ) {
+    fn(op, arg, arg2);
+  } else if (
+    op === "sni_tray_menu_event" &&
+    typeof arg === "string" &&
+    typeof arg2 === "string" &&
     arg3 !== undefined
   ) {
-    fn(op, arg, arg2, arg3)
-  } else if (op === 'shell_blur_ui_window' || op === 'programs_menu_closed' || op === 'shell_ui_grab_end') {
-    fn(op)
+    fn(op, arg, arg2, arg3);
+  } else if (
+    op === "shell_blur_ui_window" ||
+    op === "programs_menu_closed" ||
+    op === "shell_ui_grab_end"
+  ) {
+    fn(op);
   } else {
-    fn(op, arg)
+    fn(op, arg);
   }
-  return true
-}
+  return true;
+};
 
 function App() {
-  const shellBuildLabel = shellBuildLabelText()
-  const desktopApps = useDesktopApplicationsState()
-  const defaultApps = useDefaultApplicationsState()
+  const shellBuildLabel = shellBuildLabelText();
+  const desktopApps = useDesktopApplicationsState();
+  const defaultApps = useDefaultApplicationsState();
   const {
     allWindowsMap: compositorWindowsMap,
     windowById,
@@ -335,162 +393,193 @@ function App() {
     commandPaletteState,
     applyAuthoritativeSnapshotDetails: applyModelAuthoritativeSnapshotDetails,
     clearAuthoritativeSnapshotDomains: clearModelAuthoritativeSnapshotDomains,
-  } = createCompositorModel()
-  const allWindowsMap = compositorWindowsMap
-  const windows = compositorWindowsMap
-  const windowsList = compositorWindowsList
-  const [compositorInteractionState, setCompositorInteractionState] = createSignal<{
-    revision: number
-    interaction_serial: number
-    pointer_x: number
-    pointer_y: number
-    move_window_id: number | null
-    resize_window_id: number | null
-    move_proxy_window_id: number | null
-    move_capture_window_id: number | null
-    window_switcher_selected_window_id: number | null
-    move_rect: {
-      x: number
-      y: number
-      width: number
-      height: number
-      maximized: boolean
-      fullscreen: boolean
-    } | null
-    resize_rect: {
-      x: number
-      y: number
-      width: number
-      height: number
-      maximized: boolean
-      fullscreen: boolean
-    } | null
-  } | null>(null)
+  } = createCompositorModel();
+  const allWindowsMap = compositorWindowsMap;
+  const windows = compositorWindowsMap;
+  const windowsList = compositorWindowsList;
+  const [compositorInteractionState, setCompositorInteractionState] =
+    createSignal<{
+      revision: number;
+      interaction_serial: number;
+      pointer_x: number;
+      pointer_y: number;
+      move_window_id: number | null;
+      resize_window_id: number | null;
+      move_proxy_window_id: number | null;
+      move_capture_window_id: number | null;
+      window_switcher_selected_window_id: number | null;
+      move_rect: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        maximized: boolean;
+        fullscreen: boolean;
+      } | null;
+      resize_rect: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        maximized: boolean;
+        fullscreen: boolean;
+      } | null;
+    } | null>(null);
   const [nativeDragPreview, setNativeDragPreview] = createSignal<{
-    window_id: number
-    generation: number
-    image_path: string
-  } | null>(null)
-  const [notificationsState, setNotificationsState] = createSignal<ShellNotificationsState | null>(
-    emptyNotificationsState(),
-  )
-  const [loadedNativeDragPreviewKey, setLoadedNativeDragPreviewKey] = createSignal<string | null>(null)
-  const [loadedNativeDragPreviewImage, setLoadedNativeDragPreviewImage] = createSignal<HTMLImageElement | null>(null)
-  const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
-  const [pointerInMain, setPointerInMain] = createSignal<{ x: number; y: number } | null>(null)
+    window_id: number;
+    generation: number;
+    image_path: string;
+  } | null>(null);
+  const [notificationsState, setNotificationsState] =
+    createSignal<ShellNotificationsState | null>(emptyNotificationsState());
+  const [loadedNativeDragPreviewKey, setLoadedNativeDragPreviewKey] =
+    createSignal<string | null>(null);
+  const [loadedNativeDragPreviewImage, setLoadedNativeDragPreviewImage] =
+    createSignal<HTMLImageElement | null>(null);
+  const [pointerClient, setPointerClient] = createSignal<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [pointerInMain, setPointerInMain] = createSignal<{
+    x: number;
+    y: number;
+  } | null>(null);
   const [viewportCss, setViewportCss] = createSignal({
-    w: typeof window !== 'undefined' ? window.innerWidth : 800,
-    h: typeof window !== 'undefined' ? window.innerHeight : 600,
-  })
-  const [keyboardLayoutLabel, setKeyboardLayoutLabel] = createSignal<string | null>(null)
+    w: typeof window !== "undefined" ? window.innerWidth : 800,
+    h: typeof window !== "undefined" ? window.innerHeight : 600,
+  });
+  const [keyboardLayoutLabel, setKeyboardLayoutLabel] = createSignal<
+    string | null
+  >(null);
   const [volumeOverlay, setVolumeOverlay] = createSignal<{
-    linear: number
-    muted: boolean
-    stateKnown: boolean
-  } | null>(null)
+    linear: number;
+    muted: boolean;
+    stateKnown: boolean;
+  } | null>(null);
   const [trayVolumeState, setTrayVolumeState] = createSignal<{
-    muted: boolean
-    volumePercent: number | null
+    muted: boolean;
+    volumePercent: number | null;
   }>({
     muted: false,
     volumePercent: null,
-  })
-  const [outputTopology, setOutputTopology] = createSignal<CompositorOutputTopology | null>(null)
-  const outputGeom = createMemo(() => outputTopology()?.logical ?? null)
-  const outputPhysical = createMemo(() => outputTopology()?.physical ?? null)
-  const layoutCanvasOrigin = createMemo(() => outputTopology()?.origin ?? null)
-  const uiScalePercent = createMemo(() => outputTopology()?.uiScalePercent ?? 150)
-  const shellChromePrimaryName = createMemo(() => outputTopology()?.shellChromePrimaryName ?? null)
-  const taskbarAutoHide = createMemo(() => outputTopology()?.taskbarAutoHide ?? false)
+  });
+  const [outputTopology, setOutputTopology] =
+    createSignal<CompositorOutputTopology | null>(null);
+  const outputGeom = createMemo(() => outputTopology()?.logical ?? null);
+  const outputPhysical = createMemo(() => outputTopology()?.physical ?? null);
+  const layoutCanvasOrigin = createMemo(() => outputTopology()?.origin ?? null);
+  const uiScalePercent = createMemo(
+    () => outputTopology()?.uiScalePercent ?? 150,
+  );
+  const shellChromePrimaryName = createMemo(
+    () => outputTopology()?.shellChromePrimaryName ?? null,
+  );
+  const taskbarAutoHide = createMemo(
+    () => outputTopology()?.taskbarAutoHide ?? false,
+  );
   const nativeDragPreviewKey = createMemo(() => {
-    const preview = nativeDragPreview()
-    return preview ? `${preview.window_id}:${preview.generation}:${preview.image_path}` : null
-  })
-  const nativeDragPreviewWindowId = createMemo(() => nativeDragPreview()?.window_id ?? null)
-  const nativeDragPreviewGeneration = createMemo(() => nativeDragPreview()?.generation ?? null)
+    const preview = nativeDragPreview();
+    return preview
+      ? `${preview.window_id}:${preview.generation}:${preview.image_path}`
+      : null;
+  });
+  const nativeDragPreviewWindowId = createMemo(
+    () => nativeDragPreview()?.window_id ?? null,
+  );
+  const nativeDragPreviewGeneration = createMemo(
+    () => nativeDragPreview()?.generation ?? null,
+  );
   const nativeDragPreviewSrc = createMemo(() => {
-    const preview = nativeDragPreview()
-    if (!preview) return ''
-    return nativeDragPreviewUrl(preview.image_path, preview.generation)
-  })
+    const preview = nativeDragPreview();
+    if (!preview) return "";
+    return nativeDragPreviewUrl(preview.image_path, preview.generation);
+  });
   createEffect(() => {
-    const key = nativeDragPreviewKey()
-    const windowId = nativeDragPreviewWindowId()
-    const generation = nativeDragPreviewGeneration()
-    const src = nativeDragPreviewSrc()
-    setLoadedNativeDragPreviewKey(null)
-    setLoadedNativeDragPreviewImage(null)
-    if (!key || windowId === null || generation === null || !src) return
-    let cancelled = false
-    let loaded = false
-    const image = new Image()
+    const key = nativeDragPreviewKey();
+    const windowId = nativeDragPreviewWindowId();
+    const generation = nativeDragPreviewGeneration();
+    const src = nativeDragPreviewSrc();
+    setLoadedNativeDragPreviewKey(null);
+    setLoadedNativeDragPreviewImage(null);
+    if (!key || windowId === null || generation === null || !src) return;
+    let cancelled = false;
+    let loaded = false;
+    const image = new Image();
     const markLoaded = () => {
-      if (cancelled || loaded) return
-      loaded = true
-      setLoadedNativeDragPreviewImage(image)
-      setLoadedNativeDragPreviewKey(key)
-      shellWireSend('native_drag_preview_ready', windowId, generation)
-    }
-    image.onload = markLoaded
-    image.src = src
-    if (image.complete && image.naturalWidth > 0) markLoaded()
+      if (cancelled || loaded) return;
+      loaded = true;
+      setLoadedNativeDragPreviewImage(image);
+      setLoadedNativeDragPreviewKey(key);
+      shellWireSend("native_drag_preview_ready", windowId, generation);
+    };
+    image.onload = markLoaded;
+    image.src = src;
+    if (image.complete && image.naturalWidth > 0) markLoaded();
     onCleanup(() => {
-      cancelled = true
-      image.onload = null
-    })
-  })
+      cancelled = true;
+      image.onload = null;
+    });
+  });
   const nativeDragPreviewAsset = createMemo(() => {
-    const preview = nativeDragPreview()
-    const key = nativeDragPreviewKey()
-    const src = nativeDragPreviewSrc()
-    if (!preview || !key || !src) return null
-    const image = loadedNativeDragPreviewImage()
-    const loaded = loadedNativeDragPreviewKey() === key && image !== null
+    const preview = nativeDragPreview();
+    const key = nativeDragPreviewKey();
+    const src = nativeDragPreviewSrc();
+    if (!preview || !key || !src) return null;
+    const image = loadedNativeDragPreviewImage();
+    const loaded = loadedNativeDragPreviewKey() === key && image !== null;
     return {
       ...preview,
       src,
       loaded,
       image: loaded ? image : null,
-    }
-  })
-  const shellAudio = useShellAudioState()
-  const shellBattery = useShellBatteryState()
+    };
+  });
+  const shellAudio = useShellAudioState();
+  const shellBattery = useShellBatteryState();
   createEffect(() => {
-    const sink = defaultAudioDevice(shellAudio.state()?.sinks ?? [])
-    if (!sink) return
+    const sink = defaultAudioDevice(shellAudio.state()?.sinks ?? []);
+    if (!sink) return;
     setTrayVolumeState({
       muted: sink.muted,
       volumePercent: sink.volume_known ? sink.volume_percent : null,
-    })
-  })
+    });
+  });
   const volumeOverlayHud = createMemo(() => {
-    const v = volumeOverlay()
-    if (!v) return null
-    const pct = Math.min(100, Math.round(v.linear / 100))
-    const barPct = Math.min(100, pct)
-    const main = mainRef
-    const og = outputGeom()
-    const co = layoutCanvasOrigin()
-    const primary = workspacePartition().primary
+    const v = volumeOverlay();
+    if (!v) return null;
+    const pct = Math.min(100, Math.round(v.linear / 100));
+    const barPct = Math.min(100, pct);
+    const main = mainRef;
+    const og = outputGeom();
+    const co = layoutCanvasOrigin();
+    const primary = workspacePartition().primary;
     let pos: Record<string, string> = {
-      left: '50%',
-      bottom: 'max(5.5rem, 12vh)',
-      transform: 'translateX(-50%)',
-    }
+      left: "50%",
+      bottom: "max(5.5rem, 12vh)",
+      transform: "translateX(-50%)",
+    };
     if (main && og && primary) {
-      const loc = layoutScreenCssRect(primary, co)
-      const gap = 12
-      const cx = loc.x + loc.width / 2
-      const cy = loc.y + loc.height - TASKBAR_HEIGHT - gap
-      const pt = canvasRectToClientCss(cx, cy, 0, 0, main.getBoundingClientRect(), og.w, og.h)
+      const loc = layoutScreenCssRect(primary, co);
+      const gap = 12;
+      const cx = loc.x + loc.width / 2;
+      const cy = loc.y + loc.height - TASKBAR_HEIGHT - gap;
+      const pt = canvasRectToClientCss(
+        cx,
+        cy,
+        0,
+        0,
+        main.getBoundingClientRect(),
+        og.w,
+        og.h,
+      );
       pos = {
         left: `${pt.left}px`,
         top: `${pt.top}px`,
-        transform: 'translate(-50%, -100%)',
-      }
+        transform: "translate(-50%, -100%)",
+      };
     }
-    const label = !v.stateKnown ? '—' : v.muted ? 'Muted' : `${pct}%`
-    const fillPct = !v.stateKnown || v.muted ? 0 : barPct
+    const label = !v.stateKnown ? "—" : v.muted ? "Muted" : `${pct}%`;
+    const fillPct = !v.stateKnown || v.muted ? 0 : barPct;
     return (
       <div
         class="border border-(--shell-border) bg-(--shell-surface-panel) text-(--shell-text) pointer-events-none fixed z-470000 box-border w-[min(360px,90vw)] min-w-[240px] rounded-xl px-5 py-3.5"
@@ -516,111 +605,157 @@ function App() {
           </div>
         </div>
       </div>
-    )
-  })
-  const [screenDraft, setScreenDraft] = createStore<{ revision: number; dirty: boolean; rows: LayoutScreen[] }>({
+    );
+  });
+  const [screenDraft, setScreenDraft] = createStore<{
+    revision: number;
+    dirty: boolean;
+    rows: LayoutScreen[];
+  }>({
     revision: -1,
     dirty: false,
     rows: [],
-  })
-  const [tilingCfgRev, setTilingCfgRev] = createSignal(0)
-  const [crosshairCursor, setCrosshairCursor] = createSignal(false)
-  const [trayReservedPx, setTrayReservedPx] = createSignal(0)
-  const [sniTrayItems, setSniTrayItems] = createSignal<TaskbarSniItem[]>([])
-  const [trayIconSlotPx, setTrayIconSlotPx] = createSignal(36)
-  const [snapChromeRev, setSnapChromeRev] = createSignal(0)
-  const [customLayoutOverlay, setCustomLayoutOverlay] = createSignal<CustomLayoutOverlayState | null>(null)
-  const [sessionRestoreSnapshot, setSessionRestoreSnapshot] = createSignal<SessionSnapshot | null>(null)
-  const [compositorSnapshotSequence, setCompositorSnapshotSequence] = createSignal(0)
-  let windowSyncRecoveryPending = false
-  let windowSyncRecoveryRequestedAt = 0
-  let nextClientMutationId = 1
-  const pendingClientMutationIds = new Map<number, { sentAt: number; snapshotEpoch: number | null }>()
-  const [nativeWindowRefs, setNativeWindowRefs] = createSignal<Map<number, SessionWindowRef>>(new Map())
-  const [nextNativeWindowSeq, setNextNativeWindowSeq] = createSignal(1)
-  const floatingLayers = createFloatingLayerStore()
-  const [chromeOverlayPointerUsers, setChromeOverlayPointerUsers] = createSignal(0)
-  const nativeLaunchMetadataByRef = new Map<SessionWindowRef, NativeLaunchMetadata>()
-  const pendingNativeLaunches: { windowRef: SessionWindowRef; launch: NativeLaunchMetadata }[] = []
-  let mainRef: HTMLElement | undefined
-  let shellUiWindowsInvalidateQueued = false
+  });
+  const [tilingCfgRev, setTilingCfgRev] = createSignal(0);
+  const [crosshairCursor, setCrosshairCursor] = createSignal(false);
+  const [trayReservedPx, setTrayReservedPx] = createSignal(0);
+  const [sniTrayItems, setSniTrayItems] = createSignal<TaskbarSniItem[]>([]);
+  const [trayIconSlotPx, setTrayIconSlotPx] = createSignal(36);
+  const [snapChromeRev, setSnapChromeRev] = createSignal(0);
+  const [customLayoutOverlay, setCustomLayoutOverlay] =
+    createSignal<CustomLayoutOverlayState | null>(null);
+  const [sessionRestoreSnapshot, setSessionRestoreSnapshot] =
+    createSignal<SessionSnapshot | null>(null);
+  const [compositorSnapshotSequence, setCompositorSnapshotSequence] =
+    createSignal(0);
+  let windowSyncRecoveryPending = false;
+  let windowSyncRecoveryRequestedAt = 0;
+  let nextClientMutationId = 1;
+  const pendingClientMutationIds = new Map<
+    number,
+    { sentAt: number; snapshotEpoch: number | null }
+  >();
+  const [nativeWindowRefs, setNativeWindowRefs] = createSignal<
+    Map<number, SessionWindowRef>
+  >(new Map());
+  const [nextNativeWindowSeq, setNextNativeWindowSeq] = createSignal(1);
+  const floatingLayers = createFloatingLayerStore();
+  const [chromeOverlayPointerUsers, setChromeOverlayPointerUsers] =
+    createSignal(0);
+  const nativeLaunchMetadataByRef = new Map<
+    SessionWindowRef,
+    NativeLaunchMetadata
+  >();
+  const pendingNativeLaunches: {
+    windowRef: SessionWindowRef;
+    launch: NativeLaunchMetadata;
+  }[] = [];
+  let mainRef: HTMLElement | undefined;
+  let shellUiWindowsInvalidateQueued = false;
 
   createEffect(() => {
-    const topology = outputTopology()
-    const revision = topology?.revision ?? -1
-    if (screenDraft.dirty && screenDraft.revision === revision) return
+    const topology = outputTopology();
+    const revision = topology?.revision ?? -1;
+    if (screenDraft.dirty && screenDraft.revision === revision) return;
     setScreenDraft({
       revision,
       dirty: false,
       rows: topology?.screens ?? [],
-    })
-  })
+    });
+  });
 
   createEffect(() => {
-    reconcilePendingClientMutations(compositorSnapshotSequence())
-  })
+    reconcilePendingClientMutations(compositorSnapshotSequence());
+  });
 
-  const liveScreenRows = createMemo(() => outputTopology()?.screens ?? [])
+  const liveScreenRows = createMemo(() => outputTopology()?.screens ?? []);
 
   function sendWorkspaceMutation(mutation: WorkspaceMutation): boolean {
-    const clientMutationId = nextClientMutationId++
-    const ok = shellWireSend('workspace_mutation', JSON.stringify({ clientMutationId, mutation }))
-    if (ok) pendingClientMutationIds.set(clientMutationId, { sentAt: Date.now(), snapshotEpoch: null })
-    return ok
+    const clientMutationId = nextClientMutationId++;
+    const ok = shellWireSend(
+      "workspace_mutation",
+      JSON.stringify({ clientMutationId, mutation }),
+    );
+    if (ok)
+      pendingClientMutationIds.set(clientMutationId, {
+        sentAt: Date.now(),
+        snapshotEpoch: null,
+      });
+    return ok;
   }
 
+  configureWorkspaceTilingConfig({
+    readLayouts: () => workspaceSnapshot().monitorLayouts,
+    sendMutation: sendWorkspaceMutation,
+  });
+
   function sendWindowIntent(action: string, windowId: number): boolean {
-    const clientMutationId = nextClientMutationId++
-    const ok = shellWireSend('window_intent', JSON.stringify({ clientMutationId, action, windowId }))
-    if (ok) pendingClientMutationIds.set(clientMutationId, { sentAt: Date.now(), snapshotEpoch: null })
-    return ok
+    const clientMutationId = nextClientMutationId++;
+    const ok = shellWireSend(
+      "window_intent",
+      JSON.stringify({ clientMutationId, action, windowId }),
+    );
+    if (ok)
+      pendingClientMutationIds.set(clientMutationId, {
+        sentAt: Date.now(),
+        snapshotEpoch: null,
+      });
+    return ok;
   }
 
   function reconcilePendingClientMutations(snapshotSequence: number) {
-    const now = Date.now()
+    const now = Date.now();
     for (const [clientMutationId, state] of pendingClientMutationIds) {
-      if (state.snapshotEpoch !== null && snapshotSequence >= state.snapshotEpoch) {
-        pendingClientMutationIds.delete(clientMutationId)
-        continue
+      if (
+        state.snapshotEpoch !== null &&
+        snapshotSequence >= state.snapshotEpoch
+      ) {
+        pendingClientMutationIds.delete(clientMutationId);
+        continue;
       }
-      if (now - state.sentAt <= 2000) continue
-      pendingClientMutationIds.delete(clientMutationId)
+      if (now - state.sentAt <= 2000) continue;
+      pendingClientMutationIds.delete(clientMutationId);
     }
   }
 
   function hasPendingClientMutation() {
-    reconcilePendingClientMutations(compositorSnapshotSequence())
-    return pendingClientMutationIds.size > 0
+    reconcilePendingClientMutations(compositorSnapshotSequence());
+    return pendingClientMutationIds.size > 0;
   }
 
-  function handleMutationAck(detail: { client_mutation_id: number; status: string; snapshot_epoch?: number }) {
-    const pending = pendingClientMutationIds.get(detail.client_mutation_id)
-    if (detail.status === 'accepted') {
+  function handleMutationAck(detail: {
+    client_mutation_id: number;
+    status: string;
+    snapshot_epoch?: number;
+  }) {
+    const pending = pendingClientMutationIds.get(detail.client_mutation_id);
+    if (detail.status === "accepted") {
       const snapshotEpoch =
-        typeof detail.snapshot_epoch === 'number' && Number.isFinite(detail.snapshot_epoch)
+        typeof detail.snapshot_epoch === "number" &&
+        Number.isFinite(detail.snapshot_epoch)
           ? Math.max(0, Math.trunc(detail.snapshot_epoch))
-          : 0
+          : 0;
       if (pending && snapshotEpoch > compositorSnapshotSequence()) {
         pendingClientMutationIds.set(detail.client_mutation_id, {
           sentAt: pending.sentAt,
           snapshotEpoch,
-        })
+        });
       } else {
-        pendingClientMutationIds.delete(detail.client_mutation_id)
+        pendingClientMutationIds.delete(detail.client_mutation_id);
       }
-      return
+      return;
     }
-    pendingClientMutationIds.delete(detail.client_mutation_id)
-    requestWindowSyncRecovery()
+    pendingClientMutationIds.delete(detail.client_mutation_id);
+    requestWindowSyncRecovery();
   }
 
   function setNativeWindowRef(windowId: number, windowRef: SessionWindowRef) {
     setNativeWindowRefs((prev) => {
-      if (prev.get(windowId) === windowRef) return prev
-      const next = new Map(prev)
-      next.set(windowId, windowRef)
-      return next
-    })
+      if (prev.get(windowId) === windowRef) return prev;
+      const next = new Map(prev);
+      next.set(windowId, windowRef);
+      return next;
+    });
   }
   const {
     applyRestoredWorkspace,
@@ -644,7 +779,8 @@ function App() {
     getTilingCfgRev: tilingCfgRev,
     setNativeWindowRef,
     setNextNativeWindowSeq,
-    reserveTaskbarForMon: (screen) => workspaceLayoutBridge.reserveTaskbarForMon(screen),
+    reserveTaskbarForMon: (screen) =>
+      workspaceLayoutBridge.reserveTaskbarForMon(screen),
     rectFromWindow,
     sendWorkspaceMutation,
     shellWireSend,
@@ -652,23 +788,24 @@ function App() {
     scheduleExclusionZonesSync: () => scheduleExclusionZonesSync(),
     nativeLaunchMetadataByRef,
     pendingNativeLaunches,
-    getShellHostedAppStateForWindow: (windowId) => shellHostedAppByWindow()[windowId],
-  })
+    getShellHostedAppStateForWindow: (windowId) =>
+      shellHostedAppByWindow()[windowId],
+  });
   function closeAllAtlasSelects(): boolean {
-    return floatingLayers.closeByKind('select')
+    return floatingLayers.closeByKind("select");
   }
   function acquireOverlayPointer() {
-    setChromeOverlayPointerUsers((n) => n + 1)
+    setChromeOverlayPointerUsers((n) => n + 1);
   }
   function releaseOverlayPointer() {
-    setChromeOverlayPointerUsers((n) => Math.max(0, n - 1))
+    setChromeOverlayPointerUsers((n) => Math.max(0, n - 1));
   }
 
   const shellTransportBridge = createShellTransportBridge({
     shellWireSend: (op, arg, arg2) => shellWireSend(op, arg, arg2),
     chromeTitlebarPx: CHROME_TITLEBAR_PX,
     chromeBorderPx: CHROME_BORDER_PX,
-  })
+  });
   const {
     canSessionControl,
     clearShellActionIssue,
@@ -680,7 +817,7 @@ function App() {
     shellBridgeIssue,
     shellWireReadyRev,
     start: startShellTransportBridge,
-  } = shellTransportBridge
+  } = shellTransportBridge;
   const sessionPersistenceRuntime = createSessionPersistenceRuntime({
     sessionRestoreSnapshot,
     windows,
@@ -698,24 +835,23 @@ function App() {
     nativeLaunchMetadataByRef,
     setSessionRestoreSnapshot,
     setNextNativeWindowSeq,
-    bumpTilingCfgRev: () => setTilingCfgRev((n) => n + 1),
     reportShellActionIssue: shellTransportBridge.reportShellActionIssue,
     clearShellActionIssue: shellTransportBridge.clearShellActionIssue,
     describeError: shellTransportBridge.describeError,
-  })
+  });
 
   function shellPointerGlobalLogical(clientX: number, clientY: number) {
-    const main = mainRef
-    const og = outputGeom()
-    if (!main || !og) return null
-    const mainRect = main.getBoundingClientRect()
+    const main = mainRef;
+    const og = outputGeom();
+    if (!main || !og) return null;
+    const mainRect = main.getBoundingClientRect();
     if (
       clientX < mainRect.left ||
       clientX > mainRect.right ||
       clientY < mainRect.top ||
       clientY > mainRect.bottom
     ) {
-      return { x: Math.round(clientX), y: Math.round(clientY) }
+      return { x: Math.round(clientX), y: Math.round(clientY) };
     }
     return clientPointToGlobalLogical(
       clientX,
@@ -724,14 +860,14 @@ function App() {
       og.w,
       og.h,
       layoutCanvasOrigin(),
-    )
+    );
   }
 
   function compositorInteractionPointerClient() {
-    const state = compositorInteractionState()
-    const main = mainRef
-    const og = outputGeom()
-    if (!state || !main || !og) return null
+    const state = compositorInteractionState();
+    const main = mainRef;
+    const og = outputGeom();
+    if (!state || !main || !og) return null;
     const point = globalPointToClientCss(
       state.pointer_x,
       state.pointer_y,
@@ -739,49 +875,51 @@ function App() {
       og.w,
       og.h,
       layoutCanvasOrigin(),
-    )
+    );
     return {
       x: Math.round(point.x),
       y: Math.round(point.y),
-    }
+    };
   }
 
   function compositorInteractionFrameForWindow(windowId: number) {
-    const state = compositorInteractionState()
-    if (!state) return null
-    if (state.move_window_id === windowId && state.move_rect) return state.move_rect
-    if (state.resize_window_id === windowId && state.resize_rect) return state.resize_rect
-    return null
+    const state = compositorInteractionState();
+    if (!state) return null;
+    if (state.move_window_id === windowId && state.move_rect)
+      return state.move_rect;
+    if (state.resize_window_id === windowId && state.resize_rect)
+      return state.resize_rect;
+    return null;
   }
 
   function syncPointerSignalsFromClient(point: { x: number; y: number }) {
-    setPointerClient(point)
+    setPointerClient(point);
     if (mainRef) {
-      const rect = mainRef.getBoundingClientRect()
+      const rect = mainRef.getBoundingClientRect();
       setPointerInMain({
         x: Math.round(point.x - rect.left),
         y: Math.round(point.y - rect.top),
-      })
+      });
     }
   }
 
   const canvasCss = createMemo(() => {
-    const g = outputGeom()
-    const v = viewportCss()
-    const w = Math.max(1, g?.w ?? v.w ?? 1)
-    const h = Math.max(1, g?.h ?? v.h ?? 1)
-    return { w, h }
-  })
+    const g = outputGeom();
+    const v = viewportCss();
+    const w = Math.max(1, g?.w ?? v.w ?? 1);
+    const h = Math.max(1, g?.h ?? v.h ?? 1);
+    return { w, h };
+  });
 
   const workspacePartition = createMemo(() => {
-    const rows = liveScreenRows()
-    const g = outputGeom()
-    const v = viewportCss()
-    const cw = Math.max(1, g?.w ?? v.w ?? 1)
-    const ch = Math.max(1, g?.h ?? v.h ?? 1)
+    const rows = liveScreenRows();
+    const g = outputGeom();
+    const v = viewportCss();
+    const cw = Math.max(1, g?.w ?? v.w ?? 1);
+    const ch = Math.max(1, g?.h ?? v.h ?? 1);
     if (rows.length === 0) {
       const single: LayoutScreen = {
-        name: '',
+        name: "",
         x: 0,
         y: 0,
         width: cw,
@@ -792,29 +930,29 @@ function App() {
         refresh_milli_hz: 0,
         vrr_supported: false,
         vrr_enabled: false,
-        taskbar_side: 'bottom',
-      }
-      return { primary: single, secondary: [] as LayoutScreen[] }
+        taskbar_side: "bottom",
+      };
+      return { primary: single, secondary: [] as LayoutScreen[] };
     }
-    const explicit = shellChromePrimaryName()
+    const explicit = shellChromePrimaryName();
     if (explicit) {
-      const ei = rows.findIndex((r) => r.name === explicit)
+      const ei = rows.findIndex((r) => r.name === explicit);
       if (ei >= 0) {
-        const primary = rows[ei]
-        const secondary = rows.filter((_, i) => i !== ei)
-        return { primary, secondary }
+        const primary = rows[ei];
+        const secondary = rows.filter((_, i) => i !== ei);
+        return { primary, secondary };
       }
     }
-    let pi = 0
+    let pi = 0;
     for (let i = 1; i < rows.length; i++) {
-      const a = rows[i]
-      const b = rows[pi]
-      if (a.x < b.x || (a.x === b.x && a.y < b.y)) pi = i
+      const a = rows[i];
+      const b = rows[pi];
+      if (a.x < b.x || (a.x === b.x && a.y < b.y)) pi = i;
     }
-    const primary = rows[pi]
-    const secondary = rows.filter((_, i) => i !== pi)
-    return { primary, secondary }
-  })
+    const primary = rows[pi];
+    const secondary = rows.filter((_, i) => i !== pi);
+    return { primary, secondary };
+  });
 
   const backedShellWindowActions = createBackedShellWindowActions({
     getWindows: windowsList,
@@ -823,85 +961,63 @@ function App() {
     getLayoutCanvasOrigin: layoutCanvasOrigin,
     getPrimaryMonitorName: () => workspacePartition().primary.name,
     getHostedWindowSpawnMonitorName: () => {
-      const id = focusedWindowId()
-      const row = windowsList().find((w) => w.window_id === id)
-      const name = row?.output_name?.trim()
-      return name && name.length > 0 ? name : null
+      const id = focusedWindowId();
+      const row = windowsList().find((w) => w.window_id === id);
+      const name = row?.output_name?.trim();
+      return name && name.length > 0 ? name : null;
     },
-    reserveTaskbarForMon: (screen) => workspaceLayoutBridge.reserveTaskbarForMon(screen),
-    sendHostedWindowOpen: (payload) => shellWireSend('hosted_window_open', JSON.stringify(payload)),
-  })
+    reserveTaskbarForMon: (screen) =>
+      workspaceLayoutBridge.reserveTaskbarForMon(screen),
+    sendHostedWindowOpen: (payload) =>
+      shellWireSend("hosted_window_open", JSON.stringify(payload)),
+  });
 
-  const layoutUnionBbox = createMemo(() => unionBBoxFromScreens(liveScreenRows()))
+  const layoutUnionBbox = createMemo(() =>
+    unionBBoxFromScreens(liveScreenRows()),
+  );
 
   const autoShellChromeMonitorName = createMemo(() => {
-    const rows = liveScreenRows()
-    if (rows.length === 0) return null
-    let pi = 0
+    const rows = liveScreenRows();
+    if (rows.length === 0) return null;
+    let pi = 0;
     for (let i = 1; i < rows.length; i++) {
-      const a = rows[i]
-      const b = rows[pi]
-      if (a.x < b.x || (a.x === b.x && a.y < b.y)) pi = i
+      const a = rows[i];
+      const b = rows[pi];
+      if (a.x < b.x || (a.x === b.x && a.y < b.y)) pi = i;
     }
-    return rows[pi]?.name ?? null
-  })
+    return rows[pi]?.name ?? null;
+  });
 
   const panelHostForHud = createMemo(() => {
-    if (liveScreenRows().length === 0) return null
-    return workspacePartition().primary
-  })
+    if (liveScreenRows().length === 0) return null;
+    return workspacePartition().primary;
+  });
 
   const debugHudFrameVisible = createMemo(() => {
-    const w = windows().get(SHELL_UI_DEBUG_WINDOW_ID)
-    return !!w && !w.minimized
-  })
+    const w = windows().get(SHELL_UI_DEBUG_WINDOW_ID);
+    return !!w && !w.minimized;
+  });
 
   const settingsHudFrameVisible = createMemo(() => {
-    const w = windows().get(SHELL_UI_SETTINGS_WINDOW_ID)
-    return !!w && !w.minimized
-  })
+    const w = windows().get(SHELL_UI_SETTINGS_WINDOW_ID);
+    return !!w && !w.minimized;
+  });
   function openSettingsPage(page: SettingsPageId) {
-    setSettingsActivePage(page)
-    backedShellWindowActions.openSettingsShellWindow()
+    setSettingsActivePage(page);
+    backedShellWindowActions.openSettingsShellWindow();
   }
   const debugHudRuntime = createDebugHudRuntime({
     debugHudFrameVisible,
-  })
+  });
 
   const fallbackMonitorName = createMemo(() => {
-    const part = workspacePartition()
-    return part.primary.name || liveScreenRows().find((row) => row.name)?.name || ''
-  })
+    const part = workspacePartition();
+    return (
+      part.primary.name || liveScreenRows().find((row) => row.name)?.name || ""
+    );
+  });
 
-  const monitorLayoutSyncSpec = createMemo(() =>
-    `${tilingCfgRev()}\u001e${liveScreenRows().map((row) => `${row.identity ?? ''}\u001f${row.name}`).join('\0')}`,
-  )
-
-  createEffect(() => {
-    const spec = monitorLayoutSyncSpec()
-    const separator = spec.indexOf('\u001e')
-    const outputsKey = separator >= 0 ? spec.slice(separator + 1) : ''
-    if (!outputsKey) return
-    const layouts = []
-    for (const output of outputsKey ? outputsKey.split('\0') : []) {
-      const [outputId, outputName] = output.split('\u001f')
-      if (!outputName) continue
-      const { layout, params } = getMonitorLayout(outputName)
-      const nextParams = layout.type === 'custom-auto' ? customAutoLayoutParamsForMonitor(outputName) : params
-      layouts.push({
-        ...(outputId ? { outputId } : {}),
-        outputName,
-        layout: layout.type,
-        params: nextParams,
-      })
-    }
-    sendWorkspaceMutation({
-      type: 'set_monitor_layouts',
-      layouts,
-    })
-  })
-
-  let shellContextMenus!: ReturnType<typeof createShellContextMenus>
+  let shellContextMenus!: ReturnType<typeof createShellContextMenus>;
   const screenshotPortalBridge = createScreenshotPortalBridge({
     getMainRef: () => mainRef,
     outputGeom,
@@ -927,7 +1043,7 @@ function App() {
     shellWireSend: (op, arg) => shellWireSend(op, arg),
     acquireOverlayPointer,
     releaseOverlayPointer,
-  })
+  });
   const {
     ScreenshotOverlay,
     PortalPickerOverlay,
@@ -936,7 +1052,7 @@ function App() {
     portalPickerVisible,
     screenshotMode,
     stopScreenshotMode,
-  } = screenshotPortalBridge
+  } = screenshotPortalBridge;
   shellContextMenus = createShellContextMenus({
     floatingLayers,
     mainEl: () => mainRef,
@@ -951,17 +1067,24 @@ function App() {
     stopScreenshotMode,
     closeAllAtlasSelects,
     bumpShellRepaint: bumpSnapChrome,
-    openShellHostedApp: (kind) => backedShellWindowActions.openShellHostedApp(kind),
+    openShellHostedApp: (kind) =>
+      backedShellWindowActions.openShellHostedApp(kind),
     openSettingsPage,
     spawnInCompositor,
-    saveSessionSnapshot: () => void sessionPersistenceRuntime.saveCurrentSessionSnapshot(),
-    restoreSessionSnapshot: () => void sessionPersistenceRuntime.restoreSavedSessionSnapshot(),
-    canSaveSessionSnapshot: () => shellHttpBase() !== null && !sessionRestoreSnapshot(),
+    saveSessionSnapshot: () =>
+      void sessionPersistenceRuntime.saveCurrentSessionSnapshot(),
+    restoreSessionSnapshot: () =>
+      void sessionPersistenceRuntime.restoreSavedSessionSnapshot(),
+    canSaveSessionSnapshot: () =>
+      shellHttpBase() !== null && !sessionRestoreSnapshot(),
     canRestoreSessionSnapshot: () =>
-      shellHttpBase() !== null && sessionPersistenceRuntime.savedSessionAvailable() && !sessionRestoreSnapshot(),
+      shellHttpBase() !== null &&
+      sessionPersistenceRuntime.savedSessionAvailable() &&
+      !sessionRestoreSnapshot(),
     postSessionPower,
     canSessionControl,
-    scheduleOverlayExclusionSync: () => shellSharedStateSync.scheduleOverlayExclusionSync(),
+    scheduleOverlayExclusionSync: () =>
+      shellSharedStateSync.scheduleOverlayExclusionSync(),
     windows: windowsList,
     taskbarPins: () => workspaceSnapshot().taskbarPins ?? [],
     windowSwitcherSelectedWindowId: () =>
@@ -969,94 +1092,108 @@ function App() {
     focusedWindowId,
     notificationsState,
     commandPaletteState,
-    activateWindow: (windowId) => shellWireSend('activate_window', windowId),
-    setShellPrimary: (name) => shellWireSend('set_shell_primary', name),
-    setUiScale: (pct) => shellWireSend('set_ui_scale', pct),
-    setOutputVrr: (name, enabled) => shellWireSend('set_output_vrr', name, enabled ? 1 : 0),
+    activateWindow: (windowId) => shellWireSend("activate_window", windowId),
+    setShellPrimary: (name) => shellWireSend("set_shell_primary", name),
+    setUiScale: (pct) => shellWireSend("set_ui_scale", pct),
+    setOutputVrr: (name, enabled) =>
+      shellWireSend("set_output_vrr", name, enabled ? 1 : 0),
     bumpTilingConfig: () => {
-      setTilingCfgRev((n) => n + 1)
-      bumpSnapChrome()
+      setTilingCfgRev((n) => n + 1);
+      bumpSnapChrome();
     },
     shellWireSend: (op, arg, arg2) => shellWireSend(op, arg, arg2),
     exitSession: () => {
-      if (shellWireSend('quit')) {
-        clearShellActionIssue()
-        return
+      if (shellWireSend("quit")) {
+        clearShellActionIssue();
+        return;
       }
-      void postShell('/session_quit', {}).then(clearShellActionIssue).catch((error) => {
-        reportShellActionIssue(`Exit session failed: ${describeError(error)}`)
-      })
+      void postShell("/session_quit", {})
+        .then(clearShellActionIssue)
+        .catch((error) => {
+          reportShellActionIssue(
+            `Exit session failed: ${describeError(error)}`,
+          );
+        });
     },
     tabMenuItems: (windowId: number) => {
-      const groupId = workspaceGroupIdForWindow(windowId)
-      const split = groupId ? getWorkspaceGroupSplit(workspaceSnapshot(), groupId) : undefined
-      const pinned = isWorkspaceWindowPinned(workspaceSnapshot(), windowId)
+      const groupId = workspaceGroupIdForWindow(windowId);
+      const split = groupId
+        ? getWorkspaceGroupSplit(workspaceSnapshot(), groupId)
+        : undefined;
+      const pinned = isWorkspaceWindowPinned(workspaceSnapshot(), windowId);
       const items = [
         {
-          actionId: pinned ? 'unpin' : 'pin',
-          label: pinned ? 'Unpin tab' : 'Pin tab',
+          actionId: pinned ? "unpin" : "pin",
+          label: pinned ? "Unpin tab" : "Pin tab",
           action: () => {
-            workspaceChrome.clearSuppressTabClickWindowId()
+            workspaceChrome.clearSuppressTabClickWindowId();
             sendWorkspaceMutation({
-              type: 'set_window_pinned',
+              type: "set_window_pinned",
               windowId,
               pinned: !pinned,
-            })
+            });
           },
         },
-      ]
-      if (groupId && !split && (workspaceGroupsById().get(groupId)?.members.length ?? 0) >= 2) {
+      ];
+      if (
+        groupId &&
+        !split &&
+        (workspaceGroupsById().get(groupId)?.members.length ?? 0) >= 2
+      ) {
         items.push({
-          actionId: 'use-split-left',
-          label: 'Use as split left tab',
+          actionId: "use-split-left",
+          label: "Use as split left tab",
           action: () => {
-            workspaceChrome.clearSuppressTabClickWindowId()
-            if (!enterSplitGroupWindow(windowId)) return
+            workspaceChrome.clearSuppressTabClickWindowId();
+            if (!enterSplitGroupWindow(windowId)) return;
             queueMicrotask(() => {
-              workspaceChrome.applySplitGroupGeometry(groupId)
-            })
+              workspaceChrome.applySplitGroupGeometry(groupId);
+            });
           },
-        })
+        });
       }
       if (groupId && split?.leftWindowId === windowId) {
         items.push({
-          actionId: 'exit-split',
-          label: 'Exit split view',
+          actionId: "exit-split",
+          label: "Exit split view",
           action: () => {
-            workspaceChrome.clearSuppressTabClickWindowId()
-            exitSplitGroupWindow(windowId)
+            workspaceChrome.clearSuppressTabClickWindowId();
+            exitSplitGroupWindow(windowId);
           },
-        })
+        });
       }
-      return items
+      return items;
     },
     tabMenuWindowAvailable: (windowId: number) => {
-      return allWindowsMap().has(windowId) && workspaceGroupIdForWindow(windowId) !== null
+      return (
+        allWindowsMap().has(windowId) &&
+        workspaceGroupIdForWindow(windowId) !== null
+      );
     },
     onTraySniMenuPick: (notifierId, menuPath, dbusmenuId) => {
-      shellWireSend('sni_tray_menu_event', notifierId, menuPath, dbusmenuId)
+      shellWireSend("sni_tray_menu_event", notifierId, menuPath, dbusmenuId);
     },
-  })
+  });
 
   createEffect(() => {
-    const list = compositorWindowsList()
-    const liveIds = new Set(list.map((window) => window.window_id))
+    const list = compositorWindowsList();
+    const liveIds = new Set(list.map((window) => window.window_id));
     for (const window of list) {
-      if (windowIsShellHosted(window)) continue
+      if (windowIsShellHosted(window)) continue;
       if (!nativeWindowRefForId(window.window_id)) {
-        tryAssignRestoredNativeWindow(window.window_id)
+        tryAssignRestoredNativeWindow(window.window_id);
       }
     }
     setNativeWindowRefs((prev) => {
-      let next: Map<number, SessionWindowRef> | null = null
+      let next: Map<number, SessionWindowRef> | null = null;
       for (const [windowId] of prev) {
-        if (liveIds.has(windowId)) continue
-        if (!next) next = new Map(prev)
-        next.delete(windowId)
+        if (liveIds.has(windowId)) continue;
+        if (!next) next = new Map(prev);
+        next.delete(windowId);
       }
-      return next ?? prev
-    })
-  })
+      return next ?? prev;
+    });
+  });
   const {
     workspaceGroups,
     workspaceGroupsById,
@@ -1074,31 +1211,32 @@ function App() {
     fallbackMonitorKey: fallbackMonitorName,
     desktopApps: desktopApps.items,
     shellHostedAppByWindow,
-  })
+  });
   const workspaceGroupIds = createMemo((prev: readonly string[] = []) => {
-    const next = workspaceGroups().map((group) => group.id)
-    return sameStringList(prev, next) ? prev : next
-  })
+    const next = workspaceGroups().map((group) => group.id);
+    return sameStringList(prev, next) ? prev : next;
+  });
 
   function requestWindowSyncRecovery() {
-    if (hasPendingClientMutation()) return
-    const now = Date.now()
-    if (windowSyncRecoveryPending && now - windowSyncRecoveryRequestedAt < 1000) return
-    if (!shellWireSend('request_compositor_sync')) return
-    windowSyncRecoveryPending = true
-    windowSyncRecoveryRequestedAt = now
+    if (hasPendingClientMutation()) return;
+    const now = Date.now();
+    if (windowSyncRecoveryPending && now - windowSyncRecoveryRequestedAt < 1000)
+      return;
+    if (!shellWireSend("request_compositor_sync")) return;
+    windowSyncRecoveryPending = true;
+    windowSyncRecoveryRequestedAt = now;
   }
 
   function focusShellUiWindow(windowId: number) {
-    shellWireSend('shell_focus_ui_window', windowId)
+    shellWireSend("shell_focus_ui_window", windowId);
   }
 
   function activateTaskbarWindowViaShell(windowId: number) {
-    shellWireSend('taskbar_activate', windowId)
+    shellWireSend("taskbar_activate", windowId);
   }
 
   function activateWindowViaShell(windowId: number) {
-    shellWireSend('activate_window', windowId)
+    shellWireSend("activate_window", windowId);
   }
 
   const {
@@ -1130,56 +1268,79 @@ function App() {
     sendWorkspaceMutation,
     sendWindowIntent,
     shellWireSend,
-  })
+  });
 
-  const [fileTabDropDrag, setFileTabDropDrag] = createSignal<WorkspaceExternalTabDropDrag | null>(null)
+  const [fileTabDropDrag, setFileTabDropDrag] =
+    createSignal<WorkspaceExternalTabDropDrag | null>(null);
 
   function openFileBrowserEntryBackedWindowId(
     path: string,
     context: { directory: string; showHidden: boolean; isDirectory: boolean },
   ): number | null {
-    if (context.isDirectory) return backedShellWindowActions.openFileBrowserWindowWithId(path)
-    const detail = { path, directory: context.directory, showHidden: context.showHidden }
-    if (isImageFilePath(path)) return backedShellWindowActions.openImageViewerWindowWithId(detail)
-    if (isVideoFilePath(path)) return backedShellWindowActions.openVideoViewerWindowWithId(detail)
-    if (isTextEditorFilePath(path)) return backedShellWindowActions.openTextEditorWindowWithId(detail)
-    if (isPdfFilePath(path)) return backedShellWindowActions.openPdfViewerWindowWithId(detail)
-    return null
+    if (context.isDirectory)
+      return backedShellWindowActions.openFileBrowserWindowWithId(path);
+    const detail = {
+      path,
+      directory: context.directory,
+      showHidden: context.showHidden,
+    };
+    if (isImageFilePath(path))
+      return backedShellWindowActions.openImageViewerWindowWithId(detail);
+    if (isVideoFilePath(path))
+      return backedShellWindowActions.openVideoViewerWindowWithId(detail);
+    if (isTextEditorFilePath(path))
+      return backedShellWindowActions.openTextEditorWindowWithId(detail);
+    if (isPdfFilePath(path))
+      return backedShellWindowActions.openPdfViewerWindowWithId(detail);
+    return null;
   }
 
   function fileBrowserEntryHasShellTabApp(
     path: string,
     context: { directory: string; showHidden: boolean; isDirectory: boolean },
   ): boolean {
-    if (context.isDirectory) return true
-    const category = fileOpenCategoryForPath(path)
-    const appId = defaultApps.loaded() ? defaultApps.settings()[category] : DEFAULT_APPLICATIONS_FALLBACK[category]
-    const option = optionById(appId, category, desktopApps.items())
+    if (context.isDirectory) return true;
+    const category = fileOpenCategoryForPath(path);
+    const appId = defaultApps.loaded()
+      ? defaultApps.settings()[category]
+      : DEFAULT_APPLICATIONS_FALLBACK[category];
+    const option = optionById(appId, category, desktopApps.items());
     return (
-      option.kind === 'shell' ||
+      option.kind === "shell" ||
       isImageFilePath(path) ||
       isVideoFilePath(path) ||
       isTextEditorFilePath(path) ||
       isPdfFilePath(path)
-    )
+    );
   }
 
   function openFileBrowserEntryShellDefaultWindowId(
     path: string,
     context: { directory: string; showHidden: boolean; isDirectory: boolean },
   ): number | null {
-    if (context.isDirectory) return backedShellWindowActions.openFileBrowserWindowWithId(path)
-    const detail = { path, directory: context.directory, showHidden: context.showHidden }
-    const category = fileOpenCategoryForPath(path)
-    const appId = defaultApps.loaded() ? defaultApps.settings()[category] : DEFAULT_APPLICATIONS_FALLBACK[category]
-    const option = optionById(appId, category, desktopApps.items())
-    if (option.kind === 'shell') {
-      if (option.shellKind === 'image_viewer') return backedShellWindowActions.openImageViewerWindowWithId(detail)
-      if (option.shellKind === 'video_viewer') return backedShellWindowActions.openVideoViewerWindowWithId(detail)
-      if (option.shellKind === 'text_editor') return backedShellWindowActions.openTextEditorWindowWithId(detail)
-      if (option.shellKind === 'pdf_viewer') return backedShellWindowActions.openPdfViewerWindowWithId(detail)
+    if (context.isDirectory)
+      return backedShellWindowActions.openFileBrowserWindowWithId(path);
+    const detail = {
+      path,
+      directory: context.directory,
+      showHidden: context.showHidden,
+    };
+    const category = fileOpenCategoryForPath(path);
+    const appId = defaultApps.loaded()
+      ? defaultApps.settings()[category]
+      : DEFAULT_APPLICATIONS_FALLBACK[category];
+    const option = optionById(appId, category, desktopApps.items());
+    if (option.kind === "shell") {
+      if (option.shellKind === "image_viewer")
+        return backedShellWindowActions.openImageViewerWindowWithId(detail);
+      if (option.shellKind === "video_viewer")
+        return backedShellWindowActions.openVideoViewerWindowWithId(detail);
+      if (option.shellKind === "text_editor")
+        return backedShellWindowActions.openTextEditorWindowWithId(detail);
+      if (option.shellKind === "pdf_viewer")
+        return backedShellWindowActions.openPdfViewerWindowWithId(detail);
     }
-    return openFileBrowserEntryBackedWindowId(path, context)
+    return openFileBrowserEntryBackedWindowId(path, context);
   }
 
   function placeOpenedWindowInTargetGroup(
@@ -1188,52 +1349,62 @@ function App() {
     insertIndex: number,
   ) {
     sendWorkspaceMutation({
-      type: 'move_window_to_group',
+      type: "move_window_to_group",
       windowId: openedWindowId,
       targetGroupId,
       insertIndex,
-    })
-    sendWorkspaceMutation({ type: 'select_tab', groupId: targetGroupId, windowId: openedWindowId })
+    });
+    sendWorkspaceMutation({
+      type: "select_tab",
+      groupId: targetGroupId,
+      windowId: openedWindowId,
+    });
   }
 
   function placeOpenedWindowInSourceGroup(
     sourceWindowId: number,
     openedWindowId: number,
-    mode: 'tab' | 'split',
+    mode: "tab" | "split",
   ) {
-    const targetGroupId = workspaceGroupIdForWindow(sourceWindowId)
-    if (!targetGroupId) return
-    const targetGroup = workspaceSnapshot().groups.find((group) => group.id === targetGroupId)
+    const targetGroupId = workspaceGroupIdForWindow(sourceWindowId);
+    if (!targetGroupId) return;
+    const targetGroup = workspaceSnapshot().groups.find(
+      (group) => group.id === targetGroupId,
+    );
     sendWorkspaceMutation({
-      type: 'move_window_to_group',
+      type: "move_window_to_group",
       windowId: openedWindowId,
       targetGroupId,
       insertIndex: targetGroup?.windowIds.length ?? 0,
-    })
-    if (mode === 'tab') {
-      sendWorkspaceMutation({ type: 'select_tab', groupId: targetGroupId, windowId: openedWindowId })
-      return
+    });
+    if (mode === "tab") {
+      sendWorkspaceMutation({
+        type: "select_tab",
+        groupId: targetGroupId,
+        windowId: openedWindowId,
+      });
+      return;
     }
     sendWorkspaceMutation({
-      type: 'enter_split',
+      type: "enter_split",
       groupId: targetGroupId,
       leftWindowId: sourceWindowId,
       leftPaneFraction: 0.5,
-    })
+    });
   }
 
   function openFileBrowserEntryInWorkspaceGroup(
     sourceWindowId: number,
     path: string,
     context: { directory: string; showHidden: boolean; isDirectory: boolean },
-    mode: 'tab' | 'split',
+    mode: "tab" | "split",
   ) {
-    const openedWindowId = openFileBrowserEntryBackedWindowId(path, context)
+    const openedWindowId = openFileBrowserEntryBackedWindowId(path, context);
     if (openedWindowId === null) {
-      void spawnInCompositor(`xdg-open ${shSingleQuotedForSpawn(path)}`)
-      return
+      void spawnInCompositor(`xdg-open ${shSingleQuotedForSpawn(path)}`);
+      return;
     }
-    placeOpenedWindowInSourceGroup(sourceWindowId, openedWindowId, mode)
+    placeOpenedWindowInSourceGroup(sourceWindowId, openedWindowId, mode);
   }
 
   function openFileBrowserEntryInWorkspaceTarget(
@@ -1241,13 +1412,20 @@ function App() {
     context: { directory: string; showHidden: boolean; isDirectory: boolean },
     target: TabMergeTarget,
   ): boolean {
-    const openedWindowId = openFileBrowserEntryShellDefaultWindowId(path, context)
+    const openedWindowId = openFileBrowserEntryShellDefaultWindowId(
+      path,
+      context,
+    );
     if (openedWindowId === null) {
-      reportShellActionIssue('This file does not have a shell tab app.')
-      return false
+      reportShellActionIssue("This file does not have a shell tab app.");
+      return false;
     }
-    placeOpenedWindowInTargetGroup(openedWindowId, target.groupId, target.insertIndex)
-    return true
+    placeOpenedWindowInTargetGroup(
+      openedWindowId,
+      target.groupId,
+      target.insertIndex,
+    );
+    return true;
   }
 
   function previewFileBrowserEntryAtTabDrop(
@@ -1257,20 +1435,22 @@ function App() {
     clientX: number,
     clientY: number,
   ): boolean {
-    const canOpen = fileBrowserEntryHasShellTabApp(path, context)
-    const target = canOpen ? findMergeTarget(workspaceSnapshot(), 0, clientX, clientY, false) : null
+    const canOpen = fileBrowserEntryHasShellTabApp(path, context);
+    const target = canOpen
+      ? findMergeTarget(workspaceSnapshot(), 0, clientX, clientY, false)
+      : null;
     setFileTabDropDrag({
       target,
       clientX,
       clientY,
       label,
       canDrop: canOpen && target !== null,
-    })
-    return target !== null
+    });
+    return target !== null;
   }
 
   function clearFileBrowserTabDropPreview() {
-    setFileTabDropDrag(null)
+    setFileTabDropDrag(null);
   }
 
   function openFileBrowserEntryAtTabDrop(
@@ -1279,10 +1459,16 @@ function App() {
     clientX: number,
     clientY: number,
   ): boolean {
-    clearFileBrowserTabDropPreview()
-    const target = findMergeTarget(workspaceSnapshot(), 0, clientX, clientY, false)
-    if (!target) return false
-    return openFileBrowserEntryInWorkspaceTarget(path, context, target)
+    clearFileBrowserTabDropPreview();
+    const target = findMergeTarget(
+      workspaceSnapshot(),
+      0,
+      clientX,
+      clientY,
+      false,
+    );
+    if (!target) return false;
+    return openFileBrowserEntryInWorkspaceTarget(path, context, target);
   }
 
   function openFileWithOption(
@@ -1290,71 +1476,89 @@ function App() {
     path: string,
     context: { directory: string; showHidden: boolean },
   ) {
-    const detail = { path, directory: context.directory, showHidden: context.showHidden }
-    if (option.kind === 'shell') {
-      if (option.shellKind === 'image_viewer') backedShellWindowActions.openImageViewerWindow(detail)
-      else if (option.shellKind === 'video_viewer') backedShellWindowActions.openVideoViewerWindow(detail)
-      else if (option.shellKind === 'text_editor') backedShellWindowActions.openTextEditorWindow(detail)
-      else if (option.shellKind === 'pdf_viewer') backedShellWindowActions.openPdfViewerWindow(detail)
-      return
+    const detail = {
+      path,
+      directory: context.directory,
+      showHidden: context.showHidden,
+    };
+    if (option.kind === "shell") {
+      if (option.shellKind === "image_viewer")
+        backedShellWindowActions.openImageViewerWindow(detail);
+      else if (option.shellKind === "video_viewer")
+        backedShellWindowActions.openVideoViewerWindow(detail);
+      else if (option.shellKind === "text_editor")
+        backedShellWindowActions.openTextEditorWindow(detail);
+      else if (option.shellKind === "pdf_viewer")
+        backedShellWindowActions.openPdfViewerWindow(detail);
+      return;
     }
-    if (option.kind === 'desktop') {
-      const command = `${option.app.exec} ${shSingleQuotedForSpawn(path)}`
+    if (option.kind === "desktop") {
+      const command = `${option.app.exec} ${shSingleQuotedForSpawn(path)}`;
       void spawnInCompositor(command, {
         command,
         desktopId: option.app.desktop_id || null,
         appName: option.app.name || null,
-      })
-      return
+      });
+      return;
     }
-    void spawnInCompositor(`xdg-open ${shSingleQuotedForSpawn(path)}`)
+    void spawnInCompositor(`xdg-open ${shSingleQuotedForSpawn(path)}`);
   }
 
-  function openCustomLayoutOverlay(detail: { outputName: string; layoutId?: string | null }) {
+  function openCustomLayoutOverlay(detail: {
+    outputName: string;
+    layoutId?: string | null;
+  }) {
     setCustomLayoutOverlay({
       outputName: detail.outputName,
       initialLayoutId: detail.layoutId ?? null,
-    })
+    });
   }
 
   function closeCustomLayoutOverlay() {
-    setCustomLayoutOverlay(null)
+    setCustomLayoutOverlay(null);
   }
 
   function taskbarPinMonitorForWindow(windowId: number) {
-    const outputName = windowById(windowId)()?.output_name?.trim() ?? ''
-    if (!outputName) return null
+    const outputName = windowById(windowId)()?.output_name?.trim() ?? "";
+    if (!outputName) return null;
     return {
       outputName,
       outputId: outputIdentityForMonitorName(outputName),
-    }
+    };
   }
 
-  function addFolderTaskbarPin(monitor: { outputName: string; outputId: string | null }, path: string, label: string) {
+  function addFolderTaskbarPin(
+    monitor: { outputName: string; outputId: string | null },
+    path: string,
+    label: string,
+  ) {
     shellWireSend(
-      'taskbar_pin_add',
+      "taskbar_pin_add",
       JSON.stringify({
         outputName: monitor.outputName,
         outputId: monitor.outputId,
         pin: {
-          kind: 'folder',
+          kind: "folder",
           id: `folder:${path}`,
           label,
           path,
         },
       }),
-    )
+    );
   }
 
-  function removeFolderTaskbarPin(monitor: { outputName: string; outputId: string | null }, pinId: string) {
+  function removeFolderTaskbarPin(
+    monitor: { outputName: string; outputId: string | null },
+    pinId: string,
+  ) {
     shellWireSend(
-      'taskbar_pin_remove',
+      "taskbar_pin_remove",
       JSON.stringify({
         outputName: monitor.outputName,
         outputId: monitor.outputId,
         pinId,
       }),
-    )
+    );
   }
 
   function renderShellWindowContent(windowId: number): JSX.Element | undefined {
@@ -1366,20 +1570,35 @@ function App() {
       taskbarPinMonitorForWindow,
       onTaskbarPinFolderAdd: addFolderTaskbarPin,
       onTaskbarPinFolderRemove: removeFolderTaskbarPin,
-      onOpenFileBrowserInNewWindow: (path) => backedShellWindowActions.openFileBrowserWindow(path),
-      onOpenImageFile: (detail) => backedShellWindowActions.openImageViewerWindow(detail),
-      onOpenVideoFile: (detail) => backedShellWindowActions.openVideoViewerWindow(detail),
-      onOpenTextFile: (detail) => backedShellWindowActions.openTextEditorWindow(detail),
-      onOpenPdfFile: (detail) => backedShellWindowActions.openPdfViewerWindow(detail),
+      onOpenFileBrowserInNewWindow: (path) =>
+        backedShellWindowActions.openFileBrowserWindow(path),
+      onOpenImageFile: (detail) =>
+        backedShellWindowActions.openImageViewerWindow(detail),
+      onOpenVideoFile: (detail) =>
+        backedShellWindowActions.openVideoViewerWindow(detail),
+      onOpenTextFile: (detail) =>
+        backedShellWindowActions.openTextEditorWindow(detail),
+      onOpenPdfFile: (detail) =>
+        backedShellWindowActions.openPdfViewerWindow(detail),
       onOpenFileWith: openFileWithOption,
       onOpenPathInTab: (sourceWindowId, path, context) => {
-        openFileBrowserEntryInWorkspaceGroup(sourceWindowId, path, context, 'tab')
+        openFileBrowserEntryInWorkspaceGroup(
+          sourceWindowId,
+          path,
+          context,
+          "tab",
+        );
       },
       onOpenPathInTabDrop: openFileBrowserEntryAtTabDrop,
       onPreviewPathInTabDrop: previewFileBrowserEntryAtTabDrop,
       onClearPathInTabDropPreview: clearFileBrowserTabDropPreview,
       onOpenPathInSplitView: (sourceWindowId, path, context) => {
-        openFileBrowserEntryInWorkspaceGroup(sourceWindowId, path, context, 'split')
+        openFileBrowserEntryInWorkspaceGroup(
+          sourceWindowId,
+          path,
+          context,
+          "split",
+        );
       },
       reportShellActionIssue,
       copyDebugHudSnapshot,
@@ -1412,82 +1631,90 @@ function App() {
       bumpSnapChrome,
       scheduleExclusionZonesSync,
       openCustomLayoutOverlay,
-      setShellPrimary: (name) => shellWireSend('set_shell_primary', name),
-      setUiScale: (pct) => shellWireSend('set_ui_scale', pct),
-      setOutputVrr: (name, enabled) => shellWireSend('set_output_vrr', name, enabled ? 1 : 0),
-      setTaskbarAutoHide: (enabled) => shellWireSend('set_taskbar_auto_hide', enabled ? 1 : 0),
-      setTaskbarSide: (name, side) => shellWireSend('set_taskbar_side', name, side),
+      setShellPrimary: (name) => shellWireSend("set_shell_primary", name),
+      setUiScale: (pct) => shellWireSend("set_ui_scale", pct),
+      setOutputVrr: (name, enabled) =>
+        shellWireSend("set_output_vrr", name, enabled ? 1 : 0),
+      setTaskbarAutoHide: (enabled) =>
+        shellWireSend("set_taskbar_auto_hide", enabled ? 1 : 0),
+      setTaskbarSide: (name, side) =>
+        shellWireSend("set_taskbar_side", name, side),
       applyCompositorLayoutFromDraft: () => {
         const screens = screenDraft.rows.map((r) => ({
           name: r.name,
           x: r.x,
           y: r.y,
           transform: r.transform,
-        }))
-        shellWireSend('set_output_layout', JSON.stringify({ screens }))
+        }));
+        shellWireSend("set_output_layout", JSON.stringify({ screens }));
       },
       monitorRefreshLabel,
       keyboardLayoutLabel,
-      setDesktopBackgroundJson: (json) => shellWireSend('set_desktop_background', json),
+      setDesktopBackgroundJson: (json) =>
+        shellWireSend("set_desktop_background", json),
       sessionAutoSaveEnabled: sessionPersistenceRuntime.sessionAutoSaveEnabled,
-      setSessionAutoSaveEnabled: sessionPersistenceRuntime.updateSessionAutoSavePreference,
+      setSessionAutoSaveEnabled:
+        sessionPersistenceRuntime.updateSessionAutoSavePreference,
       defaultApps,
       desktopApps,
       notificationsState,
-    })
+    });
   }
 
   const taskbarScreens = createMemo(() =>
     screensListForLayout(liveScreenRows(), outputGeom(), layoutCanvasOrigin()),
-  )
+  );
   const shellExclusionVisibleWindowIds = createMemo(() => {
-    const visible = new Set<number>()
+    const visible = new Set<number>();
     for (const group of workspaceGroups()) {
-      for (const windowId of group.visibleWindowIds) visible.add(windowId)
+      for (const windowId of group.visibleWindowIds) visible.add(windowId);
     }
     for (const window of windowsList()) {
-      if (workspaceGroupIdForWindow(window.window_id) === null) visible.add(window.window_id)
+      if (workspaceGroupIdForWindow(window.window_id) === null)
+        visible.add(window.window_id);
     }
-    return visible
-  })
+    return visible;
+  });
 
   const exclusionReactiveDeps = createMemo(() => {
-    void shellContextMenus.ctxMenuOpen()
-    void shellContextMenus.powerMenuOpen()
-    void shellContextMenus.volumeMenuOpen()
-    void shellContextMenus.tabMenuOpen()
-    void shellContextMenus.traySniMenuOpen()
-    void portalPickerVisible()
-    void floatingLayers.layers().length
-    void chromeOverlayPointerUsers()
-    return 0
-  })
+    void shellContextMenus.ctxMenuOpen();
+    void shellContextMenus.powerMenuOpen();
+    void shellContextMenus.volumeMenuOpen();
+    void shellContextMenus.tabMenuOpen();
+    void shellContextMenus.traySniMenuOpen();
+    void portalPickerVisible();
+    void floatingLayers.layers().length;
+    void chromeOverlayPointerUsers();
+    return 0;
+  });
 
-  const { scheduleExclusionZonesSync, syncExclusionZonesNow } = createShellExclusionSync({
-    mainEl: () => mainRef,
-    outputGeom,
-    layoutCanvasOrigin,
-    taskbarScreens,
-    taskbarHeight: TASKBAR_HEIGHT,
-    taskbarAutoHide,
-    windows: windowsList,
-    isWindowVisible: (window) => shellExclusionVisibleWindowIds().has(window.window_id),
-    onHudChange: debugHudRuntime.setExclusionZonesHud,
-    exclusionReactiveDeps,
-  })
+  const { scheduleExclusionZonesSync, syncExclusionZonesNow } =
+    createShellExclusionSync({
+      mainEl: () => mainRef,
+      outputGeom,
+      layoutCanvasOrigin,
+      taskbarScreens,
+      taskbarHeight: TASKBAR_HEIGHT,
+      taskbarAutoHide,
+      windows: windowsList,
+      isWindowVisible: (window) =>
+        shellExclusionVisibleWindowIds().has(window.window_id),
+      onHudChange: debugHudRuntime.setExclusionZonesHud,
+      exclusionReactiveDeps,
+    });
   const shellMeasureEnv = () => {
-    const main = mainRef
-    const og = outputGeom()
-    if (!main || !og) return null
-    return { main, outputGeom: og, origin: layoutCanvasOrigin() }
-  }
+    const main = mainRef;
+    const og = outputGeom();
+    if (!main || !og) return null;
+    return { main, outputGeom: og, origin: layoutCanvasOrigin() };
+  };
   const shellSharedStateSync = createShellSharedStateSync({
     invalidateAllShellUiWindows,
     flushShellUiWindowsSyncNow,
     scheduleExclusionZonesSync,
     syncExclusionZonesNow,
     measureEnv: shellMeasureEnv,
-  })
+  });
 
   const workspaceLayoutBridge = createWorkspaceLayoutBridge({
     getWorkspaceState: workspaceSnapshot,
@@ -1499,51 +1726,61 @@ function App() {
     requestSharedStateSync: shellSharedStateSync.requestSharedStateSync,
     sendWorkspaceMutation,
     shellWireSend,
-  })
+  });
 
   function outputIdentityForMonitorName(monitorName: string): string | null {
-    return liveScreenRows().find((screen) => screen.name === monitorName)?.identity ?? null
+    return (
+      liveScreenRows().find((screen) => screen.name === monitorName)
+        ?.identity ?? null
+    );
   }
 
   function taskbarPinsForScreen(screen: LayoutScreen): TaskbarPin[] {
-    const pins = workspaceSnapshot().taskbarPins ?? []
+    const pins = workspaceSnapshot().taskbarPins ?? [];
     const row =
       (screen.identity
-        ? pins.find((monitor) => (monitor.outputId ?? '') === screen.identity)
-        : undefined) ?? pins.find((monitor) => monitor.outputName === screen.name)
-    return row?.pins ?? []
+        ? pins.find((monitor) => (monitor.outputId ?? "") === screen.identity)
+        : undefined) ??
+      pins.find((monitor) => monitor.outputName === screen.name);
+    return row?.pins ?? [];
   }
 
   function sendTaskbarPinRemove(pin: TaskbarPin, monitorName: string): boolean {
     return shellWireSend(
-      'taskbar_pin_remove',
+      "taskbar_pin_remove",
       JSON.stringify({
         outputName: monitorName,
         outputId: outputIdentityForMonitorName(monitorName),
         pinId: pin.id,
       }),
-    )
+    );
   }
 
   function activateTaskbarPin(pin: TaskbarPin, monitorName: string) {
-    if (pin.kind === 'folder') {
-      backedShellWindowActions.openFileBrowserWindowAtMonitor(pin.path, monitorName)
-      return
+    if (pin.kind === "folder") {
+      backedShellWindowActions.openFileBrowserWindowAtMonitor(
+        pin.path,
+        monitorName,
+      );
+      return;
     }
     shellWireSend(
-      'taskbar_pin_launch',
+      "taskbar_pin_launch",
       JSON.stringify({
         outputName: monitorName,
         outputId: outputIdentityForMonitorName(monitorName),
         pinId: pin.id,
       }),
-    )
+    );
   }
 
   createEffect(() => {
-    void shellWireReadyRev()
-    shellSharedStateSync.requestSharedStateSync({ shellUi: 'flush', exclusion: 'sync' })
-  })
+    void shellWireReadyRev();
+    shellSharedStateSync.requestSharedStateSync({
+      shellUi: "flush",
+      exclusion: "sync",
+    });
+  });
 
   function isPrimaryTaskbarScreen(s: LayoutScreen, primary: LayoutScreen) {
     return (
@@ -1552,16 +1789,16 @@ function App() {
       s.y === primary.y &&
       s.width === primary.width &&
       s.height === primary.height
-    )
+    );
   }
 
   /** Memo so pointer/viewport updates re-run (nested `Show` + FC did not track `pointerClient`). */
   const crosshairDebugOverlay = createMemo(() => {
-    if (!crosshairCursor()) return null
-    const p = pointerClient()
-    if (!p) return null
-    const vpw = viewportCss().w
-    const vph = viewportCss().h
+    if (!crosshairCursor()) return null;
+    const p = pointerClient();
+    if (!p) return null;
+    const vpw = viewportCss().w;
+    const vph = viewportCss().h;
     return (
       <>
         <div
@@ -1582,25 +1819,28 @@ function App() {
           {p.x},{p.y}
         </div>
       </>
-    )
-  })
+    );
+  });
   createEffect(() => {
-    outputGeom()
-    layoutCanvasOrigin()
-    if (shellUiWindowsInvalidateQueued) return
-    shellUiWindowsInvalidateQueued = true
+    outputGeom();
+    layoutCanvasOrigin();
+    if (shellUiWindowsInvalidateQueued) return;
+    shellUiWindowsInvalidateQueued = true;
     queueMicrotask(() => {
-      shellUiWindowsInvalidateQueued = false
-      shellSharedStateSync.requestSharedStateSync({ shellUi: 'invalidate-all' }, 'now')
-    })
-  })
+      shellUiWindowsInvalidateQueued = false;
+      shellSharedStateSync.requestSharedStateSync(
+        { shellUi: "invalidate-all" },
+        "now",
+      );
+    });
+  });
 
   function bumpSnapChrome() {
-    setSnapChromeRev((n) => n + 1)
+    setSnapChromeRev((n) => n + 1);
   }
 
   function openShellTestWindow() {
-    return backedShellWindowActions.openShellTestWindow()
+    return backedShellWindowActions.openShellTestWindow();
   }
 
   const shellWindowGestureRuntime = createShellWindowGestureRuntime({
@@ -1610,22 +1850,31 @@ function App() {
     screenDraftRows: liveScreenRows,
     windowById,
     reserveTaskbarForMon: workspaceLayoutBridge.reserveTaskbarForMon,
-    occupiedSnapZonesOnMonitor: workspaceLayoutBridge.occupiedSnapZonesOnMonitor,
+    occupiedSnapZonesOnMonitor:
+      workspaceLayoutBridge.occupiedSnapZonesOnMonitor,
     sendSetMonitorTile: workspaceLayoutBridge.sendSetMonitorTile,
     sendSetPreTileGeometry: workspaceLayoutBridge.sendSetPreTileGeometry,
     sendRemoveMonitorTile: workspaceLayoutBridge.sendRemoveMonitorTile,
     sendClearPreTileGeometry: workspaceLayoutBridge.sendClearPreTileGeometry,
     workspacePreTileSnapshot: workspaceLayoutBridge.workspacePreTileSnapshot,
     workspaceTiledRectMap: workspaceLayoutBridge.workspaceTiledRectMap,
-    workspaceTiledZone: (windowId) => workspaceGetTiledZone(workspaceSnapshot(), windowId) ?? null,
-    isWorkspaceWindowTiled: (windowId) => workspaceIsWindowTiled(workspaceSnapshot(), windowId),
+    workspaceTiledZone: (windowId) =>
+      workspaceGetTiledZone(workspaceSnapshot(), windowId) ?? null,
+    isWorkspaceWindowTiled: (windowId) =>
+      workspaceIsWindowTiled(workspaceSnapshot(), windowId),
     workspaceFindMonitorForTiledWindow: (windowId) => {
-      const outputName = workspaceFindMonitorForTiledWindow(workspaceSnapshot(), windowId)
-      if (outputName === null) return null
+      const outputName = workspaceFindMonitorForTiledWindow(
+        workspaceSnapshot(),
+        windowId,
+      );
+      if (outputName === null) return null;
       return {
         outputName,
-        outputId: workspaceFindMonitorIdentityForTiledWindow(workspaceSnapshot(), windowId),
-      }
+        outputId: workspaceFindMonitorIdentityForTiledWindow(
+          workspaceSnapshot(),
+          windowId,
+        ),
+      };
     },
     requestSharedStateSync: shellSharedStateSync.requestSharedStateSync,
     requestCompositorSync,
@@ -1633,30 +1882,30 @@ function App() {
     shellWireSend,
     shellMoveLog,
     clearNativeDragPreview: () => setNativeDragPreview(null),
-  })
+  });
 
   const windowInteractionCapture = createMemo(() => {
-    const state = compositorInteractionState()
-    const localDragWindowId = shellWindowGestureRuntime.dragWindowId()
+    const state = compositorInteractionState();
+    const localDragWindowId = shellWindowGestureRuntime.dragWindowId();
     const activeWindowId =
       state?.move_proxy_window_id ??
       state?.move_window_id ??
       state?.resize_window_id ??
-      localDragWindowId
-    if (activeWindowId === null) return null
-    const activeWindow = windows().get(activeWindowId)
-    if (!activeWindow || !windowIsShellHosted(activeWindow)) return null
+      localDragWindowId;
+    if (activeWindowId === null) return null;
+    const activeWindow = windows().get(activeWindowId);
+    if (!activeWindow || !windowIsShellHosted(activeWindow)) return null;
     return {
       cursor:
         state?.resize_window_id !== null
-          ? 'cursor-default'
+          ? "cursor-default"
           : state?.move_window_id !== null ||
               state?.move_proxy_window_id !== null ||
               localDragWindowId !== null
-            ? 'cursor-grabbing'
-            : 'cursor-default',
-    }
-  })
+            ? "cursor-grabbing"
+            : "cursor-default",
+    };
+  });
 
   const workspaceChrome = createWorkspaceChrome({
     workspaceSnapshot,
@@ -1679,9 +1928,12 @@ function App() {
     compositorPointerClient: () => compositorInteractionPointerClient(),
     shellWindowDragId: shellWindowGestureRuntime.dragWindowId,
     shellWindowDragMoved: shellWindowGestureRuntime.dragWindowMoved,
-    compositorMoveWindowId: () => compositorInteractionState()?.move_window_id ?? null,
-    compositorMoveProxyWindowId: () => compositorInteractionState()?.move_proxy_window_id ?? null,
-    compositorMoveCaptureWindowId: () => compositorInteractionState()?.move_capture_window_id ?? null,
+    compositorMoveWindowId: () =>
+      compositorInteractionState()?.move_window_id ?? null,
+    compositorMoveProxyWindowId: () =>
+      compositorInteractionState()?.move_proxy_window_id ?? null,
+    compositorMoveCaptureWindowId: () =>
+      compositorInteractionState()?.move_capture_window_id ?? null,
     nativeDragPreview: nativeDragPreviewAsset,
     focusShellUiWindow,
     activateTaskbarWindowViaShell,
@@ -1689,7 +1941,8 @@ function App() {
     beginShellWindowMove: shellWindowGestureRuntime.beginShellWindowMove,
     adoptShellWindowMove: shellWindowGestureRuntime.adoptShellWindowMove,
     beginShellWindowResize: shellWindowGestureRuntime.beginShellWindowResize,
-    toggleShellMaximizeForWindow: shellWindowGestureRuntime.toggleShellMaximizeForWindow,
+    toggleShellMaximizeForWindow:
+      shellWindowGestureRuntime.toggleShellMaximizeForWindow,
     closeWindow,
     closeGroupWindow,
     selectGroupWindow,
@@ -1698,21 +1951,24 @@ function App() {
     applyWindowDrop,
     detachGroupWindow,
     workspaceGroupIdForWindow,
-    isWorkspaceWindowTiled: (windowId) => workspaceIsWindowTiled(workspaceSnapshot(), windowId),
-    isWorkspaceWindowPinned: (windowId) => isWorkspaceWindowPinned(workspaceSnapshot(), windowId),
+    isWorkspaceWindowTiled: (windowId) =>
+      workspaceIsWindowTiled(workspaceSnapshot(), windowId),
+    isWorkspaceWindowPinned: (windowId) =>
+      isWorkspaceWindowPinned(workspaceSnapshot(), windowId),
     openSnapAssistPicker: shellWindowGestureRuntime.openSnapAssistPicker,
     shellContextOpenTabMenu: shellContextMenus.openTabMenu,
     shellContextHideMenu: shellContextMenus.hideContextMenu,
     externalTabDropDrag: fileTabDropDrag,
     shellWireSend,
-  })
+  });
 
   const shellSurfaceRuntime = createShellSurfaceRuntime({
     assistOverlay: shellWindowGestureRuntime.assistOverlay,
     getMainRef: () => mainRef,
     outputGeom,
     workspaceSecondary: () => workspacePartition().secondary,
-    screenCssRect: (screen) => layoutScreenCssRect(screen, layoutCanvasOrigin()),
+    screenCssRect: (screen) =>
+      layoutScreenCssRect(screen, layoutCanvasOrigin()),
     debugHudFrameVisible,
     taskbarScreens,
     taskbarHeight: TASKBAR_HEIGHT,
@@ -1722,8 +1978,10 @@ function App() {
       shellContextMenus.powerMenuOpen() ||
       shellContextMenus.volumeMenuOpen(),
     pointerInMain,
-    screenTaskbarHiddenForFullscreen: workspaceLayoutBridge.screenTaskbarHiddenForFullscreen,
-    isPrimaryTaskbarScreen: (screen) => isPrimaryTaskbarScreen(screen, workspacePartition().primary),
+    screenTaskbarHiddenForFullscreen:
+      workspaceLayoutBridge.screenTaskbarHiddenForFullscreen,
+    isPrimaryTaskbarScreen: (screen) =>
+      isPrimaryTaskbarScreen(screen, workspacePartition().primary),
     batteryState: shellBattery.state,
     trayVolumeState,
     taskbarPinsForScreen,
@@ -1735,9 +1993,11 @@ function App() {
     sniTrayItems,
     trayIconSlotPx,
     snapStrip: shellWindowGestureRuntime.snapStripState,
-    snapStripScreen: () => shellWindowGestureRuntime.dragSnapAssistContext()?.screen ?? null,
+    snapStripScreen: () =>
+      shellWindowGestureRuntime.dragSnapAssistContext()?.screen ?? null,
     snapStripExclusionActive: () =>
-      shellWindowGestureRuntime.dragWindowMoved() && shellWindowGestureRuntime.getShellWindowDragId() !== null,
+      shellWindowGestureRuntime.dragWindowMoved() &&
+      shellWindowGestureRuntime.getShellWindowDragId() !== null,
     windows,
     closeGroupWindow,
     activateTaskbarGroup,
@@ -1747,73 +2007,96 @@ function App() {
     openDebugShellWindow: backedShellWindowActions.openDebugShellWindow,
     openTraySniMenu: shellContextMenus.openTraySniMenu,
     shellWireSend,
-  })
+  });
 
   const e2eTabDragTarget = createMemo(() => {
-    const target = workspaceChrome.activeDropTarget()
-    const windowId = workspaceChrome.activeDragWindowId()
-    if (!target || windowId == null) return null
+    const target = workspaceChrome.activeDropTarget();
+    const windowId = workspaceChrome.activeDragWindowId();
+    if (!target || windowId == null) return null;
     return {
       windowId,
       groupId: target.groupId,
       insertIndex: target.insertIndex,
-    }
-  })
+    };
+  });
 
-  const endWorkspaceAwareShellWindowMove = (reason: string, sendMoveEnd = true) => {
+  const endWorkspaceAwareShellWindowMove = (
+    reason: string,
+    sendMoveEnd = true,
+  ) => {
     const snapActive =
       shellWindowGestureRuntime.snapAssistPicker() !== null ||
       shellWindowGestureRuntime.getActiveSnapZone() !== null ||
-      shellWindowGestureRuntime.getActiveSnapPreviewCanvas() !== null
-    const dropAllowed = reason !== 'compositor-move-ended' && !snapActive
+      shellWindowGestureRuntime.getActiveSnapPreviewCanvas() !== null;
+    const dropAllowed = reason !== "compositor-move-ended" && !snapActive;
     const dropped = dropAllowed
-      ? workspaceChrome.finishWindowDragDrop(pointerClient() ?? compositorInteractionPointerClient())
-      : false
+      ? workspaceChrome.finishWindowDragDrop(
+          pointerClient() ?? compositorInteractionPointerClient(),
+        )
+      : false;
     shellWindowGestureRuntime.endShellWindowMove(
       reason,
       !dropped,
       sendMoveEnd,
-      compositorInteractionState()?.interaction_serial ?? null,
-    )
-  }
+      compositorInteractionState()?.interaction_serial ??
+        previousCompositorInteractionSerial,
+    );
+  };
 
   function markScreenDraftDirty() {
-    if (screenDraft.dirty) return
-    setScreenDraft('dirty', true)
+    if (screenDraft.dirty) return;
+    setScreenDraft("dirty", true);
   }
 
-  let previousCompositorMoveWindowId: number | null = null
-  let previousCompositorInteractionSerial = 0
+  let previousCompositorMoveWindowId: number | null = null;
+  let previousCompositorInteractionSerial = 0;
   createEffect(() => {
-    const interactionState = compositorInteractionState()
-    const compositorMoveWindowId = interactionState?.move_window_id ?? null
-    const compositorResizeWindowId = interactionState?.resize_window_id ?? null
-    const compositorInteractionSerial = interactionState?.interaction_serial ?? 0
-    const compositorPointer = compositorInteractionPointerClient()
-    const localDragWindowId = shellWindowGestureRuntime.dragWindowId()
+    const interactionState = compositorInteractionState();
+    const compositorMoveWindowId = interactionState?.move_window_id ?? null;
+    const compositorResizeWindowId = interactionState?.resize_window_id ?? null;
+    const compositorInteractionSerial =
+      interactionState?.interaction_serial ?? 0;
+    const compositorPointer = compositorInteractionPointerClient();
+    const localDragWindowId = shellWindowGestureRuntime.dragWindowId();
     const localDragOwnsCompositorMove =
-      localDragWindowId !== null && compositorMoveWindowId === localDragWindowId
+      localDragWindowId !== null &&
+      compositorMoveWindowId === localDragWindowId;
     const ignoreReleasedCompositorMove =
       compositorMoveWindowId !== null &&
       shellWindowGestureRuntime.shouldIgnoreReleasedCompositorMove(
         compositorMoveWindowId,
         compositorInteractionSerial,
-      )
+      );
     const interactionActive =
       interactionState !== null &&
-      (interactionState.move_window_id !== null || interactionState.resize_window_id !== null)
+      (interactionState.move_window_id !== null ||
+        interactionState.resize_window_id !== null);
     if (interactionActive && compositorPointer) {
       if (!localDragOwnsCompositorMove && !ignoreReleasedCompositorMove) {
-        syncPointerSignalsFromClient(compositorPointer)
+        syncPointerSignalsFromClient(compositorPointer);
       }
-      if (compositorMoveWindowId !== null && !localDragOwnsCompositorMove && !ignoreReleasedCompositorMove) {
+      if (
+        compositorMoveWindowId !== null &&
+        !localDragOwnsCompositorMove &&
+        !ignoreReleasedCompositorMove
+      ) {
         if (localDragWindowId === null) {
-          shellWindowGestureRuntime.adoptShellWindowMove(compositorMoveWindowId, compositorPointer.x, compositorPointer.y)
+          shellWindowGestureRuntime.adoptShellWindowMove(
+            compositorMoveWindowId,
+            compositorPointer.x,
+            compositorPointer.y,
+          );
         }
-        shellWindowGestureRuntime.syncShellWindowMovePointer(compositorPointer.x, compositorPointer.y)
+        shellWindowGestureRuntime.syncShellWindowMovePointer(
+          compositorPointer.x,
+          compositorPointer.y,
+        );
       }
       if (compositorResizeWindowId !== null) {
-        shellWindowGestureRuntime.syncShellWindowResizePointer(compositorPointer.x, compositorPointer.y)
+        shellWindowGestureRuntime.syncShellWindowResizePointer(
+          compositorPointer.x,
+          compositorPointer.y,
+        );
       }
     }
     if (
@@ -1828,25 +2111,28 @@ function App() {
           compositorInteractionSerial,
         )
       ) {
-        previousCompositorMoveWindowId = compositorMoveWindowId
-        previousCompositorInteractionSerial = compositorInteractionSerial
-        return
+        previousCompositorMoveWindowId = compositorMoveWindowId;
+        previousCompositorInteractionSerial = compositorInteractionSerial;
+        return;
       }
       if (compositorPointer) {
-        syncPointerSignalsFromClient(compositorPointer)
+        syncPointerSignalsFromClient(compositorPointer);
         if (
           shellWindowGestureRuntime.getActiveSnapZone() === null &&
           shellWindowGestureRuntime.getActiveSnapPreviewCanvas() === null &&
           shellWindowGestureRuntime.snapAssistPicker() === null
         ) {
-          shellWindowGestureRuntime.syncShellWindowMovePointer(compositorPointer.x, compositorPointer.y)
+          shellWindowGestureRuntime.syncShellWindowMovePointer(
+            compositorPointer.x,
+            compositorPointer.y,
+          );
         }
       }
-      endWorkspaceAwareShellWindowMove('compositor-move-ended', false)
+      endWorkspaceAwareShellWindowMove("compositor-move-ended", false);
     }
-    previousCompositorMoveWindowId = compositorMoveWindowId
-    previousCompositorInteractionSerial = compositorInteractionSerial
-  })
+    previousCompositorMoveWindowId = compositorMoveWindowId;
+    previousCompositorInteractionSerial = compositorInteractionSerial;
+  });
 
   async function spawnInCompositor(
     cmd: string,
@@ -1854,8 +2140,8 @@ function App() {
     sessionRestore = false,
     forcedWindowRef?: SessionWindowRef | null,
   ) {
-    const trimmed = cmd.trim()
-    if (!trimmed) return
+    const trimmed = cmd.trim();
+    if (!trimmed) return;
     const effectiveLaunch =
       launch && launch.command.trim().length > 0
         ? {
@@ -1867,43 +2153,51 @@ function App() {
             command: trimmed,
             desktopId: null,
             appName: null,
-          }
-    const pendingWindowRef = forcedWindowRef ?? nativeWindowRef(nextNativeWindowSeq())
+          };
+    const pendingWindowRef =
+      forcedWindowRef ?? nativeWindowRef(nextNativeWindowSeq());
     if (!forcedWindowRef) {
-      setNextNativeWindowSeq((seq) => seq + 1)
+      setNextNativeWindowSeq((seq) => seq + 1);
     }
-    pendingNativeLaunches.push({ windowRef: pendingWindowRef, launch: effectiveLaunch })
-    nativeLaunchMetadataByRef.set(pendingWindowRef, effectiveLaunch)
+    pendingNativeLaunches.push({
+      windowRef: pendingWindowRef,
+      launch: effectiveLaunch,
+    });
+    nativeLaunchMetadataByRef.set(pendingWindowRef, effectiveLaunch);
     try {
-      if (shellWireSend('spawn', trimmed)) {
-        clearShellActionIssue()
-        return
+      if (shellWireSend("spawn", trimmed)) {
+        clearShellActionIssue();
+        return;
       }
       await spawnViaShellHttp(trimmed, window.__DERP_SPAWN_URL, {
         desktop_id: effectiveLaunch.desktopId ?? undefined,
         app_name: effectiveLaunch.appName ?? undefined,
         session_restore: sessionRestore,
-      })
-      clearShellActionIssue()
+      });
+      clearShellActionIssue();
     } catch (error) {
-      const index = pendingNativeLaunches.findIndex((entry) => entry.windowRef === pendingWindowRef)
-      if (index >= 0) pendingNativeLaunches.splice(index, 1)
-      nativeLaunchMetadataByRef.delete(pendingWindowRef)
-      reportShellActionIssue(`Launch failed: ${describeError(error)}`)
+      const index = pendingNativeLaunches.findIndex(
+        (entry) => entry.windowRef === pendingWindowRef,
+      );
+      if (index >= 0) pendingNativeLaunches.splice(index, 1);
+      nativeLaunchMetadataByRef.delete(pendingWindowRef);
+      reportShellActionIssue(`Launch failed: ${describeError(error)}`);
     }
   }
 
   onMount(() => {
-    const disposeNotificationsApi = installShellNotificationsApi()
+    const disposeNotificationsApi = installShellNotificationsApi();
     const disposeAppRuntimeBootstrap = registerAppRuntimeBootstrap({
       startThemeDomSync,
       subscribeShellWindowState,
-      onShellWindowStateChanged: sessionPersistenceRuntime.bumpShellWindowStateRev,
+      onShellWindowStateChanged:
+        sessionPersistenceRuntime.bumpShellWindowStateRev,
       refreshThemeSettingsFromRemote,
       warmDesktopApps: () => desktopApps.warm(),
       warmDefaultApps: () => defaultApps.warm(),
       warmProgramsMenuItems: () => shellContextMenus.warmProgramsMenuItems(),
-      bootstrapSessionState: () => sessionPersistenceRuntime.bootstrapSessionState(),
+      bootstrapSessionState: () =>
+        sessionPersistenceRuntime.bootstrapSessionState(),
       disposeBackedShellWindowActions: () => backedShellWindowActions.dispose(),
       startShellTransportBridge,
       registerShellE2eBridge: {
@@ -1911,23 +2205,26 @@ function App() {
         getViewport: viewportCss,
         getPointerClient: pointerClient,
         getCompositorInteractionState: () => {
-          const state = compositorInteractionState()
-          if (!state) return null
+          const state = compositorInteractionState();
+          if (!state) return null;
           return {
             interaction_serial: state.interaction_serial,
             move_window_id: state.move_window_id,
             resize_window_id: state.resize_window_id,
             move_proxy_window_id: state.move_proxy_window_id,
             move_capture_window_id: state.move_capture_window_id,
-            window_switcher_selected_window_id: state.window_switcher_selected_window_id,
+            window_switcher_selected_window_id:
+              state.window_switcher_selected_window_id,
             move_rect: state.move_rect,
             resize_rect: state.resize_rect,
-          }
+          };
         },
         getOrigin: layoutCanvasOrigin,
         getCanvas: () => {
-          const logicalCanvas = layoutUnionBbox()
-          return logicalCanvas ? { w: logicalCanvas.w, h: logicalCanvas.h } : outputGeom()
+          const logicalCanvas = layoutUnionBbox();
+          return logicalCanvas
+            ? { w: logicalCanvas.w, h: logicalCanvas.h }
+            : outputGeom();
         },
         getWindows: windowsList,
         getWorkspaceGroups: workspaceGroups,
@@ -1939,21 +2236,22 @@ function App() {
         getCrosshairCursor: crosshairCursor,
         getProgramsMenuOpen: () =>
           shellContextMenus.programsMenuOpen() &&
-          !!document.querySelector('[data-shell-programs-menu-panel]'),
+          !!document.querySelector("[data-shell-programs-menu-panel]"),
         getPowerMenuOpen: shellContextMenus.powerMenuOpen,
         getVolumeMenuOpen: shellContextMenus.volumeMenuOpen,
         getTraySniMenuOpen: shellContextMenus.traySniMenuOpen,
         getDebugWindowVisible: debugHudFrameVisible,
         getSettingsWindowVisible: settingsHudFrameVisible,
         getSnapAssistPicker: shellWindowGestureRuntime.snapAssistPicker,
-        getActiveSnapPreviewCanvas: shellWindowGestureRuntime.getActiveSnapPreviewCanvas,
+        getActiveSnapPreviewCanvas:
+          shellWindowGestureRuntime.getActiveSnapPreviewCanvas,
         getActiveSnapState: () => ({
           zone: shellWindowGestureRuntime.getActiveSnapZone(),
           dragSuperHeld: shellWindowGestureRuntime.getDragSuperHeld(),
         }),
         getAssistOverlayHoverSpan: () => {
-          const overlay = shellWindowGestureRuntime.assistOverlay()
-          return overlay?.kind === 'assist' ? overlay.hoverSpan : null
+          const overlay = shellWindowGestureRuntime.assistOverlay();
+          return overlay?.kind === "assist" ? overlay.hoverSpan : null;
         },
         getProgramsMenuQuery: shellContextMenus.programsMenuProps.query,
         buildSessionSnapshot,
@@ -1961,14 +2259,18 @@ function App() {
         getNotificationsState: notificationsState,
         getFloatingLayers: floatingLayers.layers,
         getTabDragTarget: e2eTabDragTarget,
-        projectCurrentMenuElementRect: shellContextMenus.projectCurrentMenuElementRect,
-        isWorkspaceWindowPinned: (windowId: number) => isWorkspaceWindowPinned(workspaceSnapshot(), windowId),
+        projectCurrentMenuElementRect:
+          shellContextMenus.projectCurrentMenuElementRect,
+        isWorkspaceWindowPinned: (windowId: number) =>
+          isWorkspaceWindowPinned(workspaceSnapshot(), windowId),
         openShellTestWindow,
         resetTilingConfig: () => {
-          resetPersistedTilingConfig()
-          setTilingCfgRev((n) => n + 1)
-          bumpSnapChrome()
-          shellSharedStateSync.requestSharedStateSync({ exclusion: 'schedule' })
+          resetPersistedTilingConfig();
+          setTilingCfgRev((n) => n + 1);
+          bumpSnapChrome();
+          shellSharedStateSync.requestSharedStateSync({
+            exclusion: "schedule",
+          });
         },
         getMenuLayerHostEl: shellContextMenus.menuLayerHostEl,
       },
@@ -1985,12 +2287,14 @@ function App() {
         setNativeDragPreview,
         setNotificationsState,
         getNativeDragPreview: nativeDragPreview,
-        markHasSeenCompositorWindowSync: sessionPersistenceRuntime.markHasSeenCompositorWindowSync,
+        markHasSeenCompositorWindowSync:
+          sessionPersistenceRuntime.markHasSeenCompositorWindowSync,
         clearWindowSyncRecoveryPending: () => {
-          windowSyncRecoveryPending = false
+          windowSyncRecoveryPending = false;
         },
         scheduleExclusionZonesSync,
-        scheduleCompositorFollowup: workspaceLayoutBridge.scheduleCompositorFollowup,
+        scheduleCompositorFollowup:
+          workspaceLayoutBridge.scheduleCompositorFollowup,
         applyModelAuthoritativeSnapshotDetails,
         clearModelAuthoritativeSnapshotDomains,
         closeAllAtlasSelects,
@@ -2001,10 +2305,12 @@ function App() {
         shellWireSend,
         sendWindowIntent,
         requestCompositorSync,
-        openSettingsShellWindow: backedShellWindowActions.openSettingsShellWindow,
+        openSettingsShellWindow:
+          backedShellWindowActions.openSettingsShellWindow,
         cycleFocusedWorkspaceGroup,
         beginScreenshotMode,
-        toggleShellMaximizeForWindow: shellWindowGestureRuntime.toggleShellMaximizeForWindow,
+        toggleShellMaximizeForWindow:
+          shellWindowGestureRuntime.toggleShellMaximizeForWindow,
         spawnInCompositor: (cmd) => spawnInCompositor(cmd),
         focusedWindowId,
         allWindowsMap,
@@ -2014,13 +2320,16 @@ function App() {
         outputGeom,
         reserveTaskbarForMon: workspaceLayoutBridge.reserveTaskbarForMon,
         workspaceSnapshot,
-        occupiedSnapZonesOnMonitor: workspaceLayoutBridge.occupiedSnapZonesOnMonitor,
+        occupiedSnapZonesOnMonitor:
+          workspaceLayoutBridge.occupiedSnapZonesOnMonitor,
         sendSetMonitorTile: workspaceLayoutBridge.sendSetMonitorTile,
         bumpSnapChrome,
         sendSetPreTileGeometry: workspaceLayoutBridge.sendSetPreTileGeometry,
-        workspacePreTileSnapshot: workspaceLayoutBridge.workspacePreTileSnapshot,
+        workspacePreTileSnapshot:
+          workspaceLayoutBridge.workspacePreTileSnapshot,
         sendRemoveMonitorTile: workspaceLayoutBridge.sendRemoveMonitorTile,
-        sendClearPreTileGeometry: workspaceLayoutBridge.sendClearPreTileGeometry,
+        sendClearPreTileGeometry:
+          workspaceLayoutBridge.sendClearPreTileGeometry,
         fallbackMonitorKey: workspaceLayoutBridge.fallbackMonitorKey,
         requestWindowSyncRecovery,
       },
@@ -2036,30 +2345,30 @@ function App() {
       getMainRef: () => mainRef,
       onWindowBlur: ({ dragWindowId, resizeWindowId }) => {
         if (dragWindowId !== null) {
-          shellMoveLog('window_blur_while_shell_drag', {
+          shellMoveLog("window_blur_while_shell_drag", {
             windowId: dragWindowId,
-          })
+          });
         }
         if (resizeWindowId !== null) {
-          shellMoveLog('window_blur_while_shell_resize', {
+          shellMoveLog("window_blur_while_shell_resize", {
             windowId: resizeWindowId,
-          })
+          });
         }
-        workspaceChrome.cancelSplitGroupGesture()
-        if (screenshotMode()) stopScreenshotMode()
-        if (portalPickerVisible()) closePortalPickerUi()
+        workspaceChrome.cancelSplitGroupGesture();
+        if (screenshotMode()) stopScreenshotMode();
+        if (portalPickerVisible()) closePortalPickerUi();
       },
       requestSharedStateSync: shellSharedStateSync.requestSharedStateSync,
       shellWireSend,
-    })
+    });
     onCleanup(() => {
-      disposeNotificationsApi()
-      disposeAppRuntimeBootstrap()
-    })
-  })
+      disposeNotificationsApi();
+      disposeAppRuntimeBootstrap();
+    });
+  });
 
   function copyDebugHudSnapshot() {
-    const g = outputGeom()
+    const g = outputGeom();
     const payload = {
       t: Date.now(),
       shellBuild: shellBuildLabel,
@@ -2068,11 +2377,11 @@ function App() {
       outputGeom: g ? { w: g.w, h: g.h } : null,
       windowCount: windowsList().length,
       layoutUnion: layoutUnionBbox(),
-    }
-    const text = JSON.stringify(payload)
-    const clip = navigator.clipboard
-    if (clip && typeof clip.writeText === 'function') {
-      void clip.writeText(text)
+    };
+    const text = JSON.stringify(payload);
+    const clip = navigator.clipboard;
+    if (clip && typeof clip.writeText === "function") {
+      void clip.writeText(text);
     }
   }
 
@@ -2103,149 +2412,174 @@ function App() {
     outputPhysical,
     layoutCanvasOrigin,
     screenDraftRows: liveScreenRows,
-  }
+  };
 
   return (
     <ShellFloatingProvider value={shellFloatingRegistry}>
-    <ShellContextMenusProvider value={shellContextMenus}>
-    <main
-      data-shell-main
-      data-shell-repaint={snapChromeRev()}
-      classList={{
-        'relative block box-border overflow-hidden bg-transparent font-sans text-(--shell-text) m-0 min-h-screen pb-0':
-          true,
-        'cursor-crosshair': crosshairCursor(),
-      }}
-      style={{
-        width: `${canvasCss().w}px`,
-        'min-height': `${canvasCss().h}px`,
-      }}
-      ref={(el) => {
-        mainRef = el
-        shellSharedStateSync.requestSharedStateSync({ exclusion: 'schedule' })
-      }}
-      onPointerDown={() => debugHudRuntime.bumpRootPointerDowns()}
-      onContextMenu={(e) => {
-        e.preventDefault()
-      }}
-    >
-      <div
-        class="pointer-events-none fixed top-0 left-0 z-0 size-px"
-        style={{
-          opacity: 0.001,
-          background: snapChromeRev() % 2 === 0 ? '#000' : '#fff',
-        }}
-      />
-      <Show when={shellBridgeIssue()} keyed>
-        {(msg) => (
-          <div class="border border-(--shell-warning-border) bg-(--shell-warning-bg) text-(--shell-warning-text) pointer-events-none fixed top-3 left-1/2 z-470100 -translate-x-1/2 rounded-lg px-4 py-2 text-sm font-medium">
-            {msg}
-          </div>
-        )}
-      </Show>
-
-      <ShellNotificationLayer notificationsState={notificationsState} />
-
-      <For each={workspaceGroupIds()}>
-        {(groupId) => <workspaceChrome.WorkspaceGroupFrame groupId={groupId} />}
-      </For>
-
-      <For each={workspaceChrome.scratchpadWindowIds()}>
-        {(windowId) => <workspaceChrome.ScratchpadWindowFrame windowId={windowId} />}
-      </For>
-
-      <workspaceChrome.PersistentShellHostedContentHost />
-
-      <workspaceChrome.TabDragOverlay />
-      <workspaceChrome.WindowDragDropOverlay />
-      <workspaceChrome.ExternalTabDropOverlay />
-
-      <Show when={workspaceChrome.splitGroupGesture()}>
-        <workspaceChrome.SplitGestureOverlay />
-      </Show>
-
-      <Show when={windowInteractionCapture()} keyed>
-        {(capture) => (
+      <ShellContextMenusProvider value={shellContextMenus}>
+        <main
+          data-shell-main
+          data-shell-repaint={snapChromeRev()}
+          classList={{
+            "relative block box-border overflow-hidden bg-transparent font-sans text-(--shell-text) m-0 min-h-screen pb-0": true,
+            "cursor-crosshair": crosshairCursor(),
+          }}
+          style={{
+            width: `${canvasCss().w}px`,
+            "min-height": `${canvasCss().h}px`,
+          }}
+          ref={(el) => {
+            mainRef = el;
+            shellSharedStateSync.requestSharedStateSync({
+              exclusion: "schedule",
+            });
+          }}
+          onPointerDown={() => debugHudRuntime.bumpRootPointerDowns()}
+          onContextMenu={(e) => {
+            e.preventDefault();
+          }}
+        >
           <div
-            data-window-interaction-capture
-            class={`fixed inset-0 z-[2000000] touch-none ${capture.cursor}`}
-            onContextMenu={(event) => {
-              event.preventDefault()
+            class="pointer-events-none fixed top-0 left-0 z-0 size-px"
+            style={{
+              opacity: 0.001,
+              background: snapChromeRev() % 2 === 0 ? "#000" : "#fff",
             }}
           />
-        )}
-      </Show>
-
-      {volumeOverlayHud()}
-
-      <Show when={screenshotMode()}>
-        <ScreenshotOverlay />
-      </Show>
-
-      <Show when={portalPickerVisible()}>
-        <PortalPickerOverlay />
-      </Show>
-
-      <CustomLayoutOverlay
-        state={customLayoutOverlay}
-        close={closeCustomLayoutOverlay}
-        saveLayouts={(outputName, layouts, selectedLayoutId) => {
-          setMonitorCustomLayouts(outputName, layouts)
-          const selectedLayout = selectedLayoutId ? layouts.find((layout) => layout.id === selectedLayoutId) : null
-          if (selectedLayout) setMonitorSnapLayout(outputName, { kind: 'custom', layoutId: selectedLayout.id })
-          setTilingCfgRev((n) => n + 1)
-          bumpSnapChrome()
-          shellSharedStateSync.requestSharedStateSync({ exclusion: 'schedule' })
-        }}
-        getMenuLayerHostEl={shellContextMenus.menuLayerHostEl}
-        getMainEl={() => mainRef}
-        acquireOverlayPointer={acquireOverlayPointer}
-        releaseOverlayPointer={releaseOverlayPointer}
-        outputGeom={outputGeom}
-        layoutCanvasOrigin={layoutCanvasOrigin}
-        screenDraftRows={liveScreenRows}
-        reserveTaskbarForMon={(screen) => workspaceLayoutBridge.reserveTaskbarForMon(screen)}
-        scheduleExclusionZonesSync={scheduleExclusionZonesSync}
-      />
-
-      <shellWindowGestureRuntime.SnapAssistPickerLayer />
-
-      <shellSurfaceRuntime.ShellSurfaceLayer />
-
-      <ShellContextMenuLayer
-        ctxMenuOpen={shellContextMenus.ctxMenuOpen}
-        chromeOverlayPointerUsers={chromeOverlayPointerUsers}
-        setMenuLayerHostRef={shellContextMenus.setMenuLayerHostRef}
-        taskbarPortalMenusOpen={() =>
-          shellContextMenus.programsMenuOpen() ||
-          shellContextMenus.powerMenuOpen() ||
-          shellContextMenus.volumeMenuOpen()
-        }
-        tabMenuOpen={shellContextMenus.tabMenuOpen}
-        traySniMenuOpen={shellContextMenus.traySniMenuOpen}
-        tabMenuProps={shellContextMenus.tabMenuProps}
-        traySniMenuProps={shellContextMenus.traySniMenuProps}
-      />
-
-      <Show when={shellContextMenus.windowSwitcherOpen() && shellContextMenus.menuLayerHostEl()} keyed>
-        {(host) => (
-          <DropdownMenu open={shellContextMenus.windowSwitcherOpen()}>
-            <DropdownMenuPortal mount={host}>
-              <div class="pointer-events-none">
-                <WindowSwitcherContextMenu />
+          <Show when={shellBridgeIssue()} keyed>
+            {(msg) => (
+              <div class="border border-(--shell-warning-border) bg-(--shell-warning-bg) text-(--shell-warning-text) pointer-events-none fixed top-3 left-1/2 z-470100 -translate-x-1/2 rounded-lg px-4 py-2 text-sm font-medium">
+                {msg}
               </div>
-            </DropdownMenuPortal>
-          </DropdownMenu>
-        )}
-      </Show>
+            )}
+          </Show>
 
-      <div class="pointer-events-none fixed inset-0 z-50" aria-hidden="true">
-        {crosshairDebugOverlay()}
-      </div>
-    </main>
-    </ShellContextMenusProvider>
+          <ShellNotificationLayer notificationsState={notificationsState} />
+
+          <For each={workspaceGroupIds()}>
+            {(groupId) => (
+              <workspaceChrome.WorkspaceGroupFrame groupId={groupId} />
+            )}
+          </For>
+
+          <For each={workspaceChrome.scratchpadWindowIds()}>
+            {(windowId) => (
+              <workspaceChrome.ScratchpadWindowFrame windowId={windowId} />
+            )}
+          </For>
+
+          <workspaceChrome.PersistentShellHostedContentHost />
+
+          <workspaceChrome.TabDragOverlay />
+          <workspaceChrome.WindowDragDropOverlay />
+          <workspaceChrome.ExternalTabDropOverlay />
+
+          <Show when={workspaceChrome.splitGroupGesture()}>
+            <workspaceChrome.SplitGestureOverlay />
+          </Show>
+
+          <Show when={windowInteractionCapture()} keyed>
+            {(capture) => (
+              <div
+                data-window-interaction-capture
+                class={`fixed inset-0 z-[2000000] touch-none ${capture.cursor}`}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                }}
+              />
+            )}
+          </Show>
+
+          {volumeOverlayHud()}
+
+          <Show when={screenshotMode()}>
+            <ScreenshotOverlay />
+          </Show>
+
+          <Show when={portalPickerVisible()}>
+            <PortalPickerOverlay />
+          </Show>
+
+          <CustomLayoutOverlay
+            state={customLayoutOverlay}
+            close={closeCustomLayoutOverlay}
+            saveLayouts={(outputName, layouts, selectedLayoutId) => {
+              const selectedLayout = selectedLayoutId
+                ? layouts.find((layout) => layout.id === selectedLayoutId)
+                : null;
+              setMonitorCustomLayouts(
+                outputName,
+                layouts,
+                selectedLayout
+                  ? { kind: "custom", layoutId: selectedLayout.id }
+                  : null,
+              );
+              setTilingCfgRev((n) => n + 1);
+              bumpSnapChrome();
+              shellSharedStateSync.requestSharedStateSync({
+                exclusion: "schedule",
+              });
+            }}
+            getMenuLayerHostEl={shellContextMenus.menuLayerHostEl}
+            getMainEl={() => mainRef}
+            acquireOverlayPointer={acquireOverlayPointer}
+            releaseOverlayPointer={releaseOverlayPointer}
+            outputGeom={outputGeom}
+            layoutCanvasOrigin={layoutCanvasOrigin}
+            screenDraftRows={liveScreenRows}
+            reserveTaskbarForMon={(screen) =>
+              workspaceLayoutBridge.reserveTaskbarForMon(screen)
+            }
+            scheduleExclusionZonesSync={scheduleExclusionZonesSync}
+          />
+
+          <shellWindowGestureRuntime.SnapAssistPickerLayer />
+
+          <shellSurfaceRuntime.ShellSurfaceLayer />
+
+          <ShellContextMenuLayer
+            ctxMenuOpen={shellContextMenus.ctxMenuOpen}
+            chromeOverlayPointerUsers={chromeOverlayPointerUsers}
+            setMenuLayerHostRef={shellContextMenus.setMenuLayerHostRef}
+            taskbarPortalMenusOpen={() =>
+              shellContextMenus.programsMenuOpen() ||
+              shellContextMenus.powerMenuOpen() ||
+              shellContextMenus.volumeMenuOpen()
+            }
+            tabMenuOpen={shellContextMenus.tabMenuOpen}
+            traySniMenuOpen={shellContextMenus.traySniMenuOpen}
+            tabMenuProps={shellContextMenus.tabMenuProps}
+            traySniMenuProps={shellContextMenus.traySniMenuProps}
+          />
+
+          <Show
+            when={
+              shellContextMenus.windowSwitcherOpen() &&
+              shellContextMenus.menuLayerHostEl()
+            }
+            keyed
+          >
+            {(host) => (
+              <DropdownMenu open={shellContextMenus.windowSwitcherOpen()}>
+                <DropdownMenuPortal mount={host}>
+                  <div class="pointer-events-none">
+                    <WindowSwitcherContextMenu />
+                  </div>
+                </DropdownMenuPortal>
+              </DropdownMenu>
+            )}
+          </Show>
+
+          <div
+            class="pointer-events-none fixed inset-0 z-50"
+            aria-hidden="true"
+          >
+            {crosshairDebugOverlay()}
+          </div>
+        </main>
+      </ShellContextMenusProvider>
     </ShellFloatingProvider>
-  )
+  );
 }
 
-export default App
+export default App;

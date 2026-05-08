@@ -116,7 +116,8 @@ impl WindowManagementState {
             return;
         }
         let before = self.shell_window_stack_order.clone();
-        self.shell_window_stack_order.retain(|wid| *wid != window_id);
+        self.shell_window_stack_order
+            .retain(|wid| *wid != window_id);
         self.shell_window_stack_order.push(window_id);
         if self.shell_window_stack_order != before {
             self.next_shell_window_stack_revision();
@@ -125,7 +126,8 @@ impl WindowManagementState {
 
     pub(crate) fn shell_window_stack_forget(&mut self, window_id: u32) {
         let before_len = self.shell_window_stack_order.len();
-        self.shell_window_stack_order.retain(|wid| *wid != window_id);
+        self.shell_window_stack_order
+            .retain(|wid| *wid != window_id);
         if self.shell_window_stack_order.len() != before_len {
             self.next_shell_window_stack_revision();
         }
@@ -303,9 +305,10 @@ impl WindowManagementState {
 
     pub(crate) fn derp_elem_window_id(&self, elem: &DerpSpaceElem) -> Option<u32> {
         match elem {
-            DerpSpaceElem::Wayland(w) => w
-                .toplevel()
-                .and_then(|t| self.window_registry.window_id_for_wl_surface(t.wl_surface())),
+            DerpSpaceElem::Wayland(w) => w.toplevel().and_then(|t| {
+                self.window_registry
+                    .window_id_for_wl_surface(t.wl_surface())
+            }),
             DerpSpaceElem::X11(x) => x
                 .wl_surface()
                 .as_ref()
@@ -358,11 +361,16 @@ impl WindowManagementState {
         space: &Space<DerpSpaceElem>,
         surface_id: u32,
     ) -> Option<Window> {
-        let window_id = self.window_registry.window_id_for_shell_surface(surface_id)?;
+        let window_id = self
+            .window_registry
+            .window_id_for_shell_surface(surface_id)?;
         space.elements().find_map(|e| {
             if let DerpSpaceElem::Wayland(w) = e {
                 w.toplevel()
-                    .and_then(|t| self.window_registry.window_id_for_wl_surface(t.wl_surface()))
+                    .and_then(|t| {
+                        self.window_registry
+                            .window_id_for_wl_surface(t.wl_surface())
+                    })
                     .filter(|&id| id == window_id)
                     .map(|_| w.clone())
             } else {
@@ -381,7 +389,9 @@ impl WindowManagementState {
         space: &Space<DerpSpaceElem>,
         surface_id: u32,
     ) -> Option<X11Surface> {
-        let window_id = self.window_registry.window_id_for_shell_surface(surface_id)?;
+        let window_id = self
+            .window_registry
+            .window_id_for_shell_surface(surface_id)?;
         self.find_x11_window_by_window_id(space, window_id)
     }
 
@@ -421,8 +431,8 @@ impl WindowManagementState {
         let (title, app_id) = Self::x11_window_title_app_id(window);
         let geometry = window.geometry();
         let pid = window.pid().and_then(|pid| i32::try_from(pid).ok());
-        let compositor_minimized = self.window_registry.lifecycle(window_id)
-            == Some(WindowLifecycle::Minimized);
+        let compositor_minimized =
+            self.window_registry.lifecycle(window_id) == Some(WindowLifecycle::Minimized);
         let minimized = compositor_minimized || (window.is_hidden() && prev.minimized);
         let skip_x11_geometry = compositor_minimized && !in_space;
         let width = geometry.size.w.max(1);
@@ -474,7 +484,8 @@ impl WindowManagementState {
     pub(crate) fn clear_toplevel_layout_maps(&mut self, window_id: u32) {
         self.toplevel_floating_restore.remove(&window_id);
         self.toplevel_fullscreen_return_maximized.remove(&window_id);
-        self.shell_pending_native_configure_frames.remove(&window_id);
+        self.shell_pending_native_configure_frames
+            .remove(&window_id);
     }
 
     pub(crate) fn toplevel_rect_snapshot(

@@ -6,11 +6,11 @@ use smithay::desktop::space::SpaceElement;
 use smithay::{
     backend::{
         input::{
-            AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputEvent, KeyState,
+            AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event,
             GestureBeginEvent as BackendGestureBeginEvent,
             GestureEndEvent as BackendGestureEndEvent,
             GesturePinchUpdateEvent as BackendGesturePinchUpdateEvent,
-            GestureSwipeUpdateEvent as BackendGestureSwipeUpdateEvent,
+            GestureSwipeUpdateEvent as BackendGestureSwipeUpdateEvent, InputEvent, KeyState,
             KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, TouchEvent,
         },
         session::Session,
@@ -141,7 +141,13 @@ impl CompositorState {
             return;
         }
         let pointer = self.input_routing.seat.get_pointer().unwrap();
-        pointer.gesture_swipe_update(self, &GestureSwipeUpdateEvent { time: time_msec, delta });
+        pointer.gesture_swipe_update(
+            self,
+            &GestureSwipeUpdateEvent {
+                time: time_msec,
+                delta,
+            },
+        );
         pointer.frame(self);
     }
 
@@ -430,7 +436,9 @@ impl CompositorState {
         let dx = (pos.x - prev.x).round() as i32;
         let dy = (pos.y - prev.y).round() as i32;
         if dx != 0 || dy != 0 {
-            if self.input_routing.shell_move_window_id.is_none() && !self.shell_ui_pointer_grab_active() {
+            if self.input_routing.shell_move_window_id.is_none()
+                && !self.shell_ui_pointer_grab_active()
+            {
                 if let Some((window_id, start)) = self.input_routing.shell_backed_move_candidate {
                     let travel = ((pos.x - start.x).powi(2) + (pos.y - start.y).powi(2)).sqrt();
                     if travel >= 8.0 {
@@ -457,7 +465,8 @@ impl CompositorState {
         if dx != 0 || dy != 0 {
             if self.shell_move_is_active() && self.shell_move_accepts_pointer_delta() {
                 self.shell_move_delta(dx, dy);
-            } else if self.input_routing.shell_move_deferred.is_some() && self.shell_move_accepts_pointer_delta()
+            } else if self.input_routing.shell_move_deferred.is_some()
+                && self.shell_move_accepts_pointer_delta()
             {
                 self.shell_move_deferred_accumulate_delta(dx, dy);
             }
@@ -519,7 +528,12 @@ impl CompositorState {
         if let Ok(override_name) = std::env::var("DERP_TOUCH_OUTPUT") {
             let override_name = override_name.trim();
             if !override_name.is_empty() {
-                if let Some(out) = self.output_topology.space.outputs().find(|o| o.name() == override_name) {
+                if let Some(out) = self
+                    .output_topology
+                    .space
+                    .outputs()
+                    .find(|o| o.name() == override_name)
+                {
                     return self.output_topology.space.output_geometry(out);
                 }
                 tracing::warn!(
@@ -533,13 +547,20 @@ impl CompositorState {
             if let Some(out) = self.output_topology.space.outputs().find(|o| o.name() == n) {
                 return self.output_topology.space.output_geometry(out);
             }
-            if let Some(out) = self.output_topology.space
+            if let Some(out) = self
+                .output_topology
+                .space
                 .outputs()
                 .find(|o| o.name().eq_ignore_ascii_case(&n))
             {
                 return self.output_topology.space.output_geometry(out);
             }
-            let names: Vec<String> = self.output_topology.space.outputs().map(|o| o.name()).collect();
+            let names: Vec<String> = self
+                .output_topology
+                .space
+                .outputs()
+                .map(|o| o.name())
+                .collect();
             tracing::warn!(
                 target: "derp_input",
                 libinput_output = %n,
@@ -625,7 +646,9 @@ impl CompositorState {
             self.shell_dismiss_context_menu_from_compositor();
             route_cef = self.shell_pointer_should_ipc_to_cef(pos);
         }
-        let norm = self.input_routing.shell_pointer_norm
+        let norm = self
+            .input_routing
+            .shell_pointer_norm
             .or_else(|| self.shell_pointer_norm_from_global(pos));
         const BTN_LEFT: u32 = 0x110;
 
@@ -791,7 +814,9 @@ impl CompositorState {
                 }
                 match elem {
                     DerpSpaceElem::Wayland(window) => {
-                        let window_id = self.windows.window_registry
+                        let window_id = self
+                            .windows
+                            .window_registry
                             .window_id_for_wl_surface(window.toplevel().unwrap().wl_surface());
                         self.output_topology.space.elements().for_each(|e| {
                             e.set_activate(false);
@@ -800,7 +825,8 @@ impl CompositorState {
                             }
                         });
                         let _ = window.set_activated(true);
-                        self.output_topology.space
+                        self.output_topology
+                            .space
                             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
                         keyboard.set_focus(
                             self,
@@ -828,7 +854,8 @@ impl CompositorState {
                                         w.toplevel().unwrap().send_pending_configure();
                                     }
                                 });
-                                self.output_topology.space
+                                self.output_topology
+                                    .space
                                     .raise_element(&DerpSpaceElem::X11(x11.clone()), true);
                                 x11.set_activate(true);
                                 keyboard.set_focus(self, Some(surf), serial);
@@ -915,9 +942,10 @@ impl CompositorState {
                         }
                         if key_state == KeyState::Pressed {
                             if mods.ctrl && mods.alt {
-                                if let (Some(vt), Some(ref mut sess)) =
-                                    (vt_number_from_fkey(raw_sym), state.session_services.vt_session.as_mut())
-                                {
+                                if let (Some(vt), Some(ref mut sess)) = (
+                                    vt_number_from_fkey(raw_sym),
+                                    state.session_services.vt_session.as_mut(),
+                                ) {
                                     if let Err(e) = sess.change_vt(vt) {
                                         tracing::warn!(?e, vt, "VT switch (Ctrl+Alt+F) failed");
                                     }
@@ -962,7 +990,8 @@ impl CompositorState {
                             return FilterResult::Intercept(());
                         }
                         if key_state == KeyState::Pressed {
-                            if is_super && !state.input_routing.seat.keyboard_shortcuts_inhibited() {
+                            if is_super && !state.input_routing.seat.keyboard_shortcuts_inhibited()
+                            {
                                 state.programs_menu_prepare_super_press();
                                 return FilterResult::Intercept(());
                             }
@@ -1239,7 +1268,12 @@ impl CompositorState {
                 }
                 tracing::debug!(target: "derp_input", slot = ?event.slot(), "TouchUp");
                 let time = Event::time_msec(&event);
-                let pos = self.input_routing.seat.get_pointer().unwrap().current_location();
+                let pos = self
+                    .input_routing
+                    .seat
+                    .get_pointer()
+                    .unwrap()
+                    .current_location();
                 if self.input_routing.touch_routes_to_cef {
                     if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
@@ -1274,7 +1308,12 @@ impl CompositorState {
                 }
                 tracing::debug!(target: "derp_input", slot = ?event.slot(), "TouchCancel");
                 let time = Event::time_msec(&event);
-                let pos = self.input_routing.seat.get_pointer().unwrap().current_location();
+                let pos = self
+                    .input_routing
+                    .seat
+                    .get_pointer()
+                    .unwrap()
+                    .current_location();
                 if self.input_routing.touch_routes_to_cef {
                     if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());

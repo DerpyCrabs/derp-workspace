@@ -405,7 +405,9 @@ pub(crate) fn shell_move_proxy_layers(state: &CompositorState) -> Vec<ShellMoveP
     if proxy.texture.is_none() {
         return Vec::new();
     }
-    if state.input_routing.shell_move_window_id != Some(proxy.window_id) && proxy.release_state.is_none() {
+    if state.input_routing.shell_move_window_id != Some(proxy.window_id)
+        && proxy.release_state.is_none()
+    {
         return Vec::new();
     }
     let Some(source_global_rect) = proxy.source_global_rect else {
@@ -426,7 +428,11 @@ pub(crate) fn shell_move_proxy_layers(state: &CompositorState) -> Vec<ShellMoveP
         texture_global_rect,
         target_global_rect,
     );
-    if state.windows.window_registry.is_shell_hosted(proxy.window_id) {
+    if state
+        .windows
+        .window_registry
+        .is_shell_hosted(proxy.window_id)
+    {
         return vec![ShellMoveProxyLayer {
             target_global_rect: texture_target_global_rect,
             buffer_origin: Point::from((0, 0)),
@@ -772,7 +778,9 @@ pub fn compositor_shell_render_elements(
     render.move_proxy = build_shell_move_proxy_elements(state, renderer, output);
 
     if state.shell_osr.shell_has_frame {
-        if let (Some(output_geo), Some((buf_w, buf_h))) = (output_geo, state.shell_osr.shell_view_px) {
+        if let (Some(output_geo), Some((buf_w, buf_h))) =
+            (output_geo, state.shell_osr.shell_view_px)
+        {
             let key = ShellMainCacheKey {
                 output_geo,
                 output_scale_bits: output_scale.to_bits(),
@@ -780,8 +788,11 @@ pub fn compositor_shell_render_elements(
                 canvas_size: state.output_topology.shell_canvas_logical_size,
                 view_px: (buf_w, buf_h),
             };
-            let (element, force_full_damage) =
-                cache_shell_element(&mut cache.main, key, state.shell_osr.shell_dmabuf_commit, || {
+            let (element, force_full_damage) = cache_shell_element(
+                &mut cache.main,
+                key,
+                state.shell_osr.shell_dmabuf_commit,
+                || {
                     if !state.shell_osr.shell_frame_is_dmabuf {
                         return build_main_shell_memory_element(
                             state, renderer, output_geo, output, buf_w, buf_h,
@@ -790,7 +801,8 @@ pub fn compositor_shell_render_elements(
                     build_main_shell_dmabuf_element(
                         state, renderer, output_geo, output, buf_w, buf_h,
                     )
-                })?;
+                },
+            )?;
             render.dmabuf = element;
             render.force_full_damage |= force_full_damage;
         } else if cache

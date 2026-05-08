@@ -234,8 +234,12 @@ fn recreate_fixture_tree() -> Result<FileBrowserFixturePaths, String> {
     }
     let mount_root = generated_mount_root()?;
     if mount_root.exists() {
-        fs::remove_dir_all(&mount_root)
-            .map_err(|e| format!("remove existing mount fixture root {}: {e}", mount_root.display()))?;
+        fs::remove_dir_all(&mount_root).map_err(|e| {
+            format!(
+                "remove existing mount fixture root {}: {e}",
+                mount_root.display()
+            )
+        })?;
     }
     fs::create_dir_all(&mount_root)
         .map_err(|e| format!("create mount fixture root {}: {e}", mount_root.display()))?;

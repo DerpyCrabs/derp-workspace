@@ -44,11 +44,14 @@ impl CompositorState {
     }
 
     fn xdg_activation_serial_is_current(&self, serial: Serial) -> bool {
-        self.input_routing.seat
+        self.input_routing
+            .seat
             .get_keyboard()
             .and_then(|keyboard| keyboard.last_enter())
             .is_some_and(|last_enter| serial.is_no_older_than(&last_enter))
-            || self.input_routing.seat
+            || self
+                .input_routing
+                .seat
                 .get_pointer()
                 .and_then(|pointer| pointer.last_enter())
                 .is_some_and(|last_enter| serial.is_no_older_than(&last_enter))
@@ -56,14 +59,16 @@ impl CompositorState {
 
     fn xdg_activation_surface_matches_keyboard_focus(&self, surface: &WlSurface) -> bool {
         let root = self.pointer_constraint_root_surface(surface);
-        self.input_routing.seat
+        self.input_routing
+            .seat
             .get_keyboard()
             .and_then(|keyboard| keyboard.current_focus())
             .is_some_and(|focus| self.pointer_constraint_root_surface(&focus) == root)
     }
 
     fn xdg_activation_window_id_for_surface(&self, surface: &WlSurface) -> Option<u32> {
-        self.windows.window_registry
+        self.windows
+            .window_registry
             .window_id_for_wl_surface(surface)
             .or_else(|| {
                 let root = self.pointer_constraint_root_surface(surface);
@@ -78,7 +83,10 @@ impl CompositorState {
         let Some(surface) = data.surface.as_ref() else {
             return false;
         };
-        if surface.client().is_none_or(|client| client.id() != *client_id) {
+        if surface
+            .client()
+            .is_none_or(|client| client.id() != *client_id)
+        {
             return false;
         }
         self.xdg_activation_surface_matches_keyboard_focus(surface)
@@ -93,7 +101,11 @@ impl CompositorState {
             return false;
         }
         if data.client_id.is_some() {
-            if let Some(app_id) = data.app_id.as_ref().filter(|app_id| !app_id.trim().is_empty()) {
+            if let Some(app_id) = data
+                .app_id
+                .as_ref()
+                .filter(|app_id| !app_id.trim().is_empty())
+            {
                 if target.app_id != *app_id {
                     return false;
                 }
@@ -116,13 +128,17 @@ impl CompositorState {
     ) -> Option<Point<f64, Logical>> {
         let root = self.pointer_constraint_root_surface(surface);
         if let Some(window) = self.wayland_window_containing_surface(&root) {
-            let map_loc = self.output_topology.space
+            let map_loc = self
+                .output_topology
+                .space
                 .element_location(&crate::DerpSpaceElem::Wayland(window.clone()))?;
             let render_loc = map_loc - window.geometry().loc;
             return Some(render_loc.to_f64());
         }
         if let Some(x11) = self.x11_window_containing_surface(&root) {
-            let map_loc = self.output_topology.space
+            let map_loc = self
+                .output_topology
+                .space
                 .element_location(&crate::DerpSpaceElem::X11(x11.clone()))?;
             let render_loc = map_loc - x11.geometry().loc;
             return Some(render_loc.to_f64());
@@ -158,7 +174,11 @@ impl CompositorState {
     }
 
     pub(crate) fn xdg_toplevel_icon_sync_committed(&mut self, surface: &WlSurface) {
-        let Some(window_id) = self.windows.window_registry.window_id_for_wl_surface(surface) else {
+        let Some(window_id) = self
+            .windows
+            .window_registry
+            .window_id_for_wl_surface(surface)
+        else {
             return;
         };
         let icon = smithay::wayland::compositor::with_states(surface, |states| {
@@ -168,11 +188,11 @@ impl CompositorState {
                 .buffers()
                 .iter()
                 .filter_map(|(buffer, scale)| {
-                    let data = smithay::wayland::shm::with_buffer_contents(
-                        buffer,
-                        |_ptr, _len, data| data,
-                    )
-                    .ok()?;
+                    let data =
+                        smithay::wayland::shm::with_buffer_contents(buffer, |_ptr, _len, data| {
+                            data
+                        })
+                        .ok()?;
                     Some(WindowIconBufferInfo {
                         width: data.width,
                         height: data.height,
@@ -217,14 +237,17 @@ impl SeatHandler for CompositorState {
 
         self.keyboard_on_focus_surface_changed(focused);
 
-        let window_id = focused.and_then(|s| self.windows.window_registry.window_id_for_wl_surface(s));
+        let window_id =
+            focused.and_then(|s| self.windows.window_registry.window_id_for_wl_surface(s));
         if let Some(wid) = window_id {
             if let Some(sid) = self.windows.window_registry.surface_id_for_window(wid) {
                 if let Some(window) = self.find_window_by_surface_id(sid) {
-                    self.output_topology.space
+                    self.output_topology
+                        .space
                         .raise_element(&crate::derp_space::DerpSpaceElem::Wayland(window), true);
                 } else if let Some(x11) = self.find_x11_window_by_surface_id(sid) {
-                    self.output_topology.space
+                    self.output_topology
+                        .space
                         .raise_element(&crate::derp_space::DerpSpaceElem::X11(x11), true);
                 }
             }
@@ -235,7 +258,8 @@ impl SeatHandler for CompositorState {
                 }
             }
         }
-        let surface_id = window_id.and_then(|w| self.windows.window_registry.surface_id_for_window(w));
+        let surface_id =
+            window_id.and_then(|w| self.windows.window_registry.surface_id_for_window(w));
         self.shell_emit_chrome_event(ChromeEvent::FocusChanged {
             surface_id,
             window_id,
@@ -297,7 +321,11 @@ impl XdgActivationHandler for CompositorState {
             return;
         }
         if info.minimized {
-            if self.workspace_layout.scratchpad_windows.contains_key(&window_id) {
+            if self
+                .workspace_layout
+                .scratchpad_windows
+                .contains_key(&window_id)
+            {
                 self.xdg_activation_state.remove_token(&token);
                 return;
             }
@@ -341,7 +369,10 @@ impl PointerConstraintsHandler for CompositorState {
         let pointer_root_window_id = pointer_root
             .as_ref()
             .and_then(|focus| self.windows.window_registry.window_id_for_wl_surface(focus));
-        let surface_window_id = self.windows.window_registry.window_id_for_wl_surface(surface);
+        let surface_window_id = self
+            .windows
+            .window_registry
+            .window_id_for_wl_surface(surface);
         let Some(current_focus) = pointer_root else {
             return;
         };

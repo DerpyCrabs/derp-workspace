@@ -107,4 +107,3 @@ smithay::delegate_fifo!(crate::CompositorState);
 smithay::delegate_presentation!(crate::CompositorState);
 smithay::delegate_content_type!(crate::CompositorState);
 crate::delegate_tearing_control!(crate::CompositorState);
-

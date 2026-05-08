@@ -214,9 +214,7 @@ where
                     let hint = match hint {
                         smithay::reexports::wayland_server::WEnum::Value(
                             wp_tearing_control_v1::PresentationHint::Async,
-                        ) => {
-                            TearingPresentationHint::Async
-                        }
+                        ) => TearingPresentationHint::Async,
                         _ => TearingPresentationHint::Vsync,
                     };
                     with_states(&surface, |states| {

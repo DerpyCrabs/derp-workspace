@@ -2,7 +2,6 @@ import { backedShellWindowKind } from '@/features/shell-ui/backedShellWindows'
 import { shellHostedKindUsesCompositorSessionCapture } from '@/features/shell-ui/shellHostedAppsRegistry'
 import { captureShellWindowState, primeShellWindowState } from '@/features/shell-ui/shellWindowState'
 import { monitorWorkAreaGlobal, tiledFrameRectToClientRect } from '@/features/tiling/tileSnap'
-import { loadTilingConfig } from '@/features/tiling/tilingConfig'
 import type { WorkspaceSnapshot } from '@/features/workspace/workspaceSnapshot'
 import type { WorkspaceMutation } from '@/features/workspace/workspaceProtocol'
 import type { DerpWindow } from '@/host/appWindowState'
@@ -346,12 +345,13 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
     }
     if (
       !options.sendWorkspaceMutation({
-        type: 'restore_session_workspace',
-        groups,
-        pinnedWindowIds,
-        monitorTiles,
-        preTileGeometry,
-        nextGroupSeq: snapshot.workspace.nextGroupSeq,
+      type: 'restore_session_workspace',
+      groups,
+      pinnedWindowIds,
+      monitorLayouts: snapshot.monitorLayouts,
+      monitorTiles,
+      preTileGeometry,
+      nextGroupSeq: snapshot.workspace.nextGroupSeq,
       })
     ) {
       return
@@ -376,6 +376,7 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
       snapshot.shellWindows.length > 0 ||
       snapshot.nativeWindows.length > 0 ||
       snapshot.workspace.groups.length > 0 ||
+      snapshot.monitorLayouts.length > 0 ||
       snapshot.monitorTiles.length > 0 ||
       snapshot.preTileGeometry.length > 0
     )
@@ -479,7 +480,7 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
           .filter((windowRef): windowRef is SessionWindowRef => windowRef !== null),
         nextGroupSeq: workspace.nextGroupSeq,
       },
-      tilingConfig: loadTilingConfig(),
+      monitorLayouts: workspace.monitorLayouts,
       monitorTiles: workspace.monitorTiles.map((monitor) => ({
         outputId: monitor.outputId,
         outputName: monitor.outputName,

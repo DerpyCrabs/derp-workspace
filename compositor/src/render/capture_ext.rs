@@ -303,7 +303,9 @@ impl CompositorState {
         key: &CaptureSourceKey,
     ) -> Option<CaptureSourceDescriptor> {
         match key {
-            CaptureSourceKey::Output(output_name) => self.output_topology.space
+            CaptureSourceKey::Output(output_name) => self
+                .output_topology
+                .space
                 .outputs()
                 .find(|output| output.name() == *output_name)
                 .and_then(|output| self.capture_output_source(output)),
@@ -324,7 +326,9 @@ impl CompositorState {
                 source,
             }),
             CaptureSourceKey::Window(window_id) => {
-                let output = self.output_topology.space
+                let output = self
+                    .output_topology
+                    .space
                     .outputs()
                     .find(|output| output.name() == source.output_name)?;
                 let output_source = self.capture_output_source(output)?;
@@ -501,7 +505,9 @@ fn render_window_output_texture(
     ),
     String,
 > {
-    let output = state.output_topology.space
+    let output = state
+        .output_topology
+        .space
         .outputs()
         .find(|output| output.name() == output_name)
         .ok_or_else(|| "capture output is no longer available".to_string())?;
@@ -747,18 +753,24 @@ fn render_window_preview_image_direct(
     let source = state
         .capture_window_source_descriptor(window_id)
         .ok_or_else(|| format!("missing capture source for window {window_id}"))?;
-    let output = state.output_topology.space
+    let output = state
+        .output_topology
+        .space
         .outputs()
         .find(|output| output.name() == source.output_name)
         .ok_or_else(|| "capture output is no longer available".to_string())?;
     let render_scale = output.current_scale().fractional_scale();
     let scale = Scale::from(render_scale);
-    let elem = state.output_topology.space
+    let elem = state
+        .output_topology
+        .space
         .elements()
         .find(|elem| state.derp_elem_window_id(elem) == Some(window_id))
         .cloned()
         .ok_or_else(|| "capture window is no longer mapped".to_string())?;
-    let map_loc = state.output_topology.space
+    let map_loc = state
+        .output_topology
+        .space
         .element_location(&elem)
         .ok_or_else(|| "capture window location is unavailable".to_string())?;
     let render_origin = map_loc - elem.geometry().loc;
@@ -1173,7 +1185,9 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ImageCopyCaptureFrameState, Compositor
                             return;
                         }
                     };
-                state.capture.pending_image_copy_captures
+                state
+                    .capture
+                    .pending_image_copy_captures
                     .push(PendingImageCopyCapture {
                         frame: resource.clone(),
                         session: data.session.clone(),

@@ -173,7 +173,11 @@ impl CompositorState {
             return;
         };
         let shell_flags = shell_wire::SHELL_WINDOW_FLAG_SHELL_HOSTED
-            | if self.workspace_layout.scratchpad_windows.contains_key(&loc.window_id) {
+            | if self
+                .workspace_layout
+                .scratchpad_windows
+                .contains_key(&loc.window_id)
+            {
                 shell_wire::SHELL_WINDOW_FLAG_SCRATCHPAD
             } else {
                 0
@@ -240,16 +244,23 @@ impl CompositorState {
                 )
             });
 
-        let unmin = self.windows.window_registry
+        let unmin = self
+            .windows
+            .window_registry
             .window_info(id)
             .filter(|_| self.windows.window_registry.is_shell_hosted(id))
             .is_some_and(|info| info.minimized);
         if unmin {
-            let snap = self.windows.window_registry.update_shell_hosted(id, |info, _| {
-                info.minimized = false;
-                info.clone()
-            });
-            let _ = self.windows.window_registry
+            let snap = self
+                .windows
+                .window_registry
+                .update_shell_hosted(id, |info, _| {
+                    info.minimized = false;
+                    info.clone()
+                });
+            let _ = self
+                .windows
+                .window_registry
                 .transition(id, crate::window_registry::WindowLifecycleEvent::Restore);
             self.shell_osr.shell_exclusion_zones_need_full_damage = true;
             self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowState {
@@ -279,7 +290,11 @@ impl CompositorState {
         if inserted != Some(true) {
             return;
         }
-        let info = self.windows.window_registry.window_info(id).expect("inserted");
+        let info = self
+            .windows
+            .window_registry
+            .window_info(id)
+            .expect("inserted");
         self.capture_refresh_window_source_cache(id);
         self.scratchpad_consider_window(id);
         let current_info = self.windows.window_registry.window_info(id).unwrap_or(info);
@@ -303,7 +318,9 @@ impl CompositorState {
             return;
         }
         p.title = truncate_shell_ipc_string(p.title);
-        let snap = self.windows.window_registry
+        let snap = self
+            .windows
+            .window_registry
             .update_shell_hosted(p.window_id, |info, _| {
                 if info.title == p.title {
                     return None;
@@ -362,10 +379,17 @@ impl CompositorState {
             self.shell_emit_shell_ui_focus_if_changed(None);
             self.shell_keyboard_capture_clear();
         }
-        let _ = self.windows.window_registry
-            .transition(window_id, crate::window_registry::WindowLifecycleEvent::RequestClose);
+        let _ = self.windows.window_registry.transition(
+            window_id,
+            crate::window_registry::WindowLifecycleEvent::RequestClose,
+        );
         self.windows.window_registry.remove_shell_hosted(window_id);
-        if self.shell_osr.shell_hosted_app_state.remove(&window_id).is_some() {
+        if self
+            .shell_osr
+            .shell_hosted_app_state
+            .remove(&window_id)
+            .is_some()
+        {
             self.shell_hosted_app_state_send();
         }
         self.scratchpad_forget_window(window_id);
@@ -390,7 +414,9 @@ impl CompositorState {
         {
             return true;
         }
-        let minimized = self.windows.window_registry
+        let minimized = self
+            .windows
+            .window_registry
             .update_shell_hosted(window_id, |info, _| {
                 let already = info.minimized;
                 if !already {
@@ -404,8 +430,10 @@ impl CompositorState {
         if already_minimized {
             return true;
         }
-        let _ = self.windows.window_registry
-            .transition(window_id, crate::window_registry::WindowLifecycleEvent::Minimize);
+        let _ = self.windows.window_registry.transition(
+            window_id,
+            crate::window_registry::WindowLifecycleEvent::Minimize,
+        );
         self.cancel_shell_move_resize_for_window(window_id);
         if self.shell_osr.shell_focused_ui_window_id == Some(window_id) {
             self.shell_emit_shell_ui_focus_if_changed(None);
@@ -420,7 +448,9 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_backed_restore_minimized_if_any(&mut self, window_id: u32) -> bool {
-        let snap = self.windows.window_registry
+        let snap = self
+            .windows
+            .window_registry
             .update_shell_hosted(window_id, |info, _| {
                 if !info.minimized {
                     return None;
@@ -431,8 +461,10 @@ impl CompositorState {
         let Some(Some(snap)) = snap else {
             return false;
         };
-        let _ = self.windows.window_registry
-            .transition(window_id, crate::window_registry::WindowLifecycleEvent::Restore);
+        let _ = self.windows.window_registry.transition(
+            window_id,
+            crate::window_registry::WindowLifecycleEvent::Restore,
+        );
         self.shell_osr.shell_exclusion_zones_need_full_damage = true;
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowState {
             window_id,
@@ -447,7 +479,9 @@ impl CompositorState {
         if !self.windows.window_registry.is_shell_hosted(window_id) {
             return false;
         }
-        let minned = self.windows.window_registry
+        let minned = self
+            .windows
+            .window_registry
             .window_info(window_id)
             .is_some_and(|info| info.minimized);
         if minned {
@@ -502,18 +536,20 @@ impl CompositorState {
         if pdx == 0 && pdy == 0 {
             return;
         }
-        let Some(snap) = self.windows.window_registry
-            .update_shell_hosted(wid, |info, float_restore| {
-                if info.maximized {
-                    info.maximized = false;
-                    if float_restore.is_none() {
-                        *float_restore = Some(Self::shell_hosted_client_global_rect(info));
+        let Some(snap) =
+            self.windows
+                .window_registry
+                .update_shell_hosted(wid, |info, float_restore| {
+                    if info.maximized {
+                        info.maximized = false;
+                        if float_restore.is_none() {
+                            *float_restore = Some(Self::shell_hosted_client_global_rect(info));
+                        }
                     }
-                }
-                info.x = info.x.saturating_add(pdx);
-                info.y = info.y.saturating_add(pdy);
-                info.clone()
-            })
+                    info.x = info.x.saturating_add(pdx);
+                    info.y = info.y.saturating_add(pdy);
+                    info.clone()
+                })
         else {
             self.input_routing.shell_move_window_id = None;
             self.input_routing.shell_move_pending_delta = (0, 0);
@@ -560,7 +596,10 @@ impl CompositorState {
         let Some(info) = self.windows.window_registry.window_info(window_id) else {
             return false;
         };
-        if !self.windows.window_registry.is_shell_hosted(window_id) || info.minimized || info.maximized {
+        if !self.windows.window_registry.is_shell_hosted(window_id)
+            || info.minimized
+            || info.maximized
+        {
             return false;
         }
         let r = Self::shell_hosted_client_global_rect(&info);
@@ -648,13 +687,17 @@ impl CompositorState {
             self.input_routing.shell_resize_accum.0,
             self.input_routing.shell_resize_accum.1,
         );
-        let Some(snap) = self.windows.window_registry.update_shell_hosted(wid, |info, _| {
-            info.x = nr.loc.x;
-            info.y = nr.loc.y;
-            info.width = nr.size.w.max(1);
-            info.height = nr.size.h.max(1);
-            info.clone()
-        }) else {
+        let Some(snap) = self
+            .windows
+            .window_registry
+            .update_shell_hosted(wid, |info, _| {
+                info.x = nr.loc.x;
+                info.y = nr.loc.y;
+                info.width = nr.size.w.max(1);
+                info.height = nr.size.h.max(1);
+                info.clone()
+            })
+        else {
             self.input_routing.shell_resize_window_id = None;
             self.input_routing.shell_resize_edges = None;
             self.input_routing.shell_resize_initial_rect = None;
@@ -701,7 +744,8 @@ impl CompositorState {
             let output = self
                 .output_for_window_position(info.x, info.y, info.width, info.height)
                 .and_then(|name| {
-                    self.output_topology.space
+                    self.output_topology
+                        .space
                         .outputs()
                         .find(|output| output.name() == name)
                         .cloned()
@@ -710,7 +754,8 @@ impl CompositorState {
                     if info.output_name.is_empty() {
                         None
                     } else {
-                        self.output_topology.space
+                        self.output_topology
+                            .space
                             .outputs()
                             .find(|output| output.name() == info.output_name)
                             .cloned()
@@ -724,21 +769,22 @@ impl CompositorState {
                 return true;
             };
             let output_name = output.name().to_string();
-            let snap =
-                self.windows.window_registry
-                    .update_shell_hosted(window_id, |info, float_restore| {
-                        if !info.maximized && float_restore.is_none() {
-                            *float_restore = Some(Self::shell_hosted_client_global_rect(info));
-                        }
-                        info.x = work.loc.x;
-                        info.y = work.loc.y;
-                        info.width = work.size.w.max(1);
-                        info.height = work.size.h.max(1);
-                        info.output_name = output_name;
-                        info.maximized = true;
-                        info.fullscreen = false;
-                        info.clone()
-                    });
+            let snap = self.windows.window_registry.update_shell_hosted(
+                window_id,
+                |info, float_restore| {
+                    if !info.maximized && float_restore.is_none() {
+                        *float_restore = Some(Self::shell_hosted_client_global_rect(info));
+                    }
+                    info.x = work.loc.x;
+                    info.y = work.loc.y;
+                    info.width = work.size.w.max(1);
+                    info.height = work.size.h.max(1);
+                    info.output_name = output_name;
+                    info.maximized = true;
+                    info.fullscreen = false;
+                    info.clone()
+                },
+            );
             if let Some(snap) = snap {
                 self.shell_backed_emit_geometry_messages(&snap);
                 self.shell_reply_window_list();
@@ -746,17 +792,19 @@ impl CompositorState {
             }
             return true;
         }
-        let snap = self.windows.window_registry
-            .update_shell_hosted(window_id, |info, float_restore| {
-                if let Some(rect) = float_restore.take() {
-                    info.x = rect.loc.x;
-                    info.y = rect.loc.y;
-                    info.width = rect.size.w.max(1);
-                    info.height = rect.size.h.max(1);
-                }
-                info.maximized = false;
-                info.clone()
-            });
+        let snap =
+            self.windows
+                .window_registry
+                .update_shell_hosted(window_id, |info, float_restore| {
+                    if let Some(rect) = float_restore.take() {
+                        info.x = rect.loc.x;
+                        info.y = rect.loc.y;
+                        info.width = rect.size.w.max(1);
+                        info.height = rect.size.h.max(1);
+                    }
+                    info.maximized = false;
+                    info.clone()
+                });
         if let Some(snap) = snap {
             self.shell_backed_emit_geometry_messages(&snap);
             self.shell_reply_window_list();
@@ -794,29 +842,31 @@ impl CompositorState {
             self.output_for_window_position(gx, gy, gw, gh)
         }
         .unwrap_or_default();
-        let snap = self.windows.window_registry
-            .update_shell_hosted(window_id, |info, float_restore| {
-                if layout_state == 1 {
-                    if let Some(work) = max_work {
-                        if !info.maximized && float_restore.is_none() {
-                            *float_restore = Some(Self::shell_hosted_client_global_rect(info));
+        let snap =
+            self.windows
+                .window_registry
+                .update_shell_hosted(window_id, |info, float_restore| {
+                    if layout_state == 1 {
+                        if let Some(work) = max_work {
+                            if !info.maximized && float_restore.is_none() {
+                                *float_restore = Some(Self::shell_hosted_client_global_rect(info));
+                            }
+                            info.x = work.loc.x;
+                            info.y = work.loc.y;
+                            info.width = work.size.w.max(1);
+                            info.height = work.size.h.max(1);
+                            info.maximized = true;
                         }
-                        info.x = work.loc.x;
-                        info.y = work.loc.y;
-                        info.width = work.size.w.max(1);
-                        info.height = work.size.h.max(1);
-                        info.maximized = true;
+                    } else {
+                        info.maximized = false;
+                        info.x = gx;
+                        info.y = gy;
+                        info.width = gw.max(1);
+                        info.height = gh.max(1);
                     }
-                } else {
-                    info.maximized = false;
-                    info.x = gx;
-                    info.y = gy;
-                    info.width = gw.max(1);
-                    info.height = gh.max(1);
-                }
-                info.output_name = target_output_name.clone();
-                Some(info.clone())
-            });
+                    info.output_name = target_output_name.clone();
+                    Some(info.clone())
+                });
         let Some(Some(snap)) = snap else {
             return false;
         };

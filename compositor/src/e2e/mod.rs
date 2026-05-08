@@ -338,7 +338,9 @@ impl CompositorState {
             .output_containing_global_point(pos)
             .or_else(|| self.leftmost_output())
             .ok_or_else(|| "no output available for pointer move".to_string())?;
-        let output_geo = self.output_topology.space
+        let output_geo = self
+            .output_topology
+            .space
             .output_geometry(&output)
             .ok_or_else(|| "missing output geometry for pointer move".to_string())?;
         let local = pos - output_geo.loc.to_f64();
@@ -542,7 +544,9 @@ impl CompositorState {
     }
 
     pub(crate) fn e2e_crash_window_client(&mut self, window_id: u32) -> Result<(), String> {
-        let info = self.windows.window_registry
+        let info = self
+            .windows
+            .window_registry
             .window_info(window_id)
             .ok_or_else(|| format!("window {window_id} not found"))?;
         if self.windows.window_registry.is_shell_hosted(window_id) {
@@ -608,7 +612,9 @@ impl CompositorState {
     pub(crate) fn e2e_compositor_snapshot_json(&mut self) -> Result<String, String> {
         self.handle_pending_wayland_client_disconnects();
         self.sync_shell_shared_state_for_input();
-        let pointer = self.input_routing.seat
+        let pointer = self
+            .input_routing
+            .seat
             .get_pointer()
             .map(|pointer| pointer.current_location())
             .unwrap_or_else(|| Point::from((0.0, 0.0)));
@@ -616,16 +622,20 @@ impl CompositorState {
         let mut cursor_shape = "hidden".to_string();
         let mut cursor_name = None;
         let mut cursor_source_path = None;
-        if let smithay::input::pointer::CursorImageStatus::Named(icon) = &self.input_routing.pointer_cursor_image
+        if let smithay::input::pointer::CursorImageStatus::Named(icon) =
+            &self.input_routing.pointer_cursor_image
         {
-            let _ = self.input_routing.cursor_theme.with_cursor(icon, 1.0, |cursor, _, key| {
-                cursor_shape = key.label().to_string();
-                cursor_name = Some(cursor.name.clone());
-                cursor_source_path = cursor
-                    .source_path
-                    .as_ref()
-                    .map(|path| path.display().to_string());
-            });
+            let _ = self
+                .input_routing
+                .cursor_theme
+                .with_cursor(icon, 1.0, |cursor, _, key| {
+                    cursor_shape = key.label().to_string();
+                    cursor_name = Some(cursor.name.clone());
+                    cursor_source_path = cursor
+                        .source_path
+                        .as_ref()
+                        .map(|path| path.display().to_string());
+                });
         } else if matches!(
             &self.input_routing.pointer_cursor_image,
             smithay::input::pointer::CursorImageStatus::Surface(_)
@@ -638,7 +648,9 @@ impl CompositorState {
             width: rect.size.w,
             height: rect.size.h,
         });
-        let mut outputs: Vec<E2eOutputSnapshot> = self.output_topology.space
+        let mut outputs: Vec<E2eOutputSnapshot> = self
+            .output_topology
+            .space
             .outputs()
             .filter_map(|output| {
                 let geometry = self.output_topology.space.output_geometry(&output)?;
@@ -687,7 +699,9 @@ impl CompositorState {
             })
             .collect();
         outputs.sort_by(|a, b| a.name.cmp(&b.name));
-        let mut windows: Vec<E2eWindowSnapshot> = self.windows.window_registry
+        let mut windows: Vec<E2eWindowSnapshot> = self
+            .windows
+            .window_registry
             .all_records()
             .into_iter()
             .map(|record| {
@@ -739,7 +753,9 @@ impl CompositorState {
             })
             .collect();
         windows.sort_by(|a, b| a.window_id.cmp(&b.window_id));
-        let mut ordered_window_ids_by_output: Vec<E2eOutputWindowStackSnapshot> = self.output_topology.space
+        let mut ordered_window_ids_by_output: Vec<E2eOutputWindowStackSnapshot> = self
+            .output_topology
+            .space
             .outputs()
             .map(|output| E2eOutputWindowStackSnapshot {
                 output_name: output.name(),
@@ -747,7 +763,9 @@ impl CompositorState {
             })
             .collect();
         ordered_window_ids_by_output.sort_by(|a, b| a.output_name.cmp(&b.output_name));
-        let shell_ui_windows = self.shell_osr.shell_ui_windows
+        let shell_ui_windows = self
+            .shell_osr
+            .shell_ui_windows
             .iter()
             .map(|window| E2eShellUiWindowSnapshot {
                 id: window.id,
@@ -766,12 +784,16 @@ impl CompositorState {
                 buffer: Self::e2e_rect_snapshot(window.buffer_rect),
             })
             .collect();
-        let shell_exclusion_global = self.shell_osr.shell_exclusion_global
+        let shell_exclusion_global = self
+            .shell_osr
+            .shell_exclusion_global
             .iter()
             .copied()
             .map(Self::e2e_rect_snapshot)
             .collect();
-        let mut pending_deferred_window_ids: Vec<u32> = self.windows.window_registry
+        let mut pending_deferred_window_ids: Vec<u32> = self
+            .windows
+            .window_registry
             .all_records()
             .into_iter()
             .filter(|record| record.lifecycle == WindowLifecycle::DeferredInitialMap)
@@ -779,13 +801,16 @@ impl CompositorState {
             .collect();
         pending_deferred_window_ids.sort_unstable();
         pending_deferred_window_ids.dedup();
-        let mut orphaned_wayland_surface_protocol_ids: Vec<u32> = self.output_topology.space
+        let mut orphaned_wayland_surface_protocol_ids: Vec<u32> = self
+            .output_topology
+            .space
             .elements()
             .filter_map(|elem| match elem {
                 DerpSpaceElem::Wayland(window) => {
                     let toplevel = window.toplevel()?;
                     let wl_surface = toplevel.wl_surface();
-                    self.windows.window_registry
+                    self.windows
+                        .window_registry
                         .window_id_for_wl_surface(wl_surface)
                         .is_none()
                         .then_some(wl_surface.id().protocol_id())
@@ -795,7 +820,9 @@ impl CompositorState {
             .collect();
         orphaned_wayland_surface_protocol_ids.sort_unstable();
         orphaned_wayland_surface_protocol_ids.dedup();
-        let shell_floating_layers: Vec<E2eFloatingLayerSnapshot> = self.shell_osr.shell_exclusion_floating
+        let shell_floating_layers: Vec<E2eFloatingLayerSnapshot> = self
+            .shell_osr
+            .shell_exclusion_floating
             .iter()
             .enumerate()
             .map(|(index, rect)| E2eFloatingLayerSnapshot {
@@ -849,7 +876,9 @@ impl CompositorState {
             focused_window_id: self.keyboard_focused_window_id(),
             focused_shell_ui_window_id: self.shell_osr.shell_focused_ui_window_id,
             session_power_action: self.session_services.last_session_power_action(),
-            session_power_requested_at_ms: self.session_services.last_session_power_requested_at_ms(),
+            session_power_requested_at_ms: self
+                .session_services
+                .last_session_power_requested_at_ms(),
             shell_keyboard_focus: self.shell_keyboard_capture_active(),
             screenshot_selection_active: self.capture.screenshot_selection_active(),
             shell_context_menu_visible: self.shell_osr.shell_exclusion_overlay_open
@@ -859,25 +888,35 @@ impl CompositorState {
             shell_pointer_grab_window_id: self.input_routing.shell_ui_pointer_grab,
             shell_move_window_id: self.input_routing.shell_move_window_id,
             shell_resize_window_id: self.input_routing.shell_resize_window_id,
-            shell_move_visual: self.e2e_interaction_visual_snapshot(self.input_routing.shell_move_window_id),
-            shell_move_proxy_window_id: self.input_routing.shell_move_proxy
+            shell_move_visual: self
+                .e2e_interaction_visual_snapshot(self.input_routing.shell_move_window_id),
+            shell_move_proxy_window_id: self
+                .input_routing
+                .shell_move_proxy
                 .as_ref()
                 .and_then(|proxy| proxy.texture.as_ref().map(|_| proxy.window_id)),
-            shell_move_proxy_global: self.input_routing.shell_move_proxy
+            shell_move_proxy_global: self
+                .input_routing
+                .shell_move_proxy
                 .as_ref()
                 .and_then(|proxy| proxy.texture.as_ref().map(|_| ()))
                 .and_then(|_| self.shell_move_proxy_target_global_rect())
                 .map(Self::e2e_rect_snapshot),
-            shell_move_proxy_capture_global: self.input_routing.shell_move_proxy
+            shell_move_proxy_capture_global: self
+                .input_routing
+                .shell_move_proxy
                 .as_ref()
                 .and_then(|proxy| proxy.texture.as_ref().map(|_| ()))
                 .and_then(|_| {
-                    self.input_routing.shell_move_proxy
+                    self.input_routing
+                        .shell_move_proxy
                         .as_ref()
                         .and_then(|proxy| proxy.texture_global_rect)
                 })
                 .map(Self::e2e_rect_snapshot),
-            shell_move_proxy_visible_rects: self.output_topology.space
+            shell_move_proxy_visible_rects: self
+                .output_topology
+                .space
                 .outputs()
                 .flat_map(|output| {
                     crate::render::shell_render::shell_move_proxy_visible_rects_for_output(
@@ -886,16 +925,24 @@ impl CompositorState {
                 })
                 .map(Self::e2e_rect_snapshot)
                 .collect(),
-            shell_move_proxy_alpha: self.input_routing.shell_move_proxy.as_ref().and_then(|proxy| {
-                proxy
-                    .texture
-                    .as_ref()
-                    .map(|_| crate::state::SHELL_DRAG_WINDOW_ALPHA)
-            }),
-            shell_move_proxy_decor_only: self.input_routing.shell_move_proxy
-                .as_ref()
-                .is_some_and(|proxy| !self.windows.window_registry.is_shell_hosted(proxy.window_id)),
-            shell_resize_visual: self.e2e_interaction_visual_snapshot(self.input_routing.shell_resize_window_id),
+            shell_move_proxy_alpha: self.input_routing.shell_move_proxy.as_ref().and_then(
+                |proxy| {
+                    proxy
+                        .texture
+                        .as_ref()
+                        .map(|_| crate::state::SHELL_DRAG_WINDOW_ALPHA)
+                },
+            ),
+            shell_move_proxy_decor_only: self.input_routing.shell_move_proxy.as_ref().is_some_and(
+                |proxy| {
+                    !self
+                        .windows
+                        .window_registry
+                        .is_shell_hosted(proxy.window_id)
+                },
+            ),
+            shell_resize_visual: self
+                .e2e_interaction_visual_snapshot(self.input_routing.shell_resize_window_id),
             shell_canvas_origin_x: self.output_topology.shell_canvas_logical_origin.0,
             shell_canvas_origin_y: self.output_topology.shell_canvas_logical_origin.1,
             shell_canvas_width: self.output_topology.shell_canvas_logical_size.0,
@@ -909,16 +956,24 @@ impl CompositorState {
             shell_ui_windows,
             shell_window_frames,
             shell_exclusion_global,
-            shell_native_drag_preview_window_id: self.input_routing.shell_native_drag_preview
+            shell_native_drag_preview_window_id: self
+                .input_routing
+                .shell_native_drag_preview
                 .as_ref()
                 .map(|preview| preview.window_id),
-            shell_native_drag_preview_generation: self.input_routing.shell_native_drag_preview
+            shell_native_drag_preview_generation: self
+                .input_routing
+                .shell_native_drag_preview
                 .as_ref()
                 .map(|preview| preview.generation),
-            shell_native_drag_preview_shell_ready: self.input_routing.shell_native_drag_preview
+            shell_native_drag_preview_shell_ready: self
+                .input_routing
+                .shell_native_drag_preview
                 .as_ref()
                 .is_some_and(|preview| preview.shell_ready),
-            shell_native_drag_preview_image_path: self.input_routing.shell_native_drag_preview
+            shell_native_drag_preview_image_path: self
+                .input_routing
+                .shell_native_drag_preview
                 .as_ref()
                 .and_then(|preview| preview.image_path.clone()),
             shell_native_drag_preview_clip_rect: self
@@ -941,7 +996,9 @@ impl CompositorState {
         if logical_rect.size.w <= 0 || logical_rect.size.h <= 0 {
             return Err("screenshot region must be non-empty".to_string());
         }
-        let outputs: Vec<String> = self.output_topology.space
+        let outputs: Vec<String> = self
+            .output_topology
+            .space
             .outputs()
             .filter_map(|output| {
                 let geo = self.output_topology.space.output_geometry(&output)?;

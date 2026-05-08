@@ -1,9 +1,4 @@
 use clap::Parser;
-use std::fs;
-use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::net::UnixListener;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
 use smithay_client_toolkit::{
     activation::{ActivationHandler, ActivationState, RequestData},
     compositor::{CompositorHandler, CompositorState},
@@ -33,11 +28,27 @@ use smithay_client_toolkit::{
         Shm, ShmHandler,
     },
 };
+use std::fs;
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::net::UnixListener;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use wayland_client::{
     delegate_noop,
     globals::registry_queue_init,
     protocol::{wl_buffer, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
     Connection, Dispatch, QueueHandle,
+};
+use wayland_protocols::ext::{
+    image_capture_source::v1::client::{
+        ext_image_capture_source_v1::ExtImageCaptureSourceV1,
+        ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1,
+    },
+    image_copy_capture::v1::client::{
+        ext_image_copy_capture_frame_v1::{self, ExtImageCopyCaptureFrameV1},
+        ext_image_copy_capture_manager_v1::{self, ExtImageCopyCaptureManagerV1},
+        ext_image_copy_capture_session_v1::{self, ExtImageCopyCaptureSessionV1},
+    },
 };
 use wayland_protocols::wp::{
     content_type::v1::client::{
@@ -59,30 +70,18 @@ use wayland_protocols::wp::{
     pointer_constraints::zv1::client::{
         zwp_confined_pointer_v1, zwp_locked_pointer_v1, zwp_pointer_constraints_v1,
     },
-    presentation_time::client::{wp_presentation::WpPresentation, wp_presentation_feedback},
     pointer_gestures::zv1::client::{
-        zwp_pointer_gesture_hold_v1, zwp_pointer_gesture_pinch_v1,
-        zwp_pointer_gesture_swipe_v1, zwp_pointer_gestures_v1::ZwpPointerGesturesV1,
+        zwp_pointer_gesture_hold_v1, zwp_pointer_gesture_pinch_v1, zwp_pointer_gesture_swipe_v1,
+        zwp_pointer_gestures_v1::ZwpPointerGesturesV1,
     },
+    presentation_time::client::{wp_presentation::WpPresentation, wp_presentation_feedback},
     relative_pointer::zv1::client::zwp_relative_pointer_v1,
     tearing_control::v1::client::{
         wp_tearing_control_manager_v1::WpTearingControlManagerV1, wp_tearing_control_v1,
     },
 };
-use wayland_protocols::ext::{
-    image_capture_source::v1::client::{
-        ext_image_capture_source_v1::ExtImageCaptureSourceV1,
-        ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1,
-    },
-    image_copy_capture::v1::client::{
-        ext_image_copy_capture_frame_v1::{self, ExtImageCopyCaptureFrameV1},
-        ext_image_copy_capture_manager_v1::{self, ExtImageCopyCaptureManagerV1},
-        ext_image_copy_capture_session_v1::{self, ExtImageCopyCaptureSessionV1},
-    },
-};
 use wayland_protocols::xdg::toplevel_icon::v1::client::{
-    xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1,
-    xdg_toplevel_icon_v1::XdgToplevelIconV1,
+    xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1, xdg_toplevel_icon_v1::XdgToplevelIconV1,
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{Layer as WlrLayer, ZwlrLayerShellV1},
@@ -500,6 +499,8 @@ fn main() {
         gesture_swipe: None,
         gesture_pinch: None,
         gesture_hold: None,
+        gesture_ready_pending: false,
+        gesture_ready: false,
         gesture_status_json: args.gesture_status_json,
         gesture_status: GestureStatus::default(),
         pointer_constraint: None,
@@ -513,6 +514,14 @@ fn main() {
         event_queue
             .blocking_dispatch(&mut state)
             .expect("dispatch wayland events");
+        if state.gesture_ready_pending {
+            state.gesture_ready_pending = false;
+            event_queue
+                .roundtrip(&mut state)
+                .expect("roundtrip pointer gesture setup");
+            state.gesture_ready = true;
+            state.write_gesture_status();
+        }
     }
 }
 
@@ -621,10 +630,18 @@ impl LayerPanelClient {
         }
         let buffer = self.buffer.as_mut().expect("buffer ready");
         let canvas = self.pool.canvas(buffer).expect("buffer canvas");
-        draw_pattern(canvas, self.width, self.height, &self.token, [40, 180, 220, 255]);
+        draw_pattern(
+            canvas,
+            self.width,
+            self.height,
+            &self.token,
+            [40, 180, 220, 255],
+        );
         self.surface
             .damage_buffer(0, 0, self.width as i32, self.height as i32);
-        buffer.attach_to(&self.surface).expect("attach layer buffer");
+        buffer
+            .attach_to(&self.surface)
+            .expect("attach layer buffer");
         self.surface.commit();
     }
 }
@@ -686,6 +703,8 @@ struct TestClient {
     gesture_swipe: Option<zwp_pointer_gesture_swipe_v1::ZwpPointerGestureSwipeV1>,
     gesture_pinch: Option<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1>,
     gesture_hold: Option<zwp_pointer_gesture_hold_v1::ZwpPointerGestureHoldV1>,
+    gesture_ready_pending: bool,
+    gesture_ready: bool,
     gesture_status_json: Option<String>,
     gesture_status: GestureStatus,
     pointer_constraint: Option<PointerConstraintHandle>,
@@ -847,13 +866,16 @@ impl TestClient {
         if self.gesture_swipe.is_some() {
             return;
         }
-        let (Some(manager), Some(pointer)) = (self.pointer_gestures.as_ref(), self.pointer.as_ref()) else {
+        let (Some(manager), Some(pointer)) =
+            (self.pointer_gestures.as_ref(), self.pointer.as_ref())
+        else {
             return;
         };
         self.gesture_swipe = Some(manager.get_swipe_gesture(pointer, qh, ()));
         self.gesture_pinch = Some(manager.get_pinch_gesture(pointer, qh, ()));
         self.gesture_hold = Some(manager.get_hold_gesture(pointer, qh, ()));
-        self.write_gesture_status();
+        self.gesture_ready = false;
+        self.gesture_ready_pending = true;
     }
 
     fn write_gesture_status(&self) {
@@ -887,7 +909,11 @@ impl TestClient {
             status.last_pinch_delta.1,
             status.last_pinch_scale,
             status.last_pinch_rotation,
-            if status.last_cancelled { "true" } else { "false" },
+            if status.last_cancelled {
+                "true"
+            } else {
+                "false"
+            },
         );
         fs::write(path, json).expect("write gesture status json");
     }
@@ -1079,7 +1105,11 @@ fn open_drm_node() -> std::fs::File {
         "/dev/dri/renderD128",
         "/dev/dri/renderD129",
     ] {
-        if let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(path) {
+        if let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+        {
             return file;
         }
     }
@@ -1092,13 +1122,7 @@ fn create_syncobj_timeline() -> DrmTimeline {
         handle: 0,
         flags: 0,
     };
-    let rc = unsafe {
-        libc::ioctl(
-            drm.as_raw_fd(),
-            iowr::<DrmSyncobjCreate>(0xBF),
-            &mut create,
-        )
-    };
+    let rc = unsafe { libc::ioctl(drm.as_raw_fd(), iowr::<DrmSyncobjCreate>(0xBF), &mut create) };
     if rc != 0 {
         panic!(
             "DRM_IOCTL_SYNCOBJ_CREATE failed: {}",
@@ -1111,13 +1135,7 @@ fn create_syncobj_timeline() -> DrmTimeline {
         fd: -1,
         pad: 0,
     };
-    let rc = unsafe {
-        libc::ioctl(
-            drm.as_raw_fd(),
-            iowr::<DrmSyncobjHandle>(0xC1),
-            &mut handle,
-        )
-    };
+    let rc = unsafe { libc::ioctl(drm.as_raw_fd(), iowr::<DrmSyncobjHandle>(0xC1), &mut handle) };
     if rc != 0 || handle.fd < 0 {
         panic!(
             "DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD failed: {}",
@@ -1217,13 +1235,7 @@ fn create_dumb_dmabuf(width: u32, height: u32, rgba: [u8; 4]) -> DumbDmabuf {
         flags: libc::O_CLOEXEC as u32,
         fd: -1,
     };
-    let rc = unsafe {
-        libc::ioctl(
-            drm.as_raw_fd(),
-            iowr::<DrmPrimeHandle>(0x2D),
-            &mut prime,
-        )
-    };
+    let rc = unsafe { libc::ioctl(drm.as_raw_fd(), iowr::<DrmPrimeHandle>(0x2D), &mut prime) };
     if rc != 0 || prime.fd < 0 {
         panic!(
             "DRM_IOCTL_PRIME_HANDLE_TO_FD failed: {}",
@@ -1235,13 +1247,7 @@ fn create_dumb_dmabuf(width: u32, height: u32, rgba: [u8; 4]) -> DumbDmabuf {
         pad: 0,
         offset: 0,
     };
-    let rc = unsafe {
-        libc::ioctl(
-            drm.as_raw_fd(),
-            iowr::<DrmModeMapDumb>(0xB3),
-            &mut map,
-        )
-    };
+    let rc = unsafe { libc::ioctl(drm.as_raw_fd(), iowr::<DrmModeMapDumb>(0xB3), &mut map) };
     if rc != 0 {
         panic!(
             "DRM_IOCTL_MODE_MAP_DUMB failed: {}",
@@ -1259,7 +1265,10 @@ fn create_dumb_dmabuf(width: u32, height: u32, rgba: [u8; 4]) -> DumbDmabuf {
         )
     };
     if mapped == libc::MAP_FAILED {
-        panic!("mmap dumb buffer failed: {}", std::io::Error::last_os_error());
+        panic!(
+            "mmap dumb buffer failed: {}",
+            std::io::Error::last_os_error()
+        );
     }
     let mut buffer = DumbDmabuf {
         drm,
@@ -1300,7 +1309,9 @@ impl ProtocolProbe {
         let stride = (width * 4) as i32;
         let required_len = (width * height * 4) as usize;
         if self.pool.len() < required_len {
-            self.pool.resize(required_len).expect("resize protocol pool");
+            self.pool
+                .resize(required_len)
+                .expect("resize protocol pool");
         }
         if self.buffer.is_none() {
             let (buffer, _) = self
@@ -1431,7 +1442,10 @@ impl ExplicitSyncDmabufClient {
         if !self.configured || self.committed {
             return;
         }
-        if self.stress_frames > 0 && self.wait_control && !self.control_triggered.load(Ordering::SeqCst) {
+        if self.stress_frames > 0
+            && self.wait_control
+            && !self.control_triggered.load(Ordering::SeqCst)
+        {
             if !self.ready_committed {
                 self.commit_ready_frame(qh);
             }
@@ -1490,7 +1504,8 @@ impl ExplicitSyncDmabufClient {
             .wl_surface()
             .damage_buffer(0, 0, self.width as i32, self.height as i32);
         self.window.wl_surface().commit();
-        self.window.set_title(format!("{} | ready", self.base_title));
+        self.window
+            .set_title(format!("{} | ready", self.base_title));
         self.buffer_a = Some(buffer_a);
         self.wl_buffer_a = Some(wl_buffer_a);
         self.ready_committed = true;
@@ -1523,8 +1538,10 @@ impl ExplicitSyncDmabufClient {
                 .damage_buffer(0, 0, self.width as i32, self.height as i32);
             self.window.wl_surface().commit();
         }
-        self.window
-            .set_title(format!("{} | stress={}", self.base_title, self.stress_frames));
+        self.window.set_title(format!(
+            "{} | stress={}",
+            self.base_title, self.stress_frames
+        ));
         self.buffer_a = Some(buffer_a);
         self.buffer_b = Some(buffer_b);
         self.wl_buffer_a = Some(wl_buffer_a);
@@ -1729,7 +1746,9 @@ impl ExtImageCopyClient {
         let height = self.status.buffer_height.max(1);
         let required_len = (width * height * 4) as usize;
         if self.pool.len() < required_len {
-            self.pool.resize(required_len).expect("resize ext image copy pool");
+            self.pool
+                .resize(required_len)
+                .expect("resize ext image copy pool");
         }
         let (mut buffer, _) = self
             .pool
@@ -1763,7 +1782,12 @@ impl ExtImageCopyClient {
 
     fn finish_active_frame(&mut self, ready: bool, failed: Option<String>, qh: &QueueHandle<Self>) {
         let index = self.frame_index;
-        if let Some(frame) = self.status.frames.iter_mut().find(|frame| frame.index == index) {
+        if let Some(frame) = self
+            .status
+            .frames
+            .iter_mut()
+            .find(|frame| frame.index == index)
+        {
             frame.ready = ready;
             frame.failed = failed;
             if ready {
@@ -1776,7 +1800,9 @@ impl ExtImageCopyClient {
                                 | (u32::from(pixel[1]) << 8)
                                 | (u32::from(pixel[2]) << 16)
                                 | (u32::from(pixel[3]) << 24);
-                            checksum = checksum.wrapping_mul(16_777_619).wrapping_add(u64::from(value));
+                            checksum = checksum
+                                .wrapping_mul(16_777_619)
+                                .wrapping_add(u64::from(value));
                             if value != 0 {
                                 nonzero = nonzero.saturating_add(1);
                             }
@@ -1918,7 +1944,12 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ()> for ExtImageCopyClient {
         qh: &QueueHandle<Self>,
     ) {
         match event {
-            ext_image_copy_capture_frame_v1::Event::Damage { x, y, width, height } => {
+            ext_image_copy_capture_frame_v1::Event::Damage {
+                x,
+                y,
+                width,
+                height,
+            } => {
                 if let Some(frame) = state.status.frames.last_mut() {
                     frame.damage.push((x, y, width, height));
                     write_ext_image_copy_status(&state.status_path, &state.status);
@@ -1986,6 +2017,7 @@ fn run_ext_image_copy_capture_output(args: &Args) {
         status: ExtImageCopyStatus::default(),
     };
     write_ext_image_copy_status(&state.status_path, &state.status);
+    conn.flush().expect("flush initial ext image copy capture");
     while !state.exit {
         event_queue
             .blocking_dispatch(&mut state)
@@ -2132,8 +2164,13 @@ fn run_explicit_sync_dmabuf(args: &Args) {
         status_path: args.status_json.clone(),
         status,
     };
+    conn.flush().expect("flush initial explicit sync dmabuf");
     while !state.exit {
-        if state.wait_control && state.stress_frames > 0 && !state.committed && state.ready_committed {
+        if state.wait_control
+            && state.stress_frames > 0
+            && !state.committed
+            && state.ready_committed
+        {
             event_queue
                 .dispatch_pending(&mut state)
                 .expect("dispatch pending explicit sync dmabuf");
@@ -2302,9 +2339,13 @@ fn run_explicit_sync_protocol_error(mode: &str, args: &Args) {
         other => panic!("unsupported --explicit-sync-error mode: {other}"),
     }
     loop {
-        event_queue
-            .blocking_dispatch(&mut state)
-            .expect("dispatch explicit sync protocol error");
+        match event_queue.blocking_dispatch(&mut state) {
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("dispatch explicit sync protocol error: {error:?}");
+                std::process::exit(101);
+            }
+        }
     }
 }
 
@@ -2817,7 +2858,12 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for LayerPanelClient {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
-        if let LayerSurfaceEvent::Configure { serial, width, height } = event {
+        if let LayerSurfaceEvent::Configure {
+            serial,
+            width,
+            height,
+        } = event
+        {
             proxy.ack_configure(serial);
             state.width = width.max(1);
             state.height = height.max(1);
@@ -2895,6 +2941,8 @@ impl SeatHandler for TestClient {
             if let Some(gesture) = self.gesture_hold.take() {
                 gesture.destroy();
             }
+            self.gesture_ready = false;
+            self.gesture_ready_pending = false;
             if let Some(pointer) = self.pointer.take() {
                 pointer.release();
             }
@@ -2932,7 +2980,12 @@ impl PointerHandler for TestClient {
                         device.set_shape(serial, CursorShape::Pointer);
                     }
                     if self.request_token_on_pointer_enter {
-                        self.request_spawn_activation(qh, serial, seat.clone(), event.surface.clone());
+                        self.request_spawn_activation(
+                            qh,
+                            serial,
+                            seat.clone(),
+                            event.surface.clone(),
+                        );
                     }
                 }
                 PointerEventKind::Press { serial, .. }
@@ -3035,8 +3088,7 @@ impl Dispatch<zwp_pointer_gesture_swipe_v1::ZwpPointerGestureSwipeV1, ()> for Te
                 state.gesture_status.last_swipe_delta = (dx, dy);
             }
             zwp_pointer_gesture_swipe_v1::Event::End { cancelled, .. } => {
-                state.gesture_status.swipe_end =
-                    state.gesture_status.swipe_end.saturating_add(1);
+                state.gesture_status.swipe_end = state.gesture_status.swipe_end.saturating_add(1);
                 state.gesture_status.last_cancelled = cancelled != 0;
             }
             _ => {}
@@ -3075,8 +3127,7 @@ impl Dispatch<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1, ()> for Te
                 state.gesture_status.last_pinch_rotation = rotation;
             }
             zwp_pointer_gesture_pinch_v1::Event::End { cancelled, .. } => {
-                state.gesture_status.pinch_end =
-                    state.gesture_status.pinch_end.saturating_add(1);
+                state.gesture_status.pinch_end = state.gesture_status.pinch_end.saturating_add(1);
                 state.gesture_status.last_cancelled = cancelled != 0;
             }
             _ => {}
@@ -3096,14 +3147,12 @@ impl Dispatch<zwp_pointer_gesture_hold_v1::ZwpPointerGestureHoldV1, ()> for Test
     ) {
         match event {
             zwp_pointer_gesture_hold_v1::Event::Begin { fingers, .. } => {
-                state.gesture_status.hold_begin =
-                    state.gesture_status.hold_begin.saturating_add(1);
+                state.gesture_status.hold_begin = state.gesture_status.hold_begin.saturating_add(1);
                 state.gesture_status.last_cancelled = false;
                 let _ = fingers;
             }
             zwp_pointer_gesture_hold_v1::Event::End { cancelled, .. } => {
-                state.gesture_status.hold_end =
-                    state.gesture_status.hold_end.saturating_add(1);
+                state.gesture_status.hold_end = state.gesture_status.hold_end.saturating_add(1);
                 state.gesture_status.last_cancelled = cancelled != 0;
             }
             _ => {}

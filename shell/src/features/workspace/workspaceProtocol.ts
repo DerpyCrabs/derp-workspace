@@ -1,4 +1,5 @@
 import type { Rect, SnapZone } from '@/features/tiling/tileZones'
+import type { CustomLayout } from '@/features/tiling/customLayouts'
 
 export const WORKSPACE_PROTOCOL_VERSION = 1
 
@@ -132,6 +133,8 @@ export type WorkspaceMonitorLayoutState = {
   outputName: string
   layout: WorkspaceMonitorLayoutType
   params: WorkspaceMonitorLayoutParams
+  snapLayout?: string
+  customLayouts?: CustomLayout[]
 }
 
 export type WorkspaceState = {
@@ -208,6 +211,8 @@ export type WorkspaceMutation =
       outputName: string
       layout: WorkspaceMonitorLayoutType
       params: WorkspaceMonitorLayoutParams
+      snapLayout?: string
+      customLayouts?: CustomLayout[]
     }
   | { type: 'set_monitor_layouts'; layouts: WorkspaceMonitorLayoutState[] }
   | { type: 'clear_pre_tile_geometry'; windowId: number }
@@ -215,6 +220,7 @@ export type WorkspaceMutation =
       type: 'restore_session_workspace'
       groups: WorkspaceRestoreGroup[]
       pinnedWindowIds?: number[]
+      monitorLayouts?: WorkspaceMonitorLayoutState[]
       monitorTiles?: WorkspaceMonitorTileState[]
       preTileGeometry?: WorkspacePreTileGeometry[]
       nextGroupSeq?: number

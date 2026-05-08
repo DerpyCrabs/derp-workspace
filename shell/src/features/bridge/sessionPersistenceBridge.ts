@@ -1,5 +1,4 @@
 import { createEffect, onCleanup, type Accessor } from 'solid-js'
-import { saveTilingConfig } from '@/features/tiling/tilingConfig'
 import {
   loadSessionSnapshot,
   saveSessionSnapshot,
@@ -42,7 +41,6 @@ type SessionPersistenceBridgeOptions = {
   setSessionRestoreSnapshot: (snapshot: SessionSnapshot | null) => void
   setHasSeenCompositorWindowSync: (value: boolean) => void
   setNextNativeWindowSeq: (value: number | ((prev: number) => number)) => void
-  bumpTilingCfgRev: () => void
   reportShellActionIssue: (message: string) => void
   clearShellActionIssue: () => void
   describeError: (error: unknown) => string
@@ -116,8 +114,6 @@ export function createSessionPersistenceBridge(options: SessionPersistenceBridge
     lastPersistedSessionJson = JSON.stringify(snapshot)
     lastAppliedRestoreSignature = ''
     options.setNextNativeWindowSeq(Math.max(1, snapshot.nextNativeWindowSeq))
-    saveTilingConfig(snapshot.tilingConfig)
-    options.bumpTilingCfgRev()
     for (const nativeWindow of snapshot.nativeWindows) {
       if (nativeWindow.launch) options.nativeLaunchMetadataByRef.set(nativeWindow.windowRef, nativeWindow.launch)
     }

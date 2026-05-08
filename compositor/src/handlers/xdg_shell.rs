@@ -70,9 +70,12 @@ impl XdgShellHandler for CompositorState {
         );
         let window = Window::new_wayland_window(surface);
         let parent_protocol_id = parent.as_ref().map(|p| p.id().protocol_id());
-        self.windows.window_registry
+        self.windows
+            .window_registry
             .register_toplevel(&wl0, title, app_id, wayland_client_pid);
-        let reg = self.windows.window_registry
+        let reg = self
+            .windows
+            .window_registry
             .snapshot_for_wl_surface(&wl0)
             .expect("just registered");
         self.capture_refresh_window_source_cache(reg.window_id);
@@ -126,11 +129,15 @@ impl XdgShellHandler for CompositorState {
             "xdg new_toplevel staging check"
         );
         if !map_at_output_origin {
-            self.windows.pending_gnome_initial_toplevels.insert(reg.window_id);
+            self.windows
+                .pending_gnome_initial_toplevels
+                .insert(reg.window_id);
         }
         if defer_initial_map {
-            let _ = self.windows.window_registry
-                .transition(reg.window_id, crate::window_registry::WindowLifecycleEvent::DeferInitialMap);
+            let _ = self.windows.window_registry.transition(
+                reg.window_id,
+                crate::window_registry::WindowLifecycleEvent::DeferInitialMap,
+            );
             let key =
                 crate::window_registry::wl_surface_key(&wl0).expect("new_toplevel surface key");
             self.windows.pending_deferred_toplevels.insert(
@@ -149,8 +156,10 @@ impl XdgShellHandler for CompositorState {
                 "xdg new_toplevel deferred until app_id"
             );
         } else {
-            let _ = self.windows.window_registry
-                .transition(reg.window_id, crate::window_registry::WindowLifecycleEvent::Map);
+            let _ = self.windows.window_registry.transition(
+                reg.window_id,
+                crate::window_registry::WindowLifecycleEvent::Map,
+            );
             self.output_topology.space.map_element(
                 DerpSpaceElem::Wayland(window.clone()),
                 (map_x, map_y),
@@ -158,7 +167,9 @@ impl XdgShellHandler for CompositorState {
             );
 
             self.notify_geometry_if_changed(&window);
-            let info = self.windows.window_registry
+            let info = self
+                .windows
+                .window_registry
                 .snapshot_for_wl_surface(&wl0)
                 .expect("xdg new_toplevel: registry row after notify");
             tracing::warn!(
@@ -170,16 +181,27 @@ impl XdgShellHandler for CompositorState {
             );
             let spawn_focus_wid = info.window_id;
             self.scratchpad_consider_window(spawn_focus_wid);
-            let current_info = self.windows.window_registry
+            let current_info = self
+                .windows
+                .window_registry
                 .window_info(spawn_focus_wid)
                 .unwrap_or(info);
             let output_name = current_info.output_name.clone();
             let pending_activation_focus =
                 self.windows.shell_pending_native_focus_window_id == Some(spawn_focus_wid);
-            if !(self.workspace_layout.scratchpad_windows.contains_key(&spawn_focus_wid) && current_info.minimized) {
+            if !(self
+                .workspace_layout
+                .scratchpad_windows
+                .contains_key(&spawn_focus_wid)
+                && current_info.minimized)
+            {
                 self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: current_info });
             }
-            if !self.workspace_layout.scratchpad_windows.contains_key(&spawn_focus_wid) {
+            if !self
+                .workspace_layout
+                .scratchpad_windows
+                .contains_key(&spawn_focus_wid)
+            {
                 if pending_activation_focus {
                     self.shell_raise_and_focus_window(spawn_focus_wid);
                     self.shell_reply_window_list();
@@ -206,7 +228,8 @@ impl XdgShellHandler for CompositorState {
                 == Some(crate::window_registry::WindowLifecycle::DeferredInitialMap)
         });
         if let Some(k) = crate::window_registry::wl_surface_key(wl) {
-            let removed_pending_payload = self.windows.pending_deferred_toplevels.remove(&k).is_some();
+            let removed_pending_payload =
+                self.windows.pending_deferred_toplevels.remove(&k).is_some();
             if removed_pending_payload {
                 had_pending_deferred = true;
                 tracing::warn!(
@@ -225,7 +248,9 @@ impl XdgShellHandler for CompositorState {
             }
         });
         if let Some(w) = window_opt {
-            self.output_topology.space.unmap_elem(&DerpSpaceElem::Wayland(w));
+            self.output_topology
+                .space
+                .unmap_elem(&DerpSpaceElem::Wayland(w));
         }
         if let Some(wid) = self.windows.window_registry.window_id_for_wl_surface(wl) {
             self.clear_toplevel_layout_maps(wid);
@@ -234,7 +259,9 @@ impl XdgShellHandler for CompositorState {
         let removed = self.windows.window_registry.snapshot_for_wl_surface(wl);
         if let Some(window_id) = self.windows.window_registry.remove_by_wl_surface(wl) {
             self.capture_forget_window_source_cache(window_id);
-            self.windows.shell_close_pending_native_windows.remove(&window_id);
+            self.windows
+                .shell_close_pending_native_windows
+                .remove(&window_id);
             self.shell_window_stack_forget(window_id);
             self.windows.window_registry.clear_restore_handle(window_id);
             if let Some(ref meta) = removed {
@@ -259,7 +286,9 @@ impl XdgShellHandler for CompositorState {
         let old = self.windows.window_registry.snapshot_for_wl_surface(wl);
         let title = toplevel_title_app_id(&surface).0;
         if let Some(true) = self.windows.window_registry.set_title(wl, title) {
-            let info = self.windows.window_registry
+            let info = self
+                .windows
+                .window_registry
                 .snapshot_for_wl_surface(wl)
                 .expect("title_changed: registry row");
             let old_shell = old
@@ -283,7 +312,9 @@ impl XdgShellHandler for CompositorState {
         let old = self.windows.window_registry.snapshot_for_wl_surface(wl);
         let app_id = toplevel_title_app_id(&surface).1;
         if let Some(true) = self.windows.window_registry.set_app_id(wl, app_id) {
-            let info = self.windows.window_registry
+            let info = self
+                .windows
+                .window_registry
                 .snapshot_for_wl_surface(wl)
                 .expect("app_id_changed: registry row");
             let old_shell = old
@@ -324,7 +355,11 @@ impl XdgShellHandler for CompositorState {
 
     fn move_request(&mut self, surface: ToplevelSurface, seat: wl_seat::WlSeat, serial: Serial) {
         let wl_surface = surface.wl_surface();
-        if let Some(info) = self.windows.window_registry.snapshot_for_wl_surface(wl_surface) {
+        if let Some(info) = self
+            .windows
+            .window_registry
+            .snapshot_for_wl_surface(wl_surface)
+        {
             if self.window_info_is_solid_shell_host(&info) {
                 return;
             }
@@ -335,7 +370,9 @@ impl XdgShellHandler for CompositorState {
         if let Some(start_data) = check_grab(&seat, wl_surface, serial) {
             let pointer = seat.get_pointer().unwrap();
 
-            let window = self.output_topology.space
+            let window = self
+                .output_topology
+                .space
                 .elements()
                 .find_map(|e| {
                     if let DerpSpaceElem::Wayland(w) = e {
@@ -345,7 +382,9 @@ impl XdgShellHandler for CompositorState {
                     }
                 })
                 .unwrap();
-            let initial_window_location = self.output_topology.space
+            let initial_window_location = self
+                .output_topology
+                .space
                 .element_location(&DerpSpaceElem::Wayland(window.clone()))
                 .unwrap();
 
@@ -369,7 +408,9 @@ impl XdgShellHandler for CompositorState {
         if let Some(start_data) = check_grab(&seat, wl_surface, serial) {
             let pointer = seat.get_pointer().unwrap();
 
-            let window = self.output_topology.space
+            let window = self
+                .output_topology
+                .space
                 .elements()
                 .find_map(|e| {
                     if let DerpSpaceElem::Wayland(w) = e {
@@ -379,7 +420,9 @@ impl XdgShellHandler for CompositorState {
                     }
                 })
                 .unwrap();
-            let initial_window_location = self.output_topology.space
+            let initial_window_location = self
+                .output_topology
+                .space
                 .element_location(&DerpSpaceElem::Wayland(window.clone()))
                 .unwrap();
             let initial_window_size = window.geometry().size;
@@ -434,7 +477,11 @@ impl XdgShellHandler for CompositorState {
         if read_toplevel_tiling(wl).1 {
             return;
         }
-        if !self.windows.toplevel_floating_restore.contains_key(&window_id) {
+        if !self
+            .windows
+            .toplevel_floating_restore
+            .contains_key(&window_id)
+        {
             if let Some(s) = self.toplevel_rect_snapshot(&window) {
                 self.windows.toplevel_floating_restore.insert(window_id, s);
             }
@@ -484,10 +531,18 @@ impl XdgShellHandler for CompositorState {
             return;
         }
         if read_toplevel_tiling(wl).0 {
-            self.windows.toplevel_fullscreen_return_maximized.insert(window_id);
+            self.windows
+                .toplevel_fullscreen_return_maximized
+                .insert(window_id);
         } else {
-            self.windows.toplevel_fullscreen_return_maximized.remove(&window_id);
-            if !self.windows.toplevel_floating_restore.contains_key(&window_id) {
+            self.windows
+                .toplevel_fullscreen_return_maximized
+                .remove(&window_id);
+            if !self
+                .windows
+                .toplevel_floating_restore
+                .contains_key(&window_id)
+            {
                 if let Some(s) = self.toplevel_rect_snapshot(&window) {
                     self.windows.toplevel_floating_restore.insert(window_id, s);
                 }
@@ -595,7 +650,9 @@ impl CompositorState {
             return;
         };
 
-        let window_geo = self.output_topology.space
+        let window_geo = self
+            .output_topology
+            .space
             .element_geometry(&DerpSpaceElem::Wayland(window.clone()))
             .unwrap();
         let wg = &window_geo;

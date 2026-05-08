@@ -173,12 +173,19 @@ impl WindowRegistry {
             client_side_decoration: false,
         };
         self.by_surface.insert(k, window_id);
-        self.records.insert(window_id, WindowRecord::native(info, WindowBackend::WaylandXdg));
+        self.records.insert(
+            window_id,
+            WindowRecord::native(info, WindowBackend::WaylandXdg),
+        );
         self.bump_revision();
         window_id
     }
 
-    pub fn set_native_backend(&mut self, window_id: WindowId, backend: WindowBackend) -> Option<bool> {
+    pub fn set_native_backend(
+        &mut self,
+        window_id: WindowId,
+        backend: WindowBackend,
+    ) -> Option<bool> {
         if backend == WindowBackend::ShellHosted {
             return None;
         }
@@ -400,11 +407,7 @@ impl WindowRegistry {
         self.records.get(&window_id).map(|record| record.lifecycle)
     }
 
-    pub fn transition(
-        &mut self,
-        window_id: WindowId,
-        event: WindowLifecycleEvent,
-    ) -> Option<bool> {
+    pub fn transition(&mut self, window_id: WindowId, event: WindowLifecycleEvent) -> Option<bool> {
         let record = self.records.get_mut(&window_id)?;
         let previous = record.lifecycle;
         let current = match event {
@@ -597,17 +600,19 @@ mod tests {
             registry.transition(42, WindowLifecycleEvent::RequestClose),
             Some(true)
         );
-        assert_eq!(registry.lifecycle(42), Some(WindowLifecycle::CloseRequested));
+        assert_eq!(
+            registry.lifecycle(42),
+            Some(WindowLifecycle::CloseRequested)
+        );
         assert_eq!(registry.window_info(42).unwrap().minimized, false);
     }
 
     #[test]
     fn failed_close_can_restore_previous_lifecycle() {
         let mut registry = WindowRegistry::new();
-        registry.records.insert(
-            43,
-            WindowRecord::native(info(43), WindowBackend::X11),
-        );
+        registry
+            .records
+            .insert(43, WindowRecord::native(info(43), WindowBackend::X11));
         registry.transition(43, WindowLifecycleEvent::Map);
         registry.transition(43, WindowLifecycleEvent::RequestClose);
 

@@ -272,7 +272,8 @@ impl WorkspaceLayoutState {
                 let mut assigned_windows = HashSet::new();
                 let mut assigned_slots: HashSet<usize> = HashSet::new();
                 for &window_id in window_ids {
-                    let Some(slot_index) = slots.iter().position(|slot| slot_matches(window_id, slot))
+                    let Some(slot_index) =
+                        slots.iter().position(|slot| slot_matches(window_id, slot))
                     else {
                         continue;
                     };
@@ -289,7 +290,8 @@ impl WorkspaceLayoutState {
                     if assigned_windows.contains(&window_id) {
                         continue;
                     }
-                    let Some(slot_index) = (0..slots.len()).find(|index| assigned_slots.insert(*index))
+                    let Some(slot_index) =
+                        (0..slots.len()).find(|index| assigned_slots.insert(*index))
                     else {
                         let slot_index = slots.len().saturating_sub(1);
                         out.insert(
@@ -735,7 +737,8 @@ impl WorkspaceLayoutState {
     }
 
     pub(crate) fn write_taskbar_pins_state(&self) {
-        if let Err(error) = crate::session::taskbar_pins::write_taskbar_pins(self.taskbar_pins.clone())
+        if let Err(error) =
+            crate::session::taskbar_pins::write_taskbar_pins(self.taskbar_pins.clone())
         {
             tracing::warn!(%error, "write taskbar pins failed");
         }
@@ -839,7 +842,10 @@ impl WorkspaceLayoutState {
         true
     }
 
-    pub(crate) fn taskbar_pin_launch_command(&self, json: &str) -> Option<(String, String, String)> {
+    pub(crate) fn taskbar_pin_launch_command(
+        &self,
+        json: &str,
+    ) -> Option<(String, String, String)> {
         #[derive(serde::Deserialize)]
         struct Params {
             #[serde(rename = "outputName")]

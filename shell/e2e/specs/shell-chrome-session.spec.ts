@@ -13,6 +13,7 @@ import {
   openSettings,
   openShellTestWindow,
   postJson,
+  SkipError,
   waitFor,
   waitForSessionRestoreIdle,
   waitForWindowGone,
@@ -27,12 +28,21 @@ type SessionStateResponse = {
     version: number
     nextNativeWindowSeq: number
     workspace: { groups: unknown[]; pinnedWindowRefs: unknown[]; nextGroupSeq: number }
-    tilingConfig: { monitors: Record<string, unknown> }
+    monitorLayouts: unknown[]
     monitorTiles: unknown[]
     preTileGeometry: unknown[]
     shellWindows: Array<{ windowId: number }>
     nativeWindows: Array<{ windowRef: string }>
   }
+}
+
+type SessionMonitorLayout = {
+  outputId?: string
+  outputName: string
+  layout: string
+  params?: Record<string, unknown>
+  snapLayout?: string
+  customLayouts?: unknown[]
 }
 
 async function waitForSessionShellWindow(base: string, windowId: number | null, present: boolean, timeoutMs = 5000) {
@@ -55,7 +65,7 @@ async function clearSessionState(base: string) {
       version: 1,
       nextNativeWindowSeq: 1,
       workspace: { groups: [], pinnedWindowRefs: [], nextGroupSeq: 1 },
-      tilingConfig: { monitors: {} },
+      monitorLayouts: [],
       monitorTiles: [],
       preTileGeometry: [],
       shellWindows: [],
@@ -64,7 +74,74 @@ async function clearSessionState(base: string) {
   })
 }
 
+function sessionLayoutFor(state: SessionStateResponse, outputName: string, outputId?: string | null) {
+  return state.shell.monitorLayouts.find((layout) => {
+    const entry = layout as SessionMonitorLayout
+    return outputId ? entry.outputId === outputId : entry.outputName === outputName
+  }) as SessionMonitorLayout | undefined
+}
+
 export default defineGroup(import.meta.url, ({ test }) => {
+  test('session restore keeps multi-monitor tiling layouts in compositor workspace state', async ({ base }) => {
+    await waitForSessionRestoreIdle(base)
+    const bootstrap = await getSnapshots(base)
+    if (bootstrap.compositor.outputs.length < 2) {
+      throw new SkipError('requires at least two outputs')
+    }
+    await clearSessionState(base)
+    const [first, second] = bootstrap.compositor.outputs
+    await postJson(base, '/session_state', {
+      version: 1,
+      shell: {
+        version: 1,
+        nextNativeWindowSeq: 1,
+        workspace: { groups: [], pinnedWindowRefs: [], nextGroupSeq: 1 },
+        monitorLayouts: [
+          {
+            outputName: first.name,
+            layout: 'grid',
+            params: { maxColumns: 2 },
+            snapLayout: '2x2',
+          },
+          {
+            outputName: second.name,
+            layout: 'manual-snap',
+            params: {},
+            snapLayout: '3x3',
+          },
+        ],
+        monitorTiles: [],
+        preTileGeometry: [],
+        shellWindows: [],
+        nativeWindows: [],
+      },
+    })
+
+    const powerMenu = await openPowerMenu(base)
+    assert(powerMenu.controls?.power_menu_restore_session, 'missing restore workspace power control')
+    await clickRect(base, powerMenu.controls.power_menu_restore_session)
+    const restored = await waitFor(
+      'wait for restored multi-monitor monitor layouts',
+      async () => {
+        const state = await getJson<SessionStateResponse>(base, '/session_state')
+        const firstLayout = sessionLayoutFor(state, first.name)
+        const secondLayout = sessionLayoutFor(state, second.name)
+        return firstLayout?.layout === 'grid' &&
+          firstLayout.params?.maxColumns === 2 &&
+          firstLayout.snapLayout === '2x2' &&
+          secondLayout?.layout === 'manual-snap' &&
+          secondLayout.snapLayout === '3x3'
+          ? state
+          : null
+      },
+      5000,
+      100,
+    )
+
+    await writeJsonArtifact('session-restore-multimonitor-tiling-layouts.json', restored)
+    await clearSessionState(base)
+  })
+
   test('session autosave toggle and power menu save restore actions work', async ({ base, state }) => {
     await waitForSessionRestoreIdle(base)
     const bootstrap = await getSnapshots(base)

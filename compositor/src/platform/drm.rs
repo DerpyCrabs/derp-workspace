@@ -29,6 +29,7 @@ use crate::render::derp_space_render;
 
 use crate::derp_space::DerpSpaceElem;
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
+use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::{
     calloop::{
@@ -48,7 +49,6 @@ use smithay::reexports::{
 };
 use smithay::utils::{DeviceFd, Physical, Rectangle, Transform};
 use smithay::wayland::presentation::{PresentationFeedbackCallback, Refresh};
-use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 use tracing::{debug, error, info, warn};
 
 const DERP_EGL_DMABUF_FORMAT_SAMPLE_LEN: usize = 32;
@@ -111,7 +111,13 @@ impl DrmHead {
             | wp_presentation_feedback::Kind::HwClock
             | wp_presentation_feedback::Kind::HwCompletion;
         for feedback in self.pending_presentation_feedback.drain(..) {
-            feedback.presented(&self.output, time, refresh, self.presentation_sequence, flags);
+            feedback.presented(
+                &self.output,
+                time,
+                refresh,
+                self.presentation_sequence,
+                flags,
+            );
         }
         self.pending_frame_complete = false;
         self.last_vblank_at = Some(Instant::now());
@@ -210,38 +216,41 @@ impl DrmHead {
 
             let cc = state.desktop_background_config.solid_rgba;
 
-            let render_res: Result<RenderOutputResult<'_>, OutputDamageError<GlesError>> =
-                if state.shell_osr.shell_presentation_fullscreen {
-                    match space_render_elements(renderer, [&state.output_topology.space], output, 1.0) {
-                        Ok(space_els) => {
-                            for el in &shell_render.move_proxy {
-                                render_elements.push(DesktopStack::ShellDma(el));
-                            }
-                            if let Some(ref el) = shell_render.dmabuf {
-                                render_elements.push(DesktopStack::ShellDma(el));
-                            }
-                            render_elements.extend(space_els.into_iter().map(|el| {
-                                DesktopStack::Space(
+            let render_res: Result<RenderOutputResult<'_>, OutputDamageError<GlesError>> = if state
+                .shell_osr
+                .shell_presentation_fullscreen
+            {
+                match space_render_elements(renderer, [&state.output_topology.space], output, 1.0) {
+                    Ok(space_els) => {
+                        for el in &shell_render.move_proxy {
+                            render_elements.push(DesktopStack::ShellDma(el));
+                        }
+                        if let Some(ref el) = shell_render.dmabuf {
+                            render_elements.push(DesktopStack::ShellDma(el));
+                        }
+                        render_elements.extend(space_els.into_iter().map(|el| {
+                            DesktopStack::Space(
                                 crate::desktop::desktop_stack::FractionalDamageSpaceElements::new(
                                     el,
                                     output_scale,
                                 ),
                             )
-                            }));
-                            let (backdrop, backdrop_force_full_damage) =
-                                crate::render::backdrop_render::desktop_backdrop_layers(
-                                    state,
-                                    output,
-                                    output_scale,
-                                );
-                            for s in backdrop.solids {
-                                render_elements.push(DesktopStack::BackdropSolid(s));
-                            }
-                            for t in backdrop.textures {
-                                render_elements.push(DesktopStack::BackdropTex(t));
-                            }
-                            let capture_needs_full_damage = state.capture.capture_needs_full_damage();
-                            let age_for_render = if state.shell_osr.shell_exclusion_zones_need_full_damage
+                        }));
+                        let (backdrop, backdrop_force_full_damage) =
+                            crate::render::backdrop_render::desktop_backdrop_layers(
+                                state,
+                                output,
+                                output_scale,
+                            );
+                        for s in backdrop.solids {
+                            render_elements.push(DesktopStack::BackdropSolid(s));
+                        }
+                        for t in backdrop.textures {
+                            render_elements.push(DesktopStack::BackdropTex(t));
+                        }
+                        let capture_needs_full_damage = state.capture.capture_needs_full_damage();
+                        let age_for_render =
+                            if state.shell_osr.shell_exclusion_zones_need_full_damage
                                 || state.capture.screenshot_overlay_needs_full_damage()
                                 || shell_render.force_full_damage
                                 || backdrop_force_full_damage
@@ -251,97 +260,97 @@ impl DrmHead {
                             } else {
                                 buffer_age as usize
                             };
-                            let out = self.damage_tracker.render_output(
-                                renderer,
-                                &mut fb_target,
-                                age_for_render,
-                                &render_elements,
-                                [cc[0], cc[1], cc[2], cc[3]],
-                            );
-                            if out.is_ok() {
-                                state.shell_osr.shell_exclusion_zones_need_full_damage = false;
-                                state.capture.mark_rendered_frame();
-                            }
-                            out
+                        let out = self.damage_tracker.render_output(
+                            renderer,
+                            &mut fb_target,
+                            age_for_render,
+                            &render_elements,
+                            [cc[0], cc[1], cc[2], cc[3]],
+                        );
+                        if out.is_ok() {
+                            state.shell_osr.shell_exclusion_zones_need_full_damage = false;
+                            state.capture.mark_rendered_frame();
                         }
-                        Err(e) => Err(e.into()),
+                        out
                     }
-                } else {
-                    for el in &shell_render.move_proxy {
+                    Err(e) => Err(e.into()),
+                }
+            } else {
+                for el in &shell_render.move_proxy {
+                    render_elements.push(DesktopStack::ShellDma(el));
+                }
+                let tagged = derp_space_render::derp_space_render_elements_with_window_ids(
+                    &state.output_topology.space,
+                    state,
+                    renderer,
+                    output,
+                    1.0,
+                );
+                let ordered_window_ids_on_output = state.ordered_window_ids_on_output(output);
+                for (el, wid, include_self_decor) in tagged {
+                    let excl_ctx = state.shell_exclusion_clip_ctx_for_draw(
+                        output,
+                        wid,
+                        include_self_decor,
+                        Some(&ordered_window_ids_on_output),
+                    );
+                    match excl_ctx {
+                        None => render_elements.push(DesktopStack::Space(
+                            crate::desktop::desktop_stack::FractionalDamageSpaceElements::new(
+                                el,
+                                output_scale,
+                            ),
+                        )),
+                        Some(ctx) => render_elements.push(DesktopStack::SpaceClip(
+                            SpaceExclusionClip::new(el, output_scale, ctx),
+                        )),
+                    }
+                }
+                let bypass_shell = state.output_has_fullscreen_native_direct_path(output);
+                if bypass_shell {
+                    crate::cef::begin_frame_diag::note_drm_fullscreen_shell_bypass();
+                }
+                if !bypass_shell {
+                    if let Some(ref el) = shell_render.dmabuf {
                         render_elements.push(DesktopStack::ShellDma(el));
                     }
-                    let tagged = derp_space_render::derp_space_render_elements_with_window_ids(
-                        &state.output_topology.space,
+                }
+                let (backdrop, backdrop_force_full_damage) =
+                    crate::render::backdrop_render::desktop_backdrop_layers(
                         state,
-                        renderer,
                         output,
-                        1.0,
+                        output_scale,
                     );
-                    let ordered_window_ids_on_output = state.ordered_window_ids_on_output(output);
-                    for (el, wid, include_self_decor) in tagged {
-                        let excl_ctx = state.shell_exclusion_clip_ctx_for_draw(
-                            output,
-                            wid,
-                            include_self_decor,
-                            Some(&ordered_window_ids_on_output),
-                        );
-                        match excl_ctx {
-                            None => render_elements.push(DesktopStack::Space(
-                                crate::desktop::desktop_stack::FractionalDamageSpaceElements::new(
-                                    el,
-                                    output_scale,
-                                ),
-                            )),
-                            Some(ctx) => render_elements.push(DesktopStack::SpaceClip(
-                                SpaceExclusionClip::new(el, output_scale, ctx),
-                            )),
-                        }
-                    }
-                    let bypass_shell = state.output_has_fullscreen_native_direct_path(output);
-                    if bypass_shell {
-                        crate::cef::begin_frame_diag::note_drm_fullscreen_shell_bypass();
-                    }
-                    if !bypass_shell {
-                        if let Some(ref el) = shell_render.dmabuf {
-                            render_elements.push(DesktopStack::ShellDma(el));
-                        }
-                    }
-                    let (backdrop, backdrop_force_full_damage) =
-                        crate::render::backdrop_render::desktop_backdrop_layers(
-                            state,
-                            output,
-                            output_scale,
-                        );
-                    for s in backdrop.solids {
-                        render_elements.push(DesktopStack::BackdropSolid(s));
-                    }
-                    for t in backdrop.textures {
-                        render_elements.push(DesktopStack::BackdropTex(t));
-                    }
-                    let capture_needs_full_damage = state.capture.capture_needs_full_damage();
-                    let age_for_render = if state.shell_osr.shell_exclusion_zones_need_full_damage
-                        || state.capture.screenshot_overlay_needs_full_damage()
-                        || shell_render.force_full_damage
-                        || backdrop_force_full_damage
-                        || capture_needs_full_damage
-                    {
-                        0usize
-                    } else {
-                        buffer_age as usize
-                    };
-                    let out = self.damage_tracker.render_output(
-                        renderer,
-                        &mut fb_target,
-                        age_for_render,
-                        &render_elements,
-                        [cc[0], cc[1], cc[2], cc[3]],
-                    );
-                    if out.is_ok() {
-                        state.shell_osr.shell_exclusion_zones_need_full_damage = false;
-                        state.capture.mark_rendered_frame();
-                    }
-                    out
+                for s in backdrop.solids {
+                    render_elements.push(DesktopStack::BackdropSolid(s));
+                }
+                for t in backdrop.textures {
+                    render_elements.push(DesktopStack::BackdropTex(t));
+                }
+                let capture_needs_full_damage = state.capture.capture_needs_full_damage();
+                let age_for_render = if state.shell_osr.shell_exclusion_zones_need_full_damage
+                    || state.capture.screenshot_overlay_needs_full_damage()
+                    || shell_render.force_full_damage
+                    || backdrop_force_full_damage
+                    || capture_needs_full_damage
+                {
+                    0usize
+                } else {
+                    buffer_age as usize
                 };
+                let out = self.damage_tracker.render_output(
+                    renderer,
+                    &mut fb_target,
+                    age_for_render,
+                    &render_elements,
+                    [cc[0], cc[1], cc[2], cc[3]],
+                );
+                if out.is_ok() {
+                    state.shell_osr.shell_exclusion_zones_need_full_damage = false;
+                    state.capture.mark_rendered_frame();
+                }
+                out
+            };
 
             if render_res.is_ok() {
                 state.screenshot_capture_output_if_needed(output, renderer, &fb_target);
@@ -365,10 +374,7 @@ impl DrmHead {
                     warn!(?e, "drm render_output");
                     let sync = smithay::backend::renderer::sync::SyncPoint::signaled();
                     state.explicit_sync_finish_output_sample(sync.clone());
-                    (
-                        PendingSubmit::Full,
-                        sync,
-                    )
+                    (PendingSubmit::Full, sync)
                 }
             }
         };
@@ -389,7 +395,9 @@ impl DrmHead {
         }
 
         let mut presentation_feedback = state.drain_presentation_feedback_for_output(output);
-        let requested_async = state.output_async_tearing_candidate_window(output).is_some();
+        let requested_async = state
+            .output_async_tearing_candidate_window(output)
+            .is_some();
         let (flip_mode, fallback_reason) = if requested_async {
             (
                 "vsync".to_string(),
@@ -423,27 +431,31 @@ impl DrmHead {
 
         state.signal_fifo_barriers_for_output(output);
 
-        state.output_topology.space.elements().for_each(|elem| match elem {
-            DerpSpaceElem::Wayland(window) => {
-                window.send_frame(
-                    output,
-                    state.core.start_time.elapsed(),
-                    Some(Duration::ZERO),
-                    |_, _| Some(output.clone()),
-                );
-            }
-            DerpSpaceElem::X11(x11) => {
-                if let Some(surf) = x11.wl_surface() {
-                    smithay::desktop::utils::send_frames_surface_tree(
-                        &surf,
+        state
+            .output_topology
+            .space
+            .elements()
+            .for_each(|elem| match elem {
+                DerpSpaceElem::Wayland(window) => {
+                    window.send_frame(
                         output,
                         state.core.start_time.elapsed(),
                         Some(Duration::ZERO),
                         |_, _| Some(output.clone()),
                     );
                 }
-            }
-        });
+                DerpSpaceElem::X11(x11) => {
+                    if let Some(surf) = x11.wl_surface() {
+                        smithay::desktop::utils::send_frames_surface_tree(
+                            &surf,
+                            output,
+                            state.core.start_time.elapsed(),
+                            Some(Duration::ZERO),
+                            |_, _| Some(output.clone()),
+                        );
+                    }
+                }
+            });
 
         (content_advanced, true)
     }
@@ -629,9 +641,12 @@ impl DrmSession {
                 break;
             }
         }
-        if self.render_every_vblank_until_shell_frame || self.render_pending_after_vblank {
-            self.render_pending_after_vblank =
-                self.heads.iter().any(|head| head.pending_frame_complete);
+        if self.render_every_vblank_until_shell_frame {
+            self.schedule_drm_idle_render_coalesced();
+        } else if self.render_pending_after_vblank
+            && !self.heads.iter().any(|head| head.pending_frame_complete)
+        {
+            self.render_pending_after_vblank = false;
             self.schedule_drm_idle_render_coalesced();
         }
     }
@@ -737,7 +752,8 @@ impl DrmSession {
             return;
         }
 
-        let shell_sc = CompositorState::wayland_scale_for_shell_ui(state.output_topology.shell_ui_scale);
+        let shell_sc =
+            CompositorState::wayland_scale_for_shell_ui(state.output_topology.shell_ui_scale);
         let hotplug_backoff = Duration::from_secs(2);
         let mut shift_total = 0i32;
         let mut planned: Vec<(crtc::Handle, DrmCtlMode, Vec<connector::Handle>, i32)> =
@@ -846,7 +862,10 @@ impl DrmSession {
             );
             output.set_preferred(mode);
 
-            state.output_topology.space.map_output(&output, (cursor_x, cursor_y));
+            state
+                .output_topology
+                .space
+                .map_output(&output, (cursor_x, cursor_y));
 
             cursor_x = cursor_x.saturating_add(lw);
 
@@ -898,7 +917,9 @@ impl DrmSession {
     }
 
     fn render_tick(&mut self, state: &mut CompositorState, display: &mut DisplayHandle) {
-        if state.output_topology.display_config_save_pending && !state.output_topology.display_config_save_suppressed {
+        if state.output_topology.display_config_save_pending
+            && !state.output_topology.display_config_save_suppressed
+        {
             state.output_topology.display_config_save_pending = false;
             crate::controls::display_config::save_from_drm_session(state, self);
         }
@@ -1269,7 +1290,8 @@ pub fn init_drm(
                 .map_err(|e| format!("GbmBufferedSurface: {e}"))?;
 
         let mode = OutputMode::from(drm_mode);
-        let shell_sc = CompositorState::wayland_scale_for_shell_ui(data.state.output_topology.shell_ui_scale);
+        let shell_sc =
+            CompositorState::wayland_scale_for_shell_ui(data.state.output_topology.shell_ui_scale);
         let logical_stride_w = {
             let sz = Transform::Normal
                 .transform_size(mode.size)
@@ -1297,7 +1319,10 @@ pub fn init_drm(
         );
         output.set_preferred(mode);
 
-        data.state.output_topology.space.map_output(&output, (cursor_x, cursor_y));
+        data.state
+            .output_topology
+            .space
+            .map_output(&output, (cursor_x, cursor_y));
 
         cursor_x = cursor_x.saturating_add(logical_stride_w);
 

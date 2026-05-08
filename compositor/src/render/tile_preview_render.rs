@@ -36,7 +36,10 @@ pub(crate) fn append_tile_preview_for_output<'a>(
     }
     let scale_f = output.current_scale().fractional_scale();
     let loc_out = inter.loc - output_geo.loc;
-    state.workspace_layout.tile_preview_solid.update(inter.size, PREVIEW_COLOR);
+    state
+        .workspace_layout
+        .tile_preview_solid
+        .update(inter.size, PREVIEW_COLOR);
     let phys_loc = loc_out.to_physical_precise_round(Scale::from(scale_f));
     let el = SolidColorRenderElement::from_buffer(
         &state.workspace_layout.tile_preview_solid,

@@ -226,8 +226,7 @@ impl InputRoutingState {
         new_wid: Option<u32>,
         shell_host: bool,
         should_track: F,
-    )
-    where
+    ) where
         F: Fn(u32) -> bool,
     {
         let prev = self.keyboard_layout_last_focus_window.take();

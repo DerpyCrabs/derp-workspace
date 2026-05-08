@@ -1,6 +1,6 @@
+use crate::cef::compositor_tx::CefToCompositor;
 use smithay::reexports::calloop::channel::Sender;
 use smithay::utils::{Logical, Rectangle};
-use crate::cef::compositor_tx::CefToCompositor;
 
 #[derive(Clone)]
 pub struct UplinkToCompositor {

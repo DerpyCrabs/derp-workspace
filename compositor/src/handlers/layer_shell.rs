@@ -19,7 +19,8 @@ impl CompositorState {
     ) -> Option<smithay::output::Output> {
         output
             .and_then(|wl_output| {
-                self.output_topology.space
+                self.output_topology
+                    .space
                     .outputs()
                     .find(|output| output.owns(wl_output))
                     .cloned()
@@ -32,10 +33,7 @@ impl CompositorState {
         layer_map_for_output(output).arrange();
     }
 
-    fn arrange_layer_output_and_refresh_usable_area(
-        &mut self,
-        output: &smithay::output::Output,
-    ) {
+    fn arrange_layer_output_and_refresh_usable_area(&mut self, output: &smithay::output::Output) {
         let before = self
             .output_topology
             .layer_usable_area_global_for_output(output);

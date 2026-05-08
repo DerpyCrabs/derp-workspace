@@ -71,8 +71,7 @@ impl CaptureState {
             .iter()
             .copied()
             .filter(|f| {
-                matches!(f.code, Fourcc::Argb8888 | Fourcc::Xrgb8888)
-                    && f.modifier == modifierless
+                matches!(f.code, Fourcc::Argb8888 | Fourcc::Xrgb8888) && f.modifier == modifierless
             })
             .collect();
         if out.is_empty() {

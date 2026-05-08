@@ -578,21 +578,19 @@ mod tests {
         let mut model = ShellSnapshotModel::default();
         model.apply(&mapped_window(3, 3, "First"));
         model.apply(&mapped_window(4, 9, "Second"));
-        model.apply(
-            &shell_wire::DecodedCompositorToShellMessage::WindowOrder {
-                revision: 22,
-                windows: vec![
-                    shell_wire::ShellWindowOrderEntry {
-                        window_id: 3,
-                        stack_z: 12,
-                    },
-                    shell_wire::ShellWindowOrderEntry {
-                        window_id: 4,
-                        stack_z: 2,
-                    },
-                ],
-            },
-        );
+        model.apply(&shell_wire::DecodedCompositorToShellMessage::WindowOrder {
+            revision: 22,
+            windows: vec![
+                shell_wire::ShellWindowOrderEntry {
+                    window_id: 3,
+                    stack_z: 12,
+                },
+                shell_wire::ShellWindowOrderEntry {
+                    window_id: 4,
+                    stack_z: 2,
+                },
+            ],
+        });
 
         let messages = model.messages();
         let window_list = messages
@@ -607,10 +605,9 @@ mod tests {
         let window_order = messages
             .iter()
             .find_map(|message| match message {
-                shell_wire::DecodedCompositorToShellMessage::WindowOrder {
-                    revision,
-                    windows,
-                } => Some((*revision, windows)),
+                shell_wire::DecodedCompositorToShellMessage::WindowOrder { revision, windows } => {
+                    Some((*revision, windows))
+                }
                 _ => None,
             })
             .expect("missing window order");
@@ -631,9 +628,7 @@ mod tests {
             revision: 7,
             state_json: r#"{"groups":[{"id":"group-1","windowIds":[3]}],"activeTabByGroupId":{"group-1":3},"nextGroupSeq":2}"#.to_string(),
         });
-        model.apply(&shell_wire::DecodedCompositorToShellMessage::WindowUnmapped {
-            window_id: 3,
-        });
+        model.apply(&shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id: 3 });
 
         let messages = model.messages();
         let workspace = messages

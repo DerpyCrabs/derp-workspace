@@ -1,8 +1,9 @@
 import type { SnapZone } from '@/features/tiling/tileZones'
-import type { TilingConfig } from '@/features/tiling/tilingConfig'
 import { getShellJson, postShellJson } from './shellBridge'
 import { waitForShellHttpBase } from './shellHttp'
 import { clampWorkspaceSplitPaneFraction } from '@/features/workspace/workspaceState'
+import type { WorkspaceMonitorLayoutState } from '@/features/workspace/workspaceProtocol'
+import { normalizeWorkspaceSnapshot } from '@/features/workspace/workspaceSnapshot'
 
 export type SessionWindowRef = string
 
@@ -91,7 +92,7 @@ export type SessionSnapshot = {
     pinnedWindowRefs: SessionWindowRef[]
     nextGroupSeq: number
   }
-  tilingConfig: TilingConfig
+  monitorLayouts: WorkspaceMonitorLayoutState[]
   monitorTiles: SavedMonitorTileState[]
   preTileGeometry: SavedPreTileGeometry[]
   shellWindows: SavedShellWindow[]
@@ -308,7 +309,7 @@ function defaultSnapshot(): SessionSnapshot {
       pinnedWindowRefs: [],
       nextGroupSeq: 1,
     },
-    tilingConfig: { monitors: {} },
+    monitorLayouts: [],
     monitorTiles: [],
     preTileGeometry: [],
     shellWindows: [],
@@ -374,10 +375,7 @@ export function sanitizeSessionSnapshot(value: unknown): SessionSnapshot {
     seenNativeRefs.add(window.windowRef)
     nativeWindows.push(window)
   }
-  const tilingConfig =
-    isObject(value.tilingConfig) && isObject(value.tilingConfig.monitors)
-      ? { monitors: { ...(value.tilingConfig.monitors as Record<string, unknown>) } }
-      : { monitors: {} }
+  const monitorLayouts = normalizeWorkspaceSnapshot({ monitorLayouts: value.monitorLayouts }).monitorLayouts
   return {
     version: SESSION_SNAPSHOT_VERSION,
     nextNativeWindowSeq: coercePositiveInt(value.nextNativeWindowSeq, 1),
@@ -386,7 +384,7 @@ export function sanitizeSessionSnapshot(value: unknown): SessionSnapshot {
       pinnedWindowRefs: sanitizePinnedRefs(workspaceRaw.pinnedWindowRefs),
       nextGroupSeq: coercePositiveInt(workspaceRaw.nextGroupSeq, 1),
     },
-    tilingConfig: tilingConfig as TilingConfig,
+    monitorLayouts,
     monitorTiles,
     preTileGeometry,
     shellWindows,
