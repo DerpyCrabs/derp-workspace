@@ -16,7 +16,7 @@ import {
 } from '../lib/runtime.ts'
 
 export default defineGroup(import.meta.url, ({ test }) => {
-  test('native window churn refreshes shell through direct compositor batches', async ({ base, state }) => {
+  test('native window churn refreshes shell from authoritative shared snapshots', async ({ base, state }) => {
     await resetPerfCounters(base)
     const stamp = Date.now()
     const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
@@ -49,6 +49,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const perf = await getPerfCounters(base)
     assert(perf.shell_updates.batch_count >= 1, 'expected compositor batch delivery after native window spawn')
     assert(perf.shell_updates.window_mapped_messages >= 1, 'expected mapped window detail after native window spawn')
+    assert(
+      (perf.shell_runtime?.snapshot_apply_count ?? 0) >= 1,
+      `expected snapshot apply after native window spawn, got ${perf.shell_runtime?.snapshot_apply_count ?? 0}`,
+    )
     assert(perf.shell_sync.snapshot_reads <= 1, `expected <= 1 snapshot read after native window spawn, got ${perf.shell_sync.snapshot_reads}`)
 
     const controls = windowControls(shell, spawned.window.window_id)
@@ -72,6 +76,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
 
     assert(moved.row.x !== row.x, 'shell snapshot did not receive moved window geometry')
+    const movedCompositor = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const movedAuthoritativeRow = shellWindowById(movedCompositor, spawned.window.window_id)
+    assert(movedAuthoritativeRow, 'moved window missing after authoritative snapshot refresh')
+    assert(
+      movedAuthoritativeRow.x === moved.row.x &&
+        movedAuthoritativeRow.y === moved.row.y &&
+        movedAuthoritativeRow.width === moved.row.width &&
+        movedAuthoritativeRow.height === moved.row.height,
+      'shell state should remain stable after the snapshot-authoritative move settles',
+    )
     const movePerf = await getPerfCounters(base)
     assert(
       (movePerf.shell_runtime?.batch_apply_count ?? 0) >= 1,
@@ -88,6 +102,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(
       movePerf.shell_sync.snapshot_reads >= 1,
       `expected immutable snapshot read after native window geometry change, got ${movePerf.shell_sync.snapshot_reads}`,
+    )
+    assert(
+      (movePerf.shell_runtime?.snapshot_apply_count ?? 0) >= 1,
+      `expected snapshot apply after native window geometry change, got ${movePerf.shell_runtime?.snapshot_apply_count ?? 0}`,
     )
   })
 })

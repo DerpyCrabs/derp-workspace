@@ -698,6 +698,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     }
     if (detailIsSnapshotState(d)) {
       const synced = syncCompositorSnapshot()
+      if (!synced) scheduleCompositorVisualFollowup([d])
       bridgeDebug({
         last_drop: {
           reason: synced ? 'snapshot_state_event_replaced_by_snapshot' : 'snapshot_state_event_waiting_for_snapshot',
@@ -717,6 +718,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       const hasSnapshotState = details.some(detailIsSnapshotState)
       if (hasSnapshotState) {
         const synced = syncCompositorSnapshot()
+        if (!synced) scheduleCompositorVisualFollowup(details.filter(detailIsSnapshotState))
         bridgeDebug({
           last_drop: {
             reason: synced ? 'snapshot_state_batch_replaced_by_snapshot' : 'snapshot_state_batch_waiting_for_snapshot',

@@ -204,6 +204,39 @@ describe('registerCompositorBridgeRuntime', () => {
     dispose()
   })
 
+  it('uses compositor-owned incrementals only as snapshot wakeups and visual followups when no snapshot is readable', async () => {
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: vi.fn(() => null),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'window_geometry',
+        window_id: 7,
+        surface_id: 70,
+        x: 11,
+        y: 12,
+        width: 640,
+        height: 480,
+        snapshot_epoch: 12,
+      } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.applyModelCompositorDetails).not.toHaveBeenCalled()
+    expect(runtimeOptions.scheduleCompositorFollowup).toHaveBeenCalledWith(
+      expect.objectContaining({ flushWindows: true, syncExclusion: true }),
+    )
+    expect(runtimeOptions.bumpSnapChrome).toHaveBeenCalledTimes(1)
+    expect(runtimeOptions.shellWireSend).toHaveBeenCalledWith('invalidate_view')
+    dispose()
+  })
+
   it('does not apply focus details directly instead of snapshot replacement', async () => {
     vi.stubGlobal('window', {
       __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
