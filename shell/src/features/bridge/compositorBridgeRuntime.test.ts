@@ -4,8 +4,17 @@ import type { DerpShellDetail } from '@/host/appWindowState'
 import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 
 const DOMAIN_COUNT = 14
+const SNAPSHOT_DOMAIN_OUTPUTS = 1 << 0
 const SNAPSHOT_DOMAIN_WINDOWS = 1 << 1
+const SNAPSHOT_DOMAIN_FOCUS = 1 << 2
 const SNAPSHOT_DOMAIN_KEYBOARD = 1 << 3
+const SNAPSHOT_DOMAIN_WORKSPACE = 1 << 4
+const SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS = 1 << 5
+const SNAPSHOT_DOMAIN_INTERACTION = 1 << 6
+const SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW = 1 << 7
+const SNAPSHOT_DOMAIN_TRAY = 1 << 8
+const SNAPSHOT_DOMAIN_WINDOW_ORDER = 1 << 9
+const SNAPSHOT_DOMAIN_COMMAND_PALETTE = 1 << 13
 
 function u32(value: number): number[] {
   return [value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff]
@@ -89,6 +98,7 @@ function options(overrides: Partial<Parameters<typeof registerCompositorBridgeRu
     scheduleExclusionZonesSync: vi.fn(),
     scheduleCompositorFollowup: vi.fn(),
     applyModelAuthoritativeSnapshotDetails: vi.fn(),
+    clearModelAuthoritativeSnapshotDomains: vi.fn(),
     closeAllAtlasSelects: vi.fn(() => false),
     hideContextMenu: vi.fn(),
     toggleProgramsMenuMeta: vi.fn(),
@@ -665,6 +675,68 @@ describe('registerCompositorBridgeRuntime', () => {
     )
     expect(runtimeOptions.bumpSnapChrome).toHaveBeenCalledTimes(1)
     expect(runtimeOptions.shellWireSend).toHaveBeenCalledWith('invalidate_view')
+    dispose()
+  })
+
+  it('clears model domains when an authoritative snapshot flags empty domains', async () => {
+    const flags =
+      SNAPSHOT_DOMAIN_WINDOWS |
+      SNAPSHOT_DOMAIN_WINDOW_ORDER |
+      SNAPSHOT_DOMAIN_FOCUS |
+      SNAPSHOT_DOMAIN_WORKSPACE |
+      SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS |
+      SNAPSHOT_DOMAIN_COMMAND_PALETTE
+    const readSnapshot = vi.fn().mockReturnValueOnce(emptySnapshot(10n)).mockReturnValueOnce(snapshot(12n, flags))
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: readSnapshot,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    window.__DERP_SYNC_COMPOSITOR_SNAPSHOT?.()
+
+    expect(runtimeOptions.clearModelAuthoritativeSnapshotDomains).toHaveBeenCalledWith({
+      windows: true,
+      windowOrder: true,
+      focus: true,
+      workspace: true,
+      shellHostedApps: true,
+      commandPalette: true,
+    })
+    dispose()
+  })
+
+  it('clears visual snapshot domains when flags are present without details', async () => {
+    const flags =
+      SNAPSHOT_DOMAIN_OUTPUTS |
+      SNAPSHOT_DOMAIN_KEYBOARD |
+      SNAPSHOT_DOMAIN_TRAY |
+      SNAPSHOT_DOMAIN_INTERACTION |
+      SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW
+    const readSnapshot = vi.fn().mockReturnValueOnce(emptySnapshot(10n)).mockReturnValueOnce(snapshot(12n, flags))
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: readSnapshot,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    window.__DERP_SYNC_COMPOSITOR_SNAPSHOT?.()
+
+    expect(runtimeOptions.setOutputTopology).toHaveBeenCalledWith(null)
+    expect(runtimeOptions.setKeyboardLayoutLabel).toHaveBeenCalledWith(null)
+    expect(runtimeOptions.setTrayReservedPx).toHaveBeenCalledWith(0)
+    expect(runtimeOptions.setTrayIconSlotPx).toHaveBeenCalledWith(36)
+    expect(runtimeOptions.setSniTrayItems).toHaveBeenCalledWith([])
+    expect(runtimeOptions.setCompositorInteractionState).toHaveBeenCalledWith(null)
+    expect(runtimeOptions.setNativeDragPreview).toHaveBeenCalledWith(null)
     dispose()
   })
 })

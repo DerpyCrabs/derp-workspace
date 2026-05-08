@@ -334,6 +334,7 @@ function App() {
     shellHostedAppByWindow,
     commandPaletteState,
     applyAuthoritativeSnapshotDetails: applyModelAuthoritativeSnapshotDetails,
+    clearAuthoritativeSnapshotDomains: clearModelAuthoritativeSnapshotDomains,
   } = createCompositorModel()
   const allWindowsMap = compositorWindowsMap
   const windows = compositorWindowsMap
@@ -1186,36 +1187,13 @@ function App() {
     targetGroupId: string,
     insertIndex: number,
   ) {
-    let mergeFrames = 0
-    const waitForOpenedGroup = () => {
-      mergeFrames += 1
-      const openedGroupId = workspaceGroupIdForWindow(openedWindowId)
-      const targetGroup = workspaceSnapshot().groups.find((group) => group.id === targetGroupId)
-      if (!allWindowsMap().has(openedWindowId) || !openedGroupId || !targetGroup) {
-        if (mergeFrames < 120) requestAnimationFrame(waitForOpenedGroup)
-        return
-      }
-      if (openedGroupId !== targetGroupId) {
-        sendWorkspaceMutation({
-          type: 'move_window_to_group',
-          windowId: openedWindowId,
-          targetGroupId,
-          insertIndex,
-        })
-      }
-      let selectFrames = 0
-      const waitForMergedGroup = () => {
-        selectFrames += 1
-        const group = workspaceSnapshot().groups.find((entry) => entry.id === targetGroupId)
-        if (!group?.windowIds.includes(openedWindowId)) {
-          if (selectFrames < 120) requestAnimationFrame(waitForMergedGroup)
-          return
-        }
-        sendWorkspaceMutation({ type: 'select_tab', groupId: targetGroupId, windowId: openedWindowId })
-      }
-      waitForMergedGroup()
-    }
-    waitForOpenedGroup()
+    sendWorkspaceMutation({
+      type: 'move_window_to_group',
+      windowId: openedWindowId,
+      targetGroupId,
+      insertIndex,
+    })
+    sendWorkspaceMutation({ type: 'select_tab', groupId: targetGroupId, windowId: openedWindowId })
   }
 
   function placeOpenedWindowInSourceGroup(
@@ -1225,45 +1203,23 @@ function App() {
   ) {
     const targetGroupId = workspaceGroupIdForWindow(sourceWindowId)
     if (!targetGroupId) return
-    let mergeFrames = 0
-    const waitForOpenedGroup = () => {
-      mergeFrames += 1
-      const openedGroupId = workspaceGroupIdForWindow(openedWindowId)
-      const targetGroup = workspaceSnapshot().groups.find((group) => group.id === targetGroupId)
-      if (!allWindowsMap().has(openedWindowId) || !openedGroupId || !targetGroup) {
-        if (mergeFrames < 120) requestAnimationFrame(waitForOpenedGroup)
-        return
-      }
-      if (openedGroupId !== targetGroupId) {
-        sendWorkspaceMutation({
-          type: 'move_window_to_group',
-          windowId: openedWindowId,
-          targetGroupId,
-          insertIndex: targetGroup.windowIds.length,
-        })
-      }
-      let selectFrames = 0
-      const waitForMergedGroup = () => {
-        selectFrames += 1
-        const group = workspaceSnapshot().groups.find((entry) => entry.id === targetGroupId)
-        if (!group?.windowIds.includes(openedWindowId)) {
-          if (selectFrames < 120) requestAnimationFrame(waitForMergedGroup)
-          return
-        }
-        if (mode === 'tab') {
-          sendWorkspaceMutation({ type: 'select_tab', groupId: targetGroupId, windowId: openedWindowId })
-          return
-        }
-        sendWorkspaceMutation({
-          type: 'enter_split',
-          groupId: targetGroupId,
-          leftWindowId: sourceWindowId,
-          leftPaneFraction: 0.5,
-        })
-      }
-      waitForMergedGroup()
+    const targetGroup = workspaceSnapshot().groups.find((group) => group.id === targetGroupId)
+    sendWorkspaceMutation({
+      type: 'move_window_to_group',
+      windowId: openedWindowId,
+      targetGroupId,
+      insertIndex: targetGroup?.windowIds.length ?? 0,
+    })
+    if (mode === 'tab') {
+      sendWorkspaceMutation({ type: 'select_tab', groupId: targetGroupId, windowId: openedWindowId })
+      return
     }
-    waitForOpenedGroup()
+    sendWorkspaceMutation({
+      type: 'enter_split',
+      groupId: targetGroupId,
+      leftWindowId: sourceWindowId,
+      leftPaneFraction: 0.5,
+    })
   }
 
   function openFileBrowserEntryInWorkspaceGroup(
@@ -2035,6 +1991,7 @@ function App() {
         scheduleExclusionZonesSync,
         scheduleCompositorFollowup: workspaceLayoutBridge.scheduleCompositorFollowup,
         applyModelAuthoritativeSnapshotDetails,
+        clearModelAuthoritativeSnapshotDomains,
         closeAllAtlasSelects,
         hideContextMenu: shellContextMenus.hideContextMenu,
         toggleProgramsMenuMeta: shellContextMenus.toggleProgramsMenuMeta,

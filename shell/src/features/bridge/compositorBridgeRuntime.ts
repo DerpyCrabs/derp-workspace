@@ -20,6 +20,7 @@ import { coerceShellWindowId, type DerpShellDetail, type DerpWindow } from '@/ho
 import type { LayoutScreen } from '@/host/types'
 import type { TaskbarSniItem } from '@/features/taskbar/Taskbar'
 import type { Rect as TileRect, SnapZone } from '@/features/tiling/tileZones'
+import type { CompositorAuthoritativeDomainClears } from '@/features/bridge/compositorModel'
 import type { WorkspaceSnapshot } from '@/features/workspace/workspaceSnapshot'
 import {
   sanitizeNotificationsState,
@@ -104,6 +105,7 @@ type CompositorBridgeRuntimeOptions = {
   setOutputTopology: (
     value:
       | CompositorOutputTopology
+      | null
       | ((prev: CompositorOutputTopology | null) => CompositorOutputTopology),
   ) => void
   setCompositorSnapshotSequence: (value: number) => void
@@ -116,6 +118,7 @@ type CompositorBridgeRuntimeOptions = {
   scheduleExclusionZonesSync: () => void
   scheduleCompositorFollowup: (options?: CompositorFollowup) => void
   applyModelAuthoritativeSnapshotDetails: (details: readonly DerpShellDetail[]) => void
+  clearModelAuthoritativeSnapshotDomains: (clears: CompositorAuthoritativeDomainClears) => void
   closeAllAtlasSelects: () => boolean
   hideContextMenu: () => void
   toggleProgramsMenuMeta: (outputName: string | null) => void
@@ -214,7 +217,17 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   let lastKnownInteractionState: CompositorInteractionState = null
   const removeShellRuntimePerfCounters = installShellRuntimePerfCounters()
 
+  const snapshotDomainOutputs = 1 << 0
+  const snapshotDomainWindows = 1 << 1
+  const snapshotDomainFocus = 1 << 2
+  const snapshotDomainKeyboard = 1 << 3
+  const snapshotDomainWorkspace = 1 << 4
+  const snapshotDomainShellHostedApps = 1 << 5
   const snapshotDomainInteraction = 1 << 6
+  const snapshotDomainNativeDragPreview = 1 << 7
+  const snapshotDomainTray = 1 << 8
+  const snapshotDomainWindowOrder = 1 << 9
+  const snapshotDomainCommandPalette = 1 << 13
 
   const compositorVisualFollowupForDetail = (detail: DerpShellDetail): CompositorFollowup & { repaint?: boolean } => {
     switch (detail.type) {
@@ -526,29 +539,88 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   }
 
   const applyCompositorSnapshot = (details: readonly DerpShellDetail[], domainFlags: number) => {
-    if (details.length === 0) return
     const skipOutputGeometry = details.some((detail) => detail.type === 'output_layout')
     let sawWindowList = false
+    let sawWindowOrder = false
+    let sawFocus = false
+    let sawOutput = false
+    let sawKeyboard = false
+    let sawWorkspace = false
+    let sawShellHostedApps = false
+    let sawCommandPalette = false
     let sawInteractionState = false
+    let sawNativeDragPreview = false
+    let sawTray = false
     batch(() => {
-      options.applyModelAuthoritativeSnapshotDetails(details)
+      if (details.length > 0) options.applyModelAuthoritativeSnapshotDetails(details)
       for (const detail of details) {
         if (detail.type === 'window_list') {
           sawWindowList = true
           continue
         }
+        if (detail.type === 'window_order') sawWindowOrder = true
+        if (detail.type === 'focus_changed') sawFocus = true
+        if (detail.type === 'output_geometry' || detail.type === 'output_layout') sawOutput = true
+        if (detail.type === 'keyboard_layout') sawKeyboard = true
+        if (detail.type === 'workspace_state') sawWorkspace = true
+        if (detail.type === 'shell_hosted_app_state') sawShellHostedApps = true
+        if (detail.type === 'command_palette_state') sawCommandPalette = true
         if (detail.type === 'interaction_state') {
           sawInteractionState = true
         }
+        if (detail.type === 'native_drag_preview') sawNativeDragPreview = true
+        if (detail.type === 'tray_hints' || detail.type === 'tray_sni') sawTray = true
         applySnapshotVisualDetail(detail, skipOutputGeometry)
+      }
+      const clears: CompositorAuthoritativeDomainClears = {}
+      if ((domainFlags & snapshotDomainWindows) !== 0 && !sawWindowList) clears.windows = true
+      if ((domainFlags & snapshotDomainWindowOrder) !== 0 && !sawWindowOrder) clears.windowOrder = true
+      if ((domainFlags & snapshotDomainFocus) !== 0 && !sawFocus) clears.focus = true
+      if ((domainFlags & snapshotDomainWorkspace) !== 0 && !sawWorkspace) clears.workspace = true
+      if ((domainFlags & snapshotDomainShellHostedApps) !== 0 && !sawShellHostedApps) clears.shellHostedApps = true
+      if ((domainFlags & snapshotDomainCommandPalette) !== 0 && !sawCommandPalette) clears.commandPalette = true
+      if (Object.keys(clears).length > 0) options.clearModelAuthoritativeSnapshotDomains(clears)
+      if ((domainFlags & snapshotDomainOutputs) !== 0 && !sawOutput) {
+        options.setOutputTopology(null)
+        ;(window as Window & { __DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION?: number }).__DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION = 0
+      }
+      if ((domainFlags & snapshotDomainKeyboard) !== 0 && !sawKeyboard) {
+        options.setKeyboardLayoutLabel(null)
+      }
+      if ((domainFlags & snapshotDomainTray) !== 0 && !sawTray) {
+        options.setTrayReservedPx(0)
+        options.setTrayIconSlotPx(36)
+        options.setSniTrayItems([])
       }
       if ((domainFlags & snapshotDomainInteraction) !== 0 && !sawInteractionState) {
         lastKnownInteractionState = null
         options.setCompositorInteractionState(null)
       }
+      if ((domainFlags & snapshotDomainNativeDragPreview) !== 0 && !sawNativeDragPreview) {
+        options.setNativeDragPreview(null)
+      }
       if (sawWindowList) options.markHasSeenCompositorWindowSync()
     })
     if (sawWindowList) options.clearWindowSyncRecoveryPending()
+    const clearedChromeAffectingDomain =
+      ((domainFlags & snapshotDomainWindows) !== 0 && !sawWindowList) ||
+      ((domainFlags & snapshotDomainWindowOrder) !== 0 && !sawWindowOrder) ||
+      ((domainFlags & snapshotDomainFocus) !== 0 && !sawFocus) ||
+      ((domainFlags & snapshotDomainWorkspace) !== 0 && !sawWorkspace) ||
+      ((domainFlags & snapshotDomainOutputs) !== 0 && !sawOutput)
+    const clearedWindowContentDomain =
+      ((domainFlags & snapshotDomainShellHostedApps) !== 0 && !sawShellHostedApps) ||
+      ((domainFlags & snapshotDomainInteraction) !== 0 && !sawInteractionState) ||
+      ((domainFlags & snapshotDomainNativeDragPreview) !== 0 && !sawNativeDragPreview)
+    if (clearedChromeAffectingDomain || clearedWindowContentDomain) {
+      options.scheduleCompositorFollowup({
+        syncExclusion: clearedChromeAffectingDomain,
+        flushWindows: true,
+        resetScroll: (domainFlags & snapshotDomainOutputs) !== 0 && !sawOutput,
+      })
+      options.bumpSnapChrome()
+      options.shellWireSend('invalidate_view')
+    }
     scheduleCompositorVisualFollowup(details)
   }
 
@@ -781,11 +853,9 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       decoded.sequence
     ;(window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS =
       lastSnapshotDomainFlags
-    if (snapshotDetails.length > 0) {
-      const applyStart = performance.now()
-      applyCompositorSnapshot(snapshotDetails, lastSnapshotDomainFlags)
-      noteShellSnapshotApply(performance.now() - applyStart, snapshotDetails.length)
-    }
+    const applyStart = performance.now()
+    applyCompositorSnapshot(snapshotDetails, lastSnapshotDomainFlags)
+    noteShellSnapshotApply(performance.now() - applyStart, snapshotDetails.length)
     if (shellLatencySampleId !== 0) {
       markShellLatencySample(shellLatencySampleId, { appliedAt: performance.now() })
     }

@@ -40,6 +40,15 @@ export type CompositorApplyResult = {
   followup?: CompositorFollowup
 }
 
+export type CompositorAuthoritativeDomainClears = {
+  windows?: boolean
+  windowOrder?: boolean
+  focus?: boolean
+  workspace?: boolean
+  shellHostedApps?: boolean
+  commandPalette?: boolean
+}
+
 type CreateCompositorModelOptions = {
   initialWorkspaceState?: WorkspaceSnapshot
 }
@@ -308,6 +317,40 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     })
   }
 
+  const clearAuthoritativeSnapshotDomains = (clears: CompositorAuthoritativeDomainClears) => {
+    batch(() => {
+      if (clears.windows) {
+        setWindows((prev) => (prev.size === 0 ? prev : new Map()))
+        setWindowsRevision(-1)
+        setFocusedWindowId(null)
+      }
+      if (clears.windowOrder || clears.windows) {
+        setWindowOrderIds((prev) => (prev.length === 0 ? prev : []))
+        setWindowOrderRevision(-1)
+      }
+      if (clears.focus) {
+        setFocusedWindowId(null)
+      }
+      if (clears.workspace) {
+        const empty = createEmptyWorkspaceSnapshot()
+        setWorkspaceSnapshot((prev) => (workspaceSnapshotsEqual(prev, empty) ? prev : empty))
+        setWorkspaceRevision(-1)
+      }
+      if (clears.shellHostedApps) {
+        setShellHostedAppByWindow((prev) => (Object.keys(prev).length === 0 ? prev : {}))
+        setShellHostedAppRevision(-1)
+      }
+      if (clears.commandPalette) {
+        setCommandPaletteState((prev) =>
+          prev.categories.length === 0 && prev.actions.length === 0 && prev.revision === 0
+            ? prev
+            : { revision: 0, categories: [], actions: [] },
+        )
+        setCommandPaletteRevision(-1)
+      }
+    })
+  }
+
   const applyIncrementalWakeupDetail = (detail: DerpShellDetail): CompositorApplyResult =>
     applyIncrementalWakeupDetails([detail])[0]!
 
@@ -324,10 +367,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     shellHostedAppByWindow,
     commandPaletteState,
     applyAuthoritativeSnapshotDetails,
+    clearAuthoritativeSnapshotDomains,
     applyIncrementalWakeupDetails,
     applyIncrementalWakeupDetail,
-    applyCompositorSnapshot: applyAuthoritativeSnapshotDetails,
-    applyCompositorDetails: applyIncrementalWakeupDetails,
-    applyCompositorDetail: applyIncrementalWakeupDetail,
   }
 }

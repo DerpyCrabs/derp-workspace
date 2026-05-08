@@ -272,4 +272,40 @@ describe('createCompositorModel', () => {
       dispose()
     })
   })
+
+  it('clears authoritative domains only from explicit snapshot domain clears', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      const workspace = {
+        ...emptyWorkspace(),
+        groups: [{ id: 'group-1', windowIds: [7] }],
+        activeTabByGroupId: { 'group-1': 7 },
+        nextGroupSeq: 2,
+      }
+      model.applyAuthoritativeSnapshotDetails([
+        { type: 'window_list', revision: 1, windows: [nativeWindow(7, 'Stable')] },
+        { type: 'window_order', revision: 1, windows: [{ window_id: 7, stack_z: 7 }] },
+        { type: 'focus_changed', surface_id: 70, window_id: 7 },
+        { type: 'workspace_state', revision: 1, state: workspace },
+        {
+          type: 'shell_hosted_app_state',
+          revision: 1,
+          state: { byWindowId: { '7': { route: 'settings' } } },
+        },
+      ])
+
+      model.clearAuthoritativeSnapshotDomains({
+        windows: true,
+        workspace: true,
+        shellHostedApps: true,
+      })
+
+      expect(model.windows().size).toBe(0)
+      expect(model.windowsListIds()).toEqual([])
+      expect(model.focusedWindowId()).toBe(null)
+      expect(model.workspaceSnapshot()).toEqual(emptyWorkspace())
+      expect(model.shellHostedAppByWindow()).toEqual({})
+      dispose()
+    })
+  })
 })

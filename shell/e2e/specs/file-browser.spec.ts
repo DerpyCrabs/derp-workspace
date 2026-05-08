@@ -22,6 +22,7 @@ import {
   doubleClickRect,
   dragBetweenPoints,
   defineGroup,
+  getPerfCounters,
   getJson,
   getShellHtml,
   movePoint,
@@ -29,6 +30,7 @@ import {
   pointerButton,
   postJson,
   rectCenter,
+  resetPerfCounters,
   resetFileBrowserFixtures,
   rightClickRect,
   shellWindowById,
@@ -626,6 +628,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       2000,
       100,
     )
+    await resetPerfCounters(base)
     await clickRect(base, assertRectMinSize('open in tab menu item', openTabItem.rect!, 24, 18))
     const tabOpened = await waitFor(
       'wait for image viewer tab in file browser group',
@@ -647,6 +650,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     state.spawnedShellWindowIds.add(tabOpened.imageWindowId)
+    const tabPerf = await getPerfCounters(base)
+    assert(
+      (tabPerf.shell_runtime?.snapshot_apply_count ?? 0) >= 1,
+      `expected snapshot-authoritative tab open, got ${tabPerf.shell_runtime?.snapshot_apply_count ?? 0} applies`,
+    )
+    assert(
+      tabPerf.shell_sync.snapshot_reads <= 6,
+      `expected bounded snapshot reads for tab open, got ${tabPerf.shell_sync.snapshot_reads}`,
+    )
 
     const splitNav = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
     await openDirectoryRow(base, mediaPath, 'media', splitNav.windowId)
@@ -664,6 +676,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       2000,
       100,
     )
+    await resetPerfCounters(base)
     await clickRect(base, assertRectMinSize('open in split view menu item', openSplitItem.rect!, 24, 18))
     const splitOpened = await waitFor(
       'wait for image viewer split beside file browser',
@@ -691,6 +704,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     state.spawnedShellWindowIds.add(splitOpened.imageWindowId)
+    const splitPerf = await getPerfCounters(base)
+    assert(
+      (splitPerf.shell_runtime?.snapshot_apply_count ?? 0) >= 1,
+      `expected snapshot-authoritative split open, got ${splitPerf.shell_runtime?.snapshot_apply_count ?? 0} applies`,
+    )
+    assert(
+      splitPerf.shell_sync.snapshot_reads <= 8,
+      `expected bounded snapshot reads for split open, got ${splitPerf.shell_sync.snapshot_reads}`,
+    )
     const splitUnion = {
       x: Math.min(splitOpened.group.split_left_rect!.x, splitOpened.group.split_right_rect!.x),
       y: Math.min(splitOpened.group.split_left_rect!.y, splitOpened.group.split_right_rect!.y),
