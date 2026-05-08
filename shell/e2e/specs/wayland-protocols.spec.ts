@@ -272,6 +272,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       token: `activation-policy-launcher-${stamp}`,
       strip: 'cyan',
       spawnOnPressCommand: targetCommand,
+      activationAppId: 'derp.e2e.protocol.activation.target',
     })
     const launcherId = launcher.window.window_id
     state.spawnedNativeWindowIds.add(launcherId)

@@ -192,6 +192,12 @@ struct Args {
     pointer_constraint: String,
     #[arg(long)]
     spawn_on_press_command: Option<String>,
+    #[arg(long)]
+    activation_app_id: Option<String>,
+    #[arg(long)]
+    activation_token_file: Option<String>,
+    #[arg(long, default_value_t = false)]
+    request_token_on_pointer_enter: bool,
     #[arg(long, default_value_t = false)]
     fifo_smoke: bool,
     #[arg(long, default_value_t = false)]
@@ -396,6 +402,9 @@ fn main() {
         startup_activation_token,
         startup_activation_sent: false,
         spawn_on_press_command: args.spawn_on_press_command,
+        activation_app_id: args.activation_app_id,
+        activation_token_file: args.activation_token_file,
+        request_token_on_pointer_enter: args.request_token_on_pointer_enter,
         spawn_on_press_requested: false,
         pointer_constraint_mode,
         fifo,
@@ -569,6 +578,9 @@ struct TestClient {
     startup_activation_token: Option<String>,
     startup_activation_sent: bool,
     spawn_on_press_command: Option<String>,
+    activation_app_id: Option<String>,
+    activation_token_file: Option<String>,
+    request_token_on_pointer_enter: bool,
     spawn_on_press_requested: bool,
     pointer_constraint_mode: PointerConstraintMode,
     fifo: Option<WpFifoV1>,
@@ -747,17 +759,20 @@ impl TestClient {
         seat: wl_seat::WlSeat,
         surface: wl_surface::WlSurface,
     ) {
-        let Some(command) = self.spawn_on_press_command.as_ref() else {
+        if self.spawn_on_press_command.is_none() && self.activation_token_file.is_none() {
             return;
-        };
+        }
         let Some(activation_state) = self.activation_state.as_ref() else {
             panic!("spawn-on-press requires xdg-activation support");
         };
-        let _ = command;
         activation_state.request_token(
             qh,
             RequestData {
-                app_id: Some(self.app_id.clone()),
+                app_id: Some(
+                    self.activation_app_id
+                        .clone()
+                        .unwrap_or_else(|| self.app_id.clone()),
+                ),
                 seat_and_serial: Some((seat, serial)),
                 surface: Some(surface),
             },
@@ -2450,6 +2465,9 @@ impl ActivationHandler for TestClient {
         if self.spawn_on_press_requested {
             return;
         }
+        if let Some(path) = self.activation_token_file.as_ref() {
+            std::fs::write(path, &token).expect("write activation token file");
+        }
         let Some(command) = self.spawn_on_press_command.as_ref() else {
             return;
         };
@@ -2747,6 +2765,9 @@ impl PointerHandler for TestClient {
                     }
                     if let Some(device) = self.cursor_shape_device.as_ref() {
                         device.set_shape(serial, CursorShape::Pointer);
+                    }
+                    if self.request_token_on_pointer_enter {
+                        self.request_spawn_activation(qh, serial, seat.clone(), event.surface.clone());
                     }
                 }
                 PointerEventKind::Press { serial, .. }

@@ -4,7 +4,10 @@ mod xdg_shell;
 
 use std::io::Write;
 
-use crate::{chrome_bridge::ChromeEvent, CompositorState};
+use crate::{
+    chrome_bridge::{ChromeEvent, WindowInfo},
+    CompositorState,
+};
 
 use smithay::delegate_layer_shell;
 use smithay::delegate_pointer_constraints;
@@ -28,7 +31,8 @@ use smithay::{delegate_data_control, delegate_data_device, delegate_output, dele
 
 impl CompositorState {
     fn xdg_activation_token_max_age(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(10)
+        self.xdg_activation_token_max_age_override
+            .unwrap_or_else(|| std::time::Duration::from_secs(10))
     }
 
     pub(crate) fn xdg_activation_prune_stale_tokens(&mut self) {
@@ -48,16 +52,12 @@ impl CompositorState {
                 .is_some_and(|last_enter| serial.is_no_older_than(&last_enter))
     }
 
-    fn xdg_activation_surface_matches_current_focus(&self, surface: &WlSurface) -> bool {
+    fn xdg_activation_surface_matches_keyboard_focus(&self, surface: &WlSurface) -> bool {
         let root = self.pointer_constraint_root_surface(surface);
         self.input_routing.seat
             .get_keyboard()
             .and_then(|keyboard| keyboard.current_focus())
             .is_some_and(|focus| self.pointer_constraint_root_surface(&focus) == root)
-            || self.input_routing.seat
-                .get_pointer()
-                .and_then(|pointer| pointer.current_focus())
-                .is_some_and(|focus| self.pointer_constraint_root_surface(&focus) == root)
     }
 
     fn xdg_activation_window_id_for_surface(&self, surface: &WlSurface) -> Option<u32> {
@@ -67,6 +67,37 @@ impl CompositorState {
                 let root = self.pointer_constraint_root_surface(surface);
                 self.windows.window_registry.window_id_for_wl_surface(&root)
             })
+    }
+
+    fn xdg_activation_client_token_is_valid(&self, data: &XdgActivationTokenData) -> bool {
+        let Some(client_id) = data.client_id.as_ref() else {
+            return true;
+        };
+        let Some(surface) = data.surface.as_ref() else {
+            return false;
+        };
+        if surface.client().is_none_or(|client| client.id() != *client_id) {
+            return false;
+        }
+        self.xdg_activation_surface_matches_keyboard_focus(surface)
+    }
+
+    fn xdg_activation_request_is_authorized(
+        &self,
+        data: &XdgActivationTokenData,
+        target: &WindowInfo,
+    ) -> bool {
+        if !self.xdg_activation_client_token_is_valid(data) {
+            return false;
+        }
+        if data.client_id.is_some() {
+            if let Some(app_id) = data.app_id.as_ref().filter(|app_id| !app_id.trim().is_empty()) {
+                if target.app_id != *app_id {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     pub(crate) fn pointer_constraint_root_surface(&self, surface: &WlSurface) -> WlSurface {
@@ -199,10 +230,10 @@ impl XdgActivationHandler for CompositorState {
         if !self.xdg_activation_serial_is_current(serial) {
             return false;
         }
-        if let Some(surface) = data.surface.as_ref() {
-            return self.xdg_activation_surface_matches_current_focus(surface);
+        if !self.xdg_activation_client_token_is_valid(&data) {
+            return false;
         }
-        true
+        data.surface.is_some()
     }
 
     fn request_activation(
@@ -224,6 +255,10 @@ impl XdgActivationHandler for CompositorState {
             self.xdg_activation_state.remove_token(&token);
             return;
         };
+        if !self.xdg_activation_request_is_authorized(&token_data, &info) {
+            self.xdg_activation_state.remove_token(&token);
+            return;
+        }
         if info.minimized {
             if self.workspace_layout.scratchpad_windows.contains_key(&window_id) {
                 self.xdg_activation_state.remove_token(&token);

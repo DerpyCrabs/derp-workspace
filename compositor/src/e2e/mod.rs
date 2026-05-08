@@ -551,6 +551,15 @@ impl CompositorState {
         Ok(())
     }
 
+    pub(crate) fn e2e_set_xdg_activation_token_max_age(
+        &mut self,
+        max_age: Option<Duration>,
+    ) -> Result<(), String> {
+        self.xdg_activation_token_max_age_override = max_age;
+        self.xdg_activation_prune_stale_tokens();
+        Ok(())
+    }
+
     pub(crate) fn e2e_compositor_snapshot_json(&mut self) -> Result<String, String> {
         self.sync_shell_shared_state_for_input();
         let pointer = self.input_routing.seat

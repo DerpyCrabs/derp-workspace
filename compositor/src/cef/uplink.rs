@@ -571,6 +571,17 @@ impl UplinkToCompositor {
         self.run_result(move |s| s.e2e_crash_window_client(window_id))
     }
 
+    pub fn test_xdg_activation_token_max_age(
+        &self,
+        milliseconds: Option<u64>,
+    ) -> Result<(), String> {
+        self.run_result(move |s| {
+            s.e2e_set_xdg_activation_token_max_age(
+                milliseconds.map(std::time::Duration::from_millis),
+            )
+        })
+    }
+
     pub fn test_compositor_snapshot_json(&self) -> Result<String, String> {
         self.run_result(move |s| s.e2e_compositor_snapshot_json())
     }

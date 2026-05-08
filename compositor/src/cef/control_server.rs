@@ -1295,6 +1295,21 @@ fn handle_one(
         return Ok(());
     }
 
+    if req_path == "/test/xdg_activation/max_age" {
+        let milliseconds = if v.get("reset").and_then(|x| x.as_bool()).unwrap_or(false) {
+            None
+        } else {
+            Some(
+                v.get("milliseconds")
+                    .and_then(|x| x.as_u64())
+                    .ok_or_else(|| "xdg_activation/max_age: missing milliseconds".to_string())?,
+            )
+        };
+        uplink.test_xdg_activation_token_max_age(milliseconds)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if req_path == "/portal_screencast_pick" {
         match portal_screencast_pick(&v) {
             PortalScreencastPickResult::Selected(selection) => {

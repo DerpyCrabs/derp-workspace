@@ -2891,6 +2891,9 @@ export function buildNativeSpawnCommand({
   dropBufferAfterDraw = false,
   pointerConstraint = 'none',
   spawnOnPressCommand,
+  activationAppId,
+  activationTokenFile,
+  requestTokenOnPointerEnter = false,
   fifoSmoke = false,
   presentationSmoke = false,
   contentType,
@@ -2906,6 +2909,9 @@ export function buildNativeSpawnCommand({
   dropBufferAfterDraw?: boolean
   pointerConstraint?: 'none' | 'lock' | 'confine'
   spawnOnPressCommand?: string
+  activationAppId?: string
+  activationTokenFile?: string
+  requestTokenOnPointerEnter?: boolean
   fifoSmoke?: boolean
   presentationSmoke?: boolean
   contentType?: 'none' | 'photo' | 'video' | 'game'
@@ -2938,6 +2944,9 @@ export function buildNativeSpawnCommand({
   if (spawnOnPressCommand) {
     parts.push('--spawn-on-press-command', shellQuote(spawnOnPressCommand))
   }
+  if (activationAppId) parts.push('--activation-app-id', shellQuote(activationAppId))
+  if (activationTokenFile) parts.push('--activation-token-file', shellQuote(activationTokenFile))
+  if (requestTokenOnPointerEnter) parts.push('--request-token-on-pointer-enter')
   return parts.join(' ')
 }
 
@@ -2958,6 +2967,9 @@ export async function spawnNativeWindow(
     dropBufferAfterDraw,
     pointerConstraint,
     spawnOnPressCommand,
+    activationAppId,
+    activationTokenFile,
+    requestTokenOnPointerEnter,
     fifoSmoke,
     presentationSmoke,
     contentType,
@@ -2973,6 +2985,9 @@ export async function spawnNativeWindow(
     dropBufferAfterDraw?: boolean
     pointerConstraint?: 'none' | 'lock' | 'confine'
     spawnOnPressCommand?: string
+    activationAppId?: string
+    activationTokenFile?: string
+    requestTokenOnPointerEnter?: boolean
     fifoSmoke?: boolean
     presentationSmoke?: boolean
     contentType?: 'none' | 'photo' | 'video' | 'game'
@@ -2990,6 +3005,9 @@ export async function spawnNativeWindow(
     dropBufferAfterDraw,
     pointerConstraint,
     spawnOnPressCommand,
+    activationAppId,
+    activationTokenFile,
+    requestTokenOnPointerEnter,
     fifoSmoke,
     presentationSmoke,
     contentType,
