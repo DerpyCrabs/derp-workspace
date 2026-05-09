@@ -769,6 +769,31 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact("desktop-applications.json", desktopApplications);
   });
 
+  test("shell button hover sets compositor pointer cursor", async ({ base }) => {
+    const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+    const toggle = assertRectMinSize(
+      "taskbar programs toggle",
+      shell.controls?.taskbar_programs_toggle,
+      16,
+      16,
+    );
+    const target = rectCenter(toggle);
+    await movePoint(base, target.x, target.y);
+    const hovered = await waitFor("wait for shell hover cursor", async () => {
+      const compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      return compositor.cursor_shape === "pointer" ? compositor : null;
+    });
+    await writeJsonArtifact("shell-button-hover-cursor.json", {
+      target: toggle,
+      cursorShape: hovered.cursor_shape,
+      cursorName: hovered.cursor_name,
+      cursorSourcePath: hovered.cursor_source_path,
+    });
+  });
+
   test("display settings exposes vrr only for supported outputs", async ({
     base,
   }) => {

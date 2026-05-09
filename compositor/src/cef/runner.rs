@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use cef::{args::Args, rc::*, sys, *};
 use signal_hook::{consts::SIGINT, consts::SIGTERM, flag};
+use smithay::input::pointer::{CursorIcon, CursorImageStatus};
 use smithay::reexports::calloop::channel::Sender;
 
 use crate::cef::bridge::ShellToCefLink;
@@ -634,10 +635,102 @@ wrap_render_handler! {
     }
 }
 
+fn cef_cursor_icon(type_: CursorType) -> CursorImageStatus {
+    if type_ == CursorType::HAND {
+        CursorImageStatus::Named(CursorIcon::Pointer)
+    } else if type_ == CursorType::POINTER {
+        CursorImageStatus::Named(CursorIcon::Default)
+    } else if type_ == CursorType::IBEAM {
+        CursorImageStatus::Named(CursorIcon::Text)
+    } else if type_ == CursorType::CROSS {
+        CursorImageStatus::Named(CursorIcon::Crosshair)
+    } else if type_ == CursorType::WAIT {
+        CursorImageStatus::Named(CursorIcon::Wait)
+    } else if type_ == CursorType::HELP {
+        CursorImageStatus::Named(CursorIcon::Help)
+    } else if type_ == CursorType::EASTRESIZE {
+        CursorImageStatus::Named(CursorIcon::EResize)
+    } else if type_ == CursorType::NORTHRESIZE {
+        CursorImageStatus::Named(CursorIcon::NResize)
+    } else if type_ == CursorType::NORTHEASTRESIZE {
+        CursorImageStatus::Named(CursorIcon::NeResize)
+    } else if type_ == CursorType::NORTHWESTRESIZE {
+        CursorImageStatus::Named(CursorIcon::NwResize)
+    } else if type_ == CursorType::SOUTHRESIZE {
+        CursorImageStatus::Named(CursorIcon::SResize)
+    } else if type_ == CursorType::SOUTHEASTRESIZE {
+        CursorImageStatus::Named(CursorIcon::SeResize)
+    } else if type_ == CursorType::SOUTHWESTRESIZE {
+        CursorImageStatus::Named(CursorIcon::SwResize)
+    } else if type_ == CursorType::WESTRESIZE {
+        CursorImageStatus::Named(CursorIcon::WResize)
+    } else if type_ == CursorType::NORTHSOUTHRESIZE {
+        CursorImageStatus::Named(CursorIcon::NsResize)
+    } else if type_ == CursorType::EASTWESTRESIZE {
+        CursorImageStatus::Named(CursorIcon::EwResize)
+    } else if type_ == CursorType::NORTHEASTSOUTHWESTRESIZE {
+        CursorImageStatus::Named(CursorIcon::NeswResize)
+    } else if type_ == CursorType::NORTHWESTSOUTHEASTRESIZE {
+        CursorImageStatus::Named(CursorIcon::NwseResize)
+    } else if type_ == CursorType::COLUMNRESIZE {
+        CursorImageStatus::Named(CursorIcon::ColResize)
+    } else if type_ == CursorType::ROWRESIZE {
+        CursorImageStatus::Named(CursorIcon::RowResize)
+    } else if type_ == CursorType::MOVE || type_ == CursorType::MIDDLEPANNING {
+        CursorImageStatus::Named(CursorIcon::Move)
+    } else if type_ == CursorType::VERTICALTEXT {
+        CursorImageStatus::Named(CursorIcon::VerticalText)
+    } else if type_ == CursorType::CELL {
+        CursorImageStatus::Named(CursorIcon::Cell)
+    } else if type_ == CursorType::CONTEXTMENU {
+        CursorImageStatus::Named(CursorIcon::ContextMenu)
+    } else if type_ == CursorType::ALIAS || type_ == CursorType::DND_LINK {
+        CursorImageStatus::Named(CursorIcon::Alias)
+    } else if type_ == CursorType::PROGRESS {
+        CursorImageStatus::Named(CursorIcon::Progress)
+    } else if type_ == CursorType::NODROP || type_ == CursorType::DND_NONE {
+        CursorImageStatus::Named(CursorIcon::NoDrop)
+    } else if type_ == CursorType::COPY || type_ == CursorType::DND_COPY {
+        CursorImageStatus::Named(CursorIcon::Copy)
+    } else if type_ == CursorType::NONE {
+        CursorImageStatus::Hidden
+    } else if type_ == CursorType::NOTALLOWED {
+        CursorImageStatus::Named(CursorIcon::NotAllowed)
+    } else if type_ == CursorType::ZOOMIN {
+        CursorImageStatus::Named(CursorIcon::ZoomIn)
+    } else if type_ == CursorType::ZOOMOUT {
+        CursorImageStatus::Named(CursorIcon::ZoomOut)
+    } else if type_ == CursorType::GRAB {
+        CursorImageStatus::Named(CursorIcon::Grab)
+    } else if type_ == CursorType::GRABBING {
+        CursorImageStatus::Named(CursorIcon::Grabbing)
+    } else if type_ == CursorType::DND_MOVE {
+        CursorImageStatus::Named(CursorIcon::Move)
+    } else {
+        CursorImageStatus::Named(CursorIcon::Default)
+    }
+}
+
 wrap_display_handler! {
-    struct DerpJsConsoleDisplayHandler;
+    struct DerpJsConsoleDisplayHandler {
+        cef_tx: Sender<CefToCompositor>,
+    }
 
     impl DisplayHandler {
+        fn on_cursor_change(
+            &self,
+            _browser: Option<&mut Browser>,
+            _cursor: sys::cef_cursor_handle_t,
+            type_: CursorType,
+            _custom_cursor_info: Option<&CursorInfo>,
+        ) -> std::os::raw::c_int {
+            let cursor = cef_cursor_icon(type_);
+            let _ = self.cef_tx.send(CefToCompositor::Run(Box::new(move |state| {
+                state.input_routing.pointer_cursor_image = cursor;
+            })));
+            1
+        }
+
         fn on_console_message(
             &self,
             _browser: Option<&mut Browser>,
@@ -683,11 +776,12 @@ wrap_client! {
         life_span_handler: LifeSpanHandler,
         uplink: UplinkToCompositor,
         view_state: Arc<Mutex<OsrViewState>>,
+        cef_tx: Sender<CefToCompositor>,
     }
 
     impl Client {
         fn display_handler(&self) -> Option<DisplayHandler> {
-            Some(DerpJsConsoleDisplayHandler::new())
+            Some(DerpJsConsoleDisplayHandler::new(self.cef_tx.clone()))
         }
 
         fn render_handler(&self) -> Option<RenderHandler> {
@@ -928,7 +1022,14 @@ fn run_cef(
 
     let rh = OsrToCompositor::new(view_state.clone(), frame_sink);
     let lh = ShellLoadHandler::new(inject_js, cef_tx.clone());
-    let mut client = ShellClient::new(rh, lh, capture, uplink.clone(), view_state.clone());
+    let mut client = ShellClient::new(
+        rh,
+        lh,
+        capture,
+        uplink.clone(),
+        view_state.clone(),
+        cef_tx.clone(),
+    );
 
     let mut window_info = WindowInfo::default();
     let (init_w, init_h) = view_state
