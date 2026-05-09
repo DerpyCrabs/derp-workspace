@@ -78,12 +78,21 @@ export function shellWindowFrameLayout(w: ShellWindowFrameLayoutModel): ShellWin
     (w.frame_width ?? 0) > 0 &&
     (w.frame_height ?? 0) > 0
   if (hasCompositorFrame) {
-    const th = CHROME_TITLEBAR_PX
     const contentLeft = Math.max(0, (w.client_x ?? w.x) - (w.frame_x ?? w.x))
     const contentTop = Math.max(0, (w.client_y ?? w.y) - (w.frame_y ?? w.y))
+    const frameW = Math.max(1, w.frame_width ?? w.width)
+    const frameH = Math.max(1, w.frame_height ?? w.height)
+    const clientW = Math.max(1, w.client_width ?? w.width)
+    const clientH = Math.max(1, w.client_height ?? w.height)
+    const noShellChrome =
+      contentLeft === 0 &&
+      contentTop === 0 &&
+      frameW === clientW &&
+      frameH === clientH
+    const th = noShellChrome ? 0 : CHROME_TITLEBAR_PX
     const inset = contentLeft
     const insetTop = Math.max(0, contentTop - th)
-    const outerW = Math.max(1, w.frame_width ?? w.width)
+    const outerW = frameW
     const showBorderChrome = !noTilingChrome && (outerW > w.width || (w.frame_height ?? w.height) > w.height + th)
     return {
       th,
@@ -94,13 +103,13 @@ export function shellWindowFrameLayout(w: ShellWindowFrameLayoutModel): ShellWin
       outerW,
       contentLeft,
       contentTop,
-      contentW: Math.max(1, w.client_width ?? w.width),
-      contentH: Math.max(1, w.client_height ?? w.height),
+      contentW: clientW,
+      contentH: clientH,
       showBorderChrome,
       ox: w.frame_x ?? w.x,
       oy: w.frame_y ?? w.y,
       ow: outerW,
-      oh: Math.max(1, w.frame_height ?? w.height),
+      oh: frameH,
     }
   }
   const o = shellOuterFrameFromClient({

@@ -68,4 +68,27 @@ describe('shellWindowFrameLayout', () => {
     expect(layout.contentTop).toBe(CHROME_TITLEBAR_PX)
     expect(layout.showBorderChrome).toBe(false)
   })
+
+  it('uses compositor-authored frameless native rects without shell chrome', () => {
+    const layout = shellWindowFrameLayout({
+      x: 120,
+      y: 180,
+      width: 420,
+      height: 96,
+      client_x: 120,
+      client_y: 180,
+      client_width: 420,
+      client_height: 96,
+      frame_x: 120,
+      frame_y: 180,
+      frame_width: 420,
+      frame_height: 96,
+      maximized: false,
+      fullscreen: false,
+    })
+    expect(layout.th).toBe(0)
+    expect(layout.contentLeft).toBe(0)
+    expect(layout.contentTop).toBe(0)
+    expect(layout.showBorderChrome).toBe(false)
+  })
 })

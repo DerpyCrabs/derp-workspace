@@ -3099,6 +3099,8 @@ export function buildNativeSpawnCommand({
   burstFrames,
   xdgIconName,
   xdgIconShm = false,
+  kdeDecorationNone = false,
+  xdgDecorationRawNone = false,
   gestureStatusJson,
 }: {
   title: string
@@ -3120,6 +3122,8 @@ export function buildNativeSpawnCommand({
   burstFrames?: number
   xdgIconName?: string
   xdgIconShm?: boolean
+  kdeDecorationNone?: boolean
+  xdgDecorationRawNone?: boolean
   gestureStatusJson?: string
 }): string {
   const parts = [
@@ -3147,6 +3151,8 @@ export function buildNativeSpawnCommand({
   if (burstFrames !== undefined) parts.push('--burst-frames', String(burstFrames))
   if (xdgIconName) parts.push('--xdg-icon-name', shellQuote(xdgIconName))
   if (xdgIconShm) parts.push('--xdg-icon-shm')
+  if (kdeDecorationNone) parts.push('--kde-decoration-none')
+  if (xdgDecorationRawNone) parts.push('--xdg-decoration-raw-none')
   if (gestureStatusJson) parts.push('--gesture-status-json', shellQuote(gestureStatusJson))
   if (spawnOnPressCommand) {
     parts.push('--spawn-on-press-command', shellQuote(spawnOnPressCommand))
@@ -3184,6 +3190,8 @@ export async function spawnNativeWindow(
     burstFrames,
     xdgIconName,
     xdgIconShm,
+    kdeDecorationNone,
+    xdgDecorationRawNone,
     gestureStatusJson,
   }: {
     title: string
@@ -3205,6 +3213,8 @@ export async function spawnNativeWindow(
     burstFrames?: number
     xdgIconName?: string
     xdgIconShm?: boolean
+    kdeDecorationNone?: boolean
+    xdgDecorationRawNone?: boolean
     gestureStatusJson?: string
   },
 ): Promise<NativeSpawnResult> {
@@ -3228,6 +3238,8 @@ export async function spawnNativeWindow(
     burstFrames,
     xdgIconName,
     xdgIconShm,
+    kdeDecorationNone,
+    xdgDecorationRawNone,
     gestureStatusJson,
   })
   await spawnCommand(base, command)

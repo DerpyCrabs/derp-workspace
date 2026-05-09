@@ -29,6 +29,12 @@ impl CompositorState {
         &self,
         info: &WindowInfo,
     ) -> Rectangle<i32, Logical> {
+        if self.native_window_shell_decoration_disabled(info.window_id) {
+            return Rectangle::new(
+                Point::from((info.x, info.y)),
+                Size::from((info.width.max(1), info.height.max(1))),
+            );
+        }
         let th = self.shell_osr.shell_chrome_titlebar_h.max(0);
         let bd = self.shell_osr.shell_chrome_border_w.max(0);
         let suppress_side_strips =
@@ -161,6 +167,9 @@ impl CompositorState {
         let outer = if is_shell_hosted {
             self.shell_backed_outer_global_rect(&info)
         } else {
+            if self.native_window_shell_decoration_disabled(window_id) {
+                return Vec::new();
+            }
             self.shell_native_outer_global_rect(&info)
         };
         let titlebar_h = self.shell_osr.shell_chrome_titlebar_h.max(0);

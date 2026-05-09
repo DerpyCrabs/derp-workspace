@@ -523,6 +523,7 @@ dependencies = [
  "tracing-subscriber",
  "udev",
  "wayland-protocols",
+ "wayland-protocols-misc",
  "wayland-protocols-wlr",
  "xcursor",
  "zbus",
@@ -655,6 +656,7 @@ dependencies = [
  "smithay-client-toolkit",
  "wayland-client",
  "wayland-protocols",
+ "wayland-protocols-misc",
  "wayland-protocols-wlr",
 ]
 

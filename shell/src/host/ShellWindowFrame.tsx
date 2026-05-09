@@ -229,74 +229,75 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           {props.children}
         </div>
       </Show>
-      <div
-        data-shell-titlebar={model()?.window_id ?? 0}
-        class="absolute right-0 left-0 top-0 box-border flex flex-col overflow-hidden py-0 select-none touch-none"
-        style={{
-          height: `${layout().insetTop + layout().th}px`,
-          "box-sizing": "border-box",
-          "z-index": 6,
-          background: "var(--shell-chrome-bg)",
-          "pointer-events": dragging() ? "none" : "auto",
-        }}
-        onPointerDown={(e) => {
-          if (!e.isPrimary) return;
-          if (e.button !== 0) return;
-          if (titlebarInteractionTarget(e.target)) {
-            requestFocus();
-            return;
-          }
-          e.preventDefault();
-          e.stopPropagation();
-          const now = performance.now();
-          const windowId = model()?.window_id ?? 0;
-          const lastTitlebarClick =
-            titlebarLastClickByWindow.get(windowId) ?? null;
-          if (
-            lastTitlebarClick &&
-            now - lastTitlebarClick.t <= 500 &&
-            Math.abs(e.clientX - lastTitlebarClick.x) <= 8 &&
-            Math.abs(e.clientY - lastTitlebarClick.y) <= 8
-          ) {
+      <Show when={layout().th > 0}>
+        <div
+          data-shell-titlebar={model()?.window_id ?? 0}
+          class="absolute right-0 left-0 top-0 box-border flex flex-col overflow-hidden py-0 select-none touch-none"
+          style={{
+            height: `${layout().insetTop + layout().th}px`,
+            "box-sizing": "border-box",
+            "z-index": 6,
+            background: "var(--shell-chrome-bg)",
+            "pointer-events": dragging() ? "none" : "auto",
+          }}
+          onPointerDown={(e) => {
+            if (!e.isPrimary) return;
+            if (e.button !== 0) return;
+            if (titlebarInteractionTarget(e.target)) {
+              requestFocus();
+              return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            const now = performance.now();
+            const windowId = model()?.window_id ?? 0;
+            const lastTitlebarClick =
+              titlebarLastClickByWindow.get(windowId) ?? null;
+            if (
+              lastTitlebarClick &&
+              now - lastTitlebarClick.t <= 500 &&
+              Math.abs(e.clientX - lastTitlebarClick.x) <= 8 &&
+              Math.abs(e.clientY - lastTitlebarClick.y) <= 8
+            ) {
+              fireTitlebarDoubleClick();
+              return;
+            }
+            titlebarLastClickByWindow.set(windowId, {
+              t: now,
+              x: e.clientX,
+              y: e.clientY,
+            });
+            props.onTitlebarPointerDown(e.pointerId, e.clientX, e.clientY);
+          }}
+          onDblClick={(e) => {
+            if (e.button !== 0) return;
+            if (titlebarInteractionTarget(e.target)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const windowId = model()?.window_id ?? 0;
+            if (
+              performance.now() <=
+              (titlebarSuppressDblClickUntilByWindow.get(windowId) ?? 0)
+            )
+              return;
             fireTitlebarDoubleClick();
-            return;
-          }
-          titlebarLastClickByWindow.set(windowId, {
-            t: now,
-            x: e.clientX,
-            y: e.clientY,
-          });
-          props.onTitlebarPointerDown(e.pointerId, e.clientX, e.clientY);
-        }}
-        onDblClick={(e) => {
-          if (e.button !== 0) return;
-          if (titlebarInteractionTarget(e.target)) return;
-          e.preventDefault();
-          e.stopPropagation();
-          const windowId = model()?.window_id ?? 0;
-          if (
-            performance.now() <=
-            (titlebarSuppressDblClickUntilByWindow.get(windowId) ?? 0)
-          )
-            return;
-          fireTitlebarDoubleClick();
-        }}
-        onTouchStart={(e) => {
-          if (titlebarInteractionTarget(e.target)) {
-            requestFocus();
-            return;
-          }
-          const t = e.changedTouches[0];
-          if (!t) return;
-          e.preventDefault();
-          e.stopPropagation();
-          props.onTitlebarPointerDown(-1, t.clientX, t.clientY);
-        }}
-      >
-        <Show when={layout().insetTop > 0}>
-          <div class="shrink-0" style={{ height: `${layout().insetTop}px` }} />
-        </Show>
-        <div class="flex min-h-0 min-w-0 flex-1 flex-row items-stretch gap-1.5 overflow-hidden py-0 pr-1.5 pl-2.5">
+          }}
+          onTouchStart={(e) => {
+            if (titlebarInteractionTarget(e.target)) {
+              requestFocus();
+              return;
+            }
+            const t = e.changedTouches[0];
+            if (!t) return;
+            e.preventDefault();
+            e.stopPropagation();
+            props.onTitlebarPointerDown(-1, t.clientX, t.clientY);
+          }}
+        >
+          <Show when={layout().insetTop > 0}>
+            <div class="shrink-0" style={{ height: `${layout().insetTop}px` }} />
+          </Show>
+          <div class="flex min-h-0 min-w-0 flex-1 flex-row items-stretch gap-1.5 overflow-hidden py-0 pr-1.5 pl-2.5">
           <Show
             when={props.tabStrip}
             fallback={
@@ -427,8 +428,9 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
               ×
             </button>
           </div>
+          </div>
         </div>
-      </div>
+      </Show>
       <div
         data-shell-resize-bottom-left={model()?.window_id ?? 0}
         class="pointer-events-auto touch-none z-3 box-border"

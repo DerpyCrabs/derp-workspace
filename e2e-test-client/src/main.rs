@@ -37,7 +37,7 @@ use wayland_client::{
     delegate_noop,
     globals::registry_queue_init,
     protocol::{wl_buffer, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
-    Connection, Dispatch, QueueHandle,
+    Connection, Dispatch, Proxy, QueueHandle,
 };
 use wayland_protocols::ext::{
     image_capture_source::v1::client::{
@@ -82,6 +82,14 @@ use wayland_protocols::wp::{
 };
 use wayland_protocols::xdg::toplevel_icon::v1::client::{
     xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1, xdg_toplevel_icon_v1::XdgToplevelIconV1,
+};
+use wayland_protocols::xdg::decoration::zv1::client::{
+    zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+    zxdg_toplevel_decoration_v1::{Request as XdgDecorationRequest, ZxdgToplevelDecorationV1},
+};
+use wayland_protocols_misc::server_decoration::client::{
+    org_kde_kwin_server_decoration::{Mode as KdeServerDecorationMode, OrgKdeKwinServerDecoration},
+    org_kde_kwin_server_decoration_manager::OrgKdeKwinServerDecorationManager,
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{Layer as WlrLayer, ZwlrLayerShellV1},
@@ -246,6 +254,10 @@ struct Args {
     xdg_icon_name: Option<String>,
     #[arg(long, default_value_t = false)]
     xdg_icon_shm: bool,
+    #[arg(long, default_value_t = false)]
+    kde_decoration_none: bool,
+    #[arg(long, default_value_t = false)]
+    xdg_decoration_raw_none: bool,
     #[arg(long)]
     gesture_status_json: Option<String>,
     #[arg(long)]
@@ -375,6 +387,24 @@ fn main() {
     } else {
         None
     };
+    let kde_server_decoration_manager = if args.kde_decoration_none {
+        Some(
+            globals
+                .bind::<OrgKdeKwinServerDecorationManager, _, _>(&qh, 1..=1, ())
+                .expect("bind org_kde_kwin_server_decoration_manager"),
+        )
+    } else {
+        None
+    };
+    let xdg_decoration_manager = if args.xdg_decoration_raw_none {
+        Some(
+            globals
+                .bind::<ZxdgDecorationManagerV1, _, _>(&qh, 1..=1, ())
+                .expect("bind zxdg_decoration_manager_v1"),
+        )
+    } else {
+        None
+    };
     let activation_state = ActivationState::bind(&globals, &qh).ok();
     let startup_activation_token = std::env::var("XDG_ACTIVATION_TOKEN").ok();
     if startup_activation_token.is_some() {
@@ -382,11 +412,28 @@ fn main() {
     }
 
     let surface = compositor_state.create_surface(&qh);
-    let window = xdg_shell_state.create_window(surface, WindowDecorations::RequestServer, &qh);
+    let window_decorations = if args.xdg_decoration_raw_none {
+        WindowDecorations::None
+    } else {
+        WindowDecorations::RequestServer
+    };
+    let window = xdg_shell_state.create_window(surface, window_decorations, &qh);
     window.set_title(args.title.clone());
     window.set_app_id(args.app_id.clone());
     window.set_min_size(Some((args.width, args.height)));
     window.set_max_size(Some((args.width, args.height)));
+    if let Some(manager) = xdg_decoration_manager.as_ref() {
+        let decoration = manager.get_toplevel_decoration(window.xdg_toplevel(), &qh, ());
+        decoration
+            .send_request(XdgDecorationRequest::SetMode {
+                mode: wayland_client::WEnum::Unknown(0),
+            })
+            .expect("send raw xdg decoration mode none");
+    }
+    if let Some(manager) = kde_server_decoration_manager.as_ref() {
+        let decoration = manager.create(window.wl_surface(), &qh, ());
+        decoration.request_mode(KdeServerDecorationMode::None);
+    }
     let mut icon_pool = None;
     let mut icon_buffer = None;
     let mut toplevel_icon = None;
@@ -3258,6 +3305,10 @@ delegate_noop!(TestClient: ignore wp_tearing_control_v1::WpTearingControlV1);
 delegate_noop!(TestClient: ignore XdgToplevelIconManagerV1);
 delegate_noop!(TestClient: ignore XdgToplevelIconV1);
 delegate_noop!(TestClient: ignore ZwpPointerGesturesV1);
+delegate_noop!(TestClient: ignore ZxdgDecorationManagerV1);
+delegate_noop!(TestClient: ignore ZxdgToplevelDecorationV1);
+delegate_noop!(TestClient: ignore OrgKdeKwinServerDecorationManager);
+delegate_noop!(TestClient: ignore OrgKdeKwinServerDecoration);
 delegate_compositor!(LayerPanelClient);
 delegate_output!(LayerPanelClient);
 delegate_shm!(LayerPanelClient);

@@ -79,14 +79,17 @@ use smithay::{
             wlr_data_control::DataControlState,
             SelectionTarget,
         },
-        shell::wlr_layer::{Layer, WlrLayerShellState},
-        shell::xdg::{
-            decoration::{XdgDecorationHandler, XdgDecorationState},
-            SurfaceCachedState, ToplevelSurface, XdgShellState, XdgToplevelSurfaceData,
+        shell::{
+            kde::decoration::{KdeDecorationHandler, KdeDecorationState},
+            wlr_layer::{Layer, WlrLayerShellState},
+            xdg::{
+                SurfaceCachedState, ToplevelSurface, XdgShellState, XdgToplevelSurfaceData,
+            },
         },
         shm::ShmState,
         viewporter::ViewporterState,
         xdg_activation::{XdgActivationState, XdgActivationTokenData},
+        xdg_foreign::{XdgForeignHandler, XdgForeignState},
         xdg_toplevel_icon::XdgToplevelIconManager,
         xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
     },
@@ -118,6 +121,25 @@ use crate::{
     CalloopData,
 };
 use smithay::input::pointer::CursorImageStatus;
+
+#[derive(Default)]
+pub(crate) struct KdeServerDecorationSurfaceData {
+    mode: Mutex<
+        Option<
+            wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration::Mode,
+        >,
+    >,
+}
+
+#[derive(Default)]
+pub(crate) struct XdgDecorationSurfaceData {
+    resource: Mutex<
+        Option<
+            smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1,
+        >,
+    >,
+    mode: Mutex<Option<u32>>,
+}
 
 fn disconnected_wayland_clients() -> &'static Mutex<Vec<ClientId>> {
     static QUEUE: OnceLock<Mutex<Vec<ClientId>>> = OnceLock::new();
@@ -229,6 +251,24 @@ pub(crate) fn read_toplevel_client_side_decoration(wl: &WlSurface) -> bool {
             data.current_server_state().decoration_mode,
             Some(XdgDecoMode::ServerSide)
         )
+    })
+}
+
+pub(crate) fn read_toplevel_shell_decoration_disabled(wl: &WlSurface) -> bool {
+    smithay::wayland::compositor::with_states(wl, |states| {
+        let kde_disabled = states
+            .data_map
+            .get::<KdeServerDecorationSurfaceData>()
+            .and_then(|data| data.mode.lock().ok().and_then(|mode| *mode))
+            == Some(
+                wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration::Mode::None,
+            );
+        let xdg_disabled = states
+            .data_map
+            .get::<XdgDecorationSurfaceData>()
+            .and_then(|data| data.mode.lock().ok().and_then(|mode| *mode))
+            == Some(0);
+        kde_disabled || xdg_disabled
     })
 }
 
@@ -396,8 +436,9 @@ pub struct CompositorState {
     pub(crate) _tearing_control_state: TearingControlState,
     pub xdg_shell_state: XdgShellState,
     pub xdg_activation_state: XdgActivationState,
+    pub xdg_foreign_state: XdgForeignState,
     pub(crate) xdg_activation_token_max_age_override: Option<Duration>,
-    pub xdg_decoration_state: XdgDecorationState,
+    pub kde_decoration_state: KdeDecorationState,
     pub(crate) _xdg_toplevel_icon_manager: XdgToplevelIconManager,
     pub fractional_scale_manager_state: FractionalScaleManagerState,
     pub viewporter_state: ViewporterState,
@@ -601,7 +642,12 @@ impl CompositorState {
         let tearing_control_state = TearingControlState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
-        let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
+        let xdg_foreign_state = XdgForeignState::new::<Self>(&dh);
+        dh.create_global::<Self, smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1, _>(1, ());
+        let kde_decoration_state = KdeDecorationState::new::<Self>(
+            &dh,
+            wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode::Server,
+        );
         let mut xdg_toplevel_icon_manager = XdgToplevelIconManager::new::<Self>(&dh);
         xdg_toplevel_icon_manager.add_icon_size(16);
         xdg_toplevel_icon_manager.add_icon_size(32);
@@ -799,8 +845,9 @@ impl CompositorState {
             _tearing_control_state: tearing_control_state,
             xdg_shell_state,
             xdg_activation_state,
+            xdg_foreign_state,
             xdg_activation_token_max_age_override: None,
-            xdg_decoration_state,
+            kde_decoration_state,
             _xdg_toplevel_icon_manager: xdg_toplevel_icon_manager,
             fractional_scale_manager_state,
             viewporter_state,
@@ -2242,6 +2289,13 @@ impl CompositorState {
         let map_loc = self.output_topology.space.element_location(&elem)?;
         let geo = window.geometry();
         Some((map_loc.x, map_loc.y, geo.size.w, geo.size.h))
+    }
+
+    pub(crate) fn native_window_shell_decoration_disabled(&self, window_id: u32) -> bool {
+        let Some(wl) = self.wl_surface_for_window_id(window_id) else {
+            return false;
+        };
+        read_toplevel_shell_decoration_disabled(&wl)
     }
 
     pub(crate) fn notify_geometry_for_window(&mut self, window: &Window, force_shell_emit: bool) {

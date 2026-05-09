@@ -519,10 +519,13 @@ impl CompositorState {
                     client.size.h
                 ));
             }
+            let shell_decoration_disabled = record.kind != WindowKind::ShellHosted
+                && self.native_window_shell_decoration_disabled(info.window_id);
             if !info.minimized
                 && !info.fullscreen
                 && frame.size.h <= client.size.h
                 && self.shell_osr.shell_chrome_titlebar_h > 0
+                && !shell_decoration_disabled
             {
                 failures.push(format!(
                     "{context}: window {} frame has no titlebar height frame_h={} client_h={}",

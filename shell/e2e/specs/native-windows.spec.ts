@@ -1316,6 +1316,96 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
   })
 
+  test('native window can request KDE undecorated mode', async ({ base, state }) => {
+    const stamp = Date.now()
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Native KDE Undecorated ${stamp}`,
+      token: `native-kde-undecorated-${stamp}`,
+      strip: 'blue',
+      width: 420,
+      height: 96,
+      kdeDecorationNone: true,
+    })
+    state.spawnedNativeWindowIds.add(spawned.window.window_id)
+    const windowId = spawned.window.window_id
+    const ready = await waitFor(
+      'wait for KDE undecorated native frame',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const window = compositorWindowById(compositor, windowId)
+        if (!window) return null
+        const frame = nativeDecorTopRect(compositor, windowId)
+        if (!frame) return null
+        if (
+          frame.x !== window.x ||
+          frame.y !== window.y ||
+          frame.width !== window.width ||
+          frame.height !== window.height
+        ) {
+          return null
+        }
+        const controls = windowControls(shell, windowId)
+        if (controls?.titlebar) return null
+        return { compositor, shell, window, frame }
+      },
+      5000,
+      100,
+    )
+    await writeJsonArtifact('native-kde-undecorated.json', {
+      windowId,
+      window: ready.window,
+      frame: ready.frame,
+      compositor: ready.compositor,
+      shell: ready.shell,
+    })
+  })
+
+  test('native window can request raw xdg undecorated mode', async ({ base, state }) => {
+    const stamp = Date.now()
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Native XDG Undecorated ${stamp}`,
+      token: `native-xdg-undecorated-${stamp}`,
+      strip: 'blue',
+      width: 420,
+      height: 96,
+      xdgDecorationRawNone: true,
+    })
+    state.spawnedNativeWindowIds.add(spawned.window.window_id)
+    const windowId = spawned.window.window_id
+    const ready = await waitFor(
+      'wait for xdg undecorated native frame',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const window = compositorWindowById(compositor, windowId)
+        if (!window) return null
+        const frame = nativeDecorTopRect(compositor, windowId)
+        if (!frame) return null
+        if (
+          frame.x !== window.x ||
+          frame.y !== window.y ||
+          frame.width !== window.width ||
+          frame.height !== window.height
+        ) {
+          return null
+        }
+        const controls = windowControls(shell, windowId)
+        if (controls?.titlebar) return null
+        return { compositor, shell, window, frame }
+      },
+      5000,
+      100,
+    )
+    await writeJsonArtifact('native-xdg-undecorated.json', {
+      windowId,
+      window: ready.window,
+      frame: ready.frame,
+      compositor: ready.compositor,
+      shell: ready.shell,
+    })
+  })
+
   test('native drag preview keeps shell titlebar aligned with captured content', async ({ base, state }) => {
     const stamp = Date.now()
     const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
