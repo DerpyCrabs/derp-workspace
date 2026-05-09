@@ -52,7 +52,7 @@ DERP_REMOTE_SNAPSHOT="$SCRIPT_DIR/.derp-remote-update-snapshot"
 derp_remote_list_full_paths() {
   (
     cd "$REPO_ROOT" || exit 1
-    for d in compositor shell_wire e2e-test-client resources scripts; do
+    for d in compositor shell_wire e2e-test-client resources scripts wire_schema; do
       [[ -d "$d" ]] || continue
       find "$d" -type f 2>/dev/null || true
     done
@@ -235,7 +235,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "Update class: $UPDATE_CLASS (QUICK_SHELL=$QUICK_SHELL SYNC_ONLY=$SYNC_ONLY SKIP_REMOTE_INSTALL=$SKIP_REMOTE_INSTALL)"
   echo "Snapshot: $DERP_REMOTE_SNAPSHOT (content digests vs working tree, not git)"
   echo "Would: ssh ${REMOTE_USER}@${REMOTE_HOST} mkdir -p $(printf '%q' "$REMOTE_REPO")"
-  echo "Would: run shared tar sync excludes (build outputs, git data, artifacts, local env files), wipe compositor/shell/…/scripts, then tar xzf - in $(printf '%q' "$REMOTE_REPO")"
+  echo "Would: run shared tar sync excludes (build outputs, git data, artifacts, local env files), wipe compositor/shell/…/scripts/wire_schema, then tar xzf - in $(printf '%q' "$REMOTE_REPO")"
   if [[ "$SKIP_REMOTE_INSTALL" -eq 1 ]]; then
     if [[ "$SYNC_ONLY" -eq 1 ]]; then
       echo "Would: skip remote install-system-run.sh (sync_only)"

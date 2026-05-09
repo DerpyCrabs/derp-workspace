@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 
 const root = process.cwd()
@@ -66,6 +67,15 @@ function importedNames(source, from) {
 }
 
 const failures = []
+try {
+  execFileSync(process.execPath, [path.join(repoRoot, 'wire_schema', 'generate.mjs'), '--check'], {
+    cwd: repoRoot,
+    stdio: 'pipe',
+  })
+} catch (err) {
+  const stderr = err?.stderr?.toString?.() ?? ''
+  failures.push(stderr.trim() || 'wire schema: generated files are stale')
+}
 for (const file of files(specsDir)) {
   const rel = path.relative(specsDir, file).replace(/\\/g, '/')
   const source = readFileSync(file, 'utf8')
@@ -82,40 +92,6 @@ for (const file of files(specsDir)) {
     failures.push(`${rel}: use floating layer helpers from ../lib/oracle.ts instead of reading shell_floating_layers directly`)
   }
 }
-
-function constValue(source, name) {
-  const match = source.match(new RegExp(`(?:pub\\s+)?const\\s+${name}\\s*(?::\\s*[^=]+)?=\\s*(0x[0-9a-fA-F]+|\\d+)`))
-  return match ? Number(match[1]) : null
-}
-
-function requireConstPair(leftSource, rightSource, leftName, rightName = leftName) {
-  const left = constValue(leftSource, leftName)
-  const right = constValue(rightSource, rightName)
-  if (left === null) failures.push(`wire schema: missing Rust const ${leftName}`)
-  if (right === null) failures.push(`wire schema: missing shell const ${rightName}`)
-  if (left !== null && right !== null && left !== right) {
-    failures.push(`wire schema: ${leftName}=${left} differs from ${rightName}=${right}`)
-  }
-}
-
-const shellWireSource = readFileSync(path.join(repoRoot, 'shell_wire', 'src', 'lib.rs'), 'utf8')
-const compositorDownlinkSource = readFileSync(path.join(repoRoot, 'compositor', 'src', 'cef', 'compositor_downlink.rs'), 'utf8')
-const shellSnapshotSource = readFileSync(path.join(root, 'src', 'features', 'bridge', 'compositorSnapshot.ts'), 'utf8')
-const shellEventsSource = readFileSync(path.join(root, 'src', 'features', 'bridge', 'compositorEvents.ts'), 'utf8')
-
-for (const name of [
-  'WINDOW_LIST_SCHEMA_VERSION',
-  'WINDOW_LIST_HEADER_BYTES',
-  'WINDOW_LIST_HEADER_BYTES_V1',
-  'WINDOW_LIST_ROW_BYTES',
-  'WINDOW_LIST_ROW_BYTES_V1',
-  'WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION',
-  'WINDOW_GEOMETRY_RECTS_BYTES',
-]) {
-  requireConstPair(shellWireSource, shellSnapshotSource, name)
-}
-requireConstPair(compositorDownlinkSource, shellEventsSource, 'HOT_DETAIL_WINDOW_GEOMETRY_BYTES', 'HOT_WINDOW_GEOMETRY_BYTES')
-requireConstPair(compositorDownlinkSource, shellEventsSource, 'HOT_DETAIL_INTERACTION_STATE_BYTES', 'HOT_INTERACTION_STATE_BYTES')
 
 if (failures.length > 0) {
   process.stderr.write(`${failures.join('\n')}\n`)

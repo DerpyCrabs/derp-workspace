@@ -1,10 +1,18 @@
 import type { DerpShellDetail } from '@/host/appWindowState'
+import {
+  HOT_BATCH_MAGIC,
+  HOT_DETAIL_FOCUS_CHANGED,
+  HOT_DETAIL_INTERACTION_STATE,
+  HOT_DETAIL_INTERACTION_STATE_BYTES,
+  HOT_DETAIL_WINDOW_GEOMETRY,
+  HOT_DETAIL_WINDOW_GEOMETRY_BYTES,
+  HOT_DETAIL_WINDOW_ORDER,
+  HOT_DETAIL_WINDOW_STATE,
+  HOT_DETAIL_WINDOW_UNMAPPED,
+} from './wireSchema.generated'
 
 export const DERP_SHELL_EVENT = 'derp-shell'
 export const DERP_SHELL_SNAPSHOT_EVENT = 'derp-shell-snapshot'
-
-const HOT_WINDOW_GEOMETRY_BYTES = 57
-const HOT_INTERACTION_STATE_BYTES = 84
 
 type DerpShellLatencySample = {
   id: number
@@ -107,7 +115,7 @@ function decodeHotWindowGeometry(
   cursor: { offset: number },
   snapshot_epoch: number,
 ): Extract<DerpShellDetail, { type: 'window_geometry' }> | null {
-  if (cursor.offset + HOT_WINDOW_GEOMETRY_BYTES > view.byteLength) return null
+  if (cursor.offset + HOT_DETAIL_WINDOW_GEOMETRY_BYTES > view.byteLength) return null
   const window_id = view.getUint32(cursor.offset, true)
   const surface_id = view.getUint32(cursor.offset + 4, true)
   const x = view.getInt32(cursor.offset + 8, true)
@@ -123,7 +131,7 @@ function decodeHotWindowGeometry(
   const frame_y = view.getInt32(cursor.offset + 45, true)
   const frame_width = view.getInt32(cursor.offset + 49, true)
   const frame_height = view.getInt32(cursor.offset + 53, true)
-  cursor.offset += HOT_WINDOW_GEOMETRY_BYTES
+  cursor.offset += HOT_DETAIL_WINDOW_GEOMETRY_BYTES
   const output_id = readString(view, cursor)
   const output_name = readString(view, cursor)
   if (output_id === null || output_name === null) return null
@@ -156,10 +164,10 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
   const view = new DataView(buffer)
   if (view.byteLength < 8) return null
   if (
-    view.getUint8(0) !== 0x44 ||
-    view.getUint8(1) !== 0x48 ||
-    view.getUint8(2) !== 0x42 ||
-    view.getUint8(3) !== 0x31
+    view.getUint8(0) !== HOT_BATCH_MAGIC[0] ||
+    view.getUint8(1) !== HOT_BATCH_MAGIC[1] ||
+    view.getUint8(2) !== HOT_BATCH_MAGIC[2] ||
+    view.getUint8(3) !== HOT_BATCH_MAGIC[3]
   ) {
     return null
   }
@@ -172,13 +180,13 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
     cursor.offset += 1
     const snapshot_epoch = Number(view.getBigUint64(cursor.offset, true))
     cursor.offset += 8
-    if (tag === 1) {
+    if (tag === HOT_DETAIL_WINDOW_GEOMETRY) {
       const detail = decodeHotWindowGeometry(view, cursor, snapshot_epoch)
       if (detail === null) return null
       details.push(detail)
       continue
     }
-    if (tag === 2) {
+    if (tag === HOT_DETAIL_WINDOW_STATE) {
       if (cursor.offset + 5 > view.byteLength) return null
       const window_id = view.getUint32(cursor.offset, true)
       const minimized = view.getUint8(cursor.offset + 4) !== 0
@@ -191,7 +199,7 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       })
       continue
     }
-    if (tag === 3) {
+    if (tag === HOT_DETAIL_WINDOW_UNMAPPED) {
       if (cursor.offset + 4 > view.byteLength) return null
       const window_id = view.getUint32(cursor.offset, true)
       cursor.offset += 4
@@ -202,7 +210,7 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       })
       continue
     }
-    if (tag === 4) {
+    if (tag === HOT_DETAIL_FOCUS_CHANGED) {
       if (cursor.offset + 10 > view.byteLength) return null
       const hasSurface = view.getUint8(cursor.offset) !== 0
       const surface_id = view.getUint32(cursor.offset + 1, true)
@@ -217,7 +225,7 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       })
       continue
     }
-    if (tag === 5) {
+    if (tag === HOT_DETAIL_WINDOW_ORDER) {
       if (cursor.offset + 12 > view.byteLength) return null
       const revision = Number(view.getBigUint64(cursor.offset, true))
       const windowCount = view.getUint32(cursor.offset + 8, true)
@@ -239,8 +247,8 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       })
       continue
     }
-    if (tag === 6) {
-      if (cursor.offset + HOT_INTERACTION_STATE_BYTES > view.byteLength) return null
+    if (tag === HOT_DETAIL_INTERACTION_STATE) {
+      if (cursor.offset + HOT_DETAIL_INTERACTION_STATE_BYTES > view.byteLength) return null
       const revision = Number(view.getBigUint64(cursor.offset, true))
       const pointer_x = view.getInt32(cursor.offset + 8, true)
       const pointer_y = view.getInt32(cursor.offset + 12, true)
@@ -253,7 +261,7 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       const resize_rect = decodeHotVisual(view, cursor.offset + 52, resizeWindowId)
       const windowSwitcherSelectedWindowId = view.getUint32(cursor.offset + 72, true)
       const interaction_serial = Number(view.getBigUint64(cursor.offset + 76, true))
-      cursor.offset += HOT_INTERACTION_STATE_BYTES
+      cursor.offset += HOT_DETAIL_INTERACTION_STATE_BYTES
       details.push({
         type: 'interaction_state',
         revision,

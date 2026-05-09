@@ -7,19 +7,16 @@ use cef::{
     MouseEvent, PointerType, ProcessId, TouchEvent, TouchEventType,
 };
 use serde_json::{json, Value};
+use shell_wire::{
+    HOT_BATCH_MAGIC, HOT_DETAIL_FOCUS_CHANGED, HOT_DETAIL_INTERACTION_STATE,
+    HOT_DETAIL_INTERACTION_STATE_BYTES, HOT_DETAIL_WINDOW_GEOMETRY,
+    HOT_DETAIL_WINDOW_GEOMETRY_BYTES, HOT_DETAIL_WINDOW_ORDER, HOT_DETAIL_WINDOW_STATE,
+    HOT_DETAIL_WINDOW_UNMAPPED,
+};
 
 use crate::cef::osr_view_state::OsrViewState;
 
 pub const PROCESS_MESSAGE_NAME: &str = "derp_shell_downlink";
-const HOT_BATCH_MAGIC: &[u8; 4] = b"DHB1";
-const HOT_DETAIL_WINDOW_GEOMETRY: u8 = 1;
-const HOT_DETAIL_WINDOW_STATE: u8 = 2;
-const HOT_DETAIL_WINDOW_UNMAPPED: u8 = 3;
-const HOT_DETAIL_FOCUS_CHANGED: u8 = 4;
-const HOT_DETAIL_WINDOW_ORDER: u8 = 5;
-const HOT_DETAIL_INTERACTION_STATE: u8 = 6;
-const HOT_DETAIL_WINDOW_GEOMETRY_BYTES: usize = 57;
-const HOT_DETAIL_INTERACTION_STATE_BYTES: usize = 84;
 static CEF_HOST_FOCUSED_FOR_INPUT: AtomicBool = AtomicBool::new(false);
 
 fn detail_with_snapshot_epoch(mut detail: Value, snapshot_epoch: u64) -> Value {
@@ -314,7 +311,7 @@ fn encode_hot_detail_batch(details: &[Value]) -> Option<Vec<u8>> {
         return None;
     }
     let mut bytes = Vec::with_capacity(8 + details.len().saturating_mul(48));
-    bytes.extend_from_slice(HOT_BATCH_MAGIC);
+    bytes.extend_from_slice(&HOT_BATCH_MAGIC);
     push_u32(&mut bytes, count);
     for detail in details {
         let start = bytes.len();

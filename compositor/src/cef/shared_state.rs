@@ -7,23 +7,12 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 
-pub const SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES: u32 = 1;
-pub const SHELL_SHARED_STATE_KIND_UI_WINDOWS: u32 = 2;
-pub const SHELL_SHARED_STATE_KIND_FLOATING_LAYERS: u32 = 3;
-pub const SHELL_SHARED_STATE_ABI_VERSION: u32 = 2;
-pub const SHELL_SHARED_STATE_HEADER_BYTES: usize = 32;
-
-const SHELL_SHARED_STATE_MAGIC: u32 = 0x4452_5054;
-const SHELL_SHARED_STATE_CAPACITY_BYTES: usize = 512 * 1024;
-
-#[derive(Clone, Copy)]
-struct SharedStateHeader {
-    magic: u32,
-    abi_version: u32,
-    payload_len: u32,
-    _flags: u32,
-    sequence: u64,
-}
+pub use shell_wire::{
+    ShellSharedStateHeader, SHELL_SHARED_STATE_ABI_VERSION, SHELL_SHARED_STATE_CAPACITY_BYTES,
+    SHELL_SHARED_STATE_HEADER_BYTES, SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES,
+    SHELL_SHARED_STATE_KIND_FLOATING_LAYERS, SHELL_SHARED_STATE_KIND_UI_WINDOWS,
+    SHELL_SHARED_STATE_MAGIC,
+};
 
 struct SharedMmapFile {
     _file: File,
@@ -327,15 +316,15 @@ fn write_header(
     Ok(())
 }
 
-fn read_header(src: &[u8]) -> Result<SharedStateHeader, String> {
+fn read_header(src: &[u8]) -> Result<ShellSharedStateHeader, String> {
     if src.len() < SHELL_SHARED_STATE_HEADER_BYTES {
         return Err("shared state header slice too small".to_string());
     }
-    Ok(SharedStateHeader {
+    Ok(ShellSharedStateHeader {
         magic: u32::from_le_bytes(src[0..4].try_into().unwrap()),
         abi_version: u32::from_le_bytes(src[4..8].try_into().unwrap()),
         payload_len: u32::from_le_bytes(src[8..12].try_into().unwrap()),
-        _flags: u32::from_le_bytes(src[12..16].try_into().unwrap()),
+        flags: u32::from_le_bytes(src[12..16].try_into().unwrap()),
         sequence: u64::from_le_bytes(src[16..24].try_into().unwrap()),
     })
 }

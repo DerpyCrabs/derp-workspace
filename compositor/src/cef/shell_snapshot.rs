@@ -14,7 +14,6 @@ use crate::session::workspace_model::{
 use std::os::fd::AsRawFd;
 
 const SNAPSHOT_CAPACITY_BYTES: usize = 16 * 1024 * 1024;
-const SNAPSHOT_DOMAIN_CHUNKS_MAGIC: u32 = 0x4452_444d;
 
 enum SnapshotReadResult {
     Unchanged,
@@ -314,7 +313,7 @@ fn encode_payload_chunks(
         .iter()
         .filter(|chunk| !chunk.is_empty())
         .count();
-    payload.extend_from_slice(&SNAPSHOT_DOMAIN_CHUNKS_MAGIC.to_le_bytes());
+    payload.extend_from_slice(&shell_wire::SHELL_SNAPSHOT_DOMAIN_CHUNKS_MAGIC.to_le_bytes());
     payload.extend_from_slice(
         &u32::try_from(chunks_len)
             .map_err(|_| "too many snapshot domain chunks".to_string())?
@@ -1355,7 +1354,7 @@ pub fn snapshot_read_if_changed(
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_payload_chunks, refresh_domain_chunk_cache, SNAPSHOT_DOMAIN_CHUNKS_MAGIC};
+    use super::{encode_payload_chunks, refresh_domain_chunk_cache};
 
     fn chunks() -> [Vec<u8>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT] {
         std::array::from_fn(|_| Vec::new())
@@ -1443,7 +1442,7 @@ mod tests {
         let header_len = shell_wire::SHELL_SNAPSHOT_DOMAIN_REVISION_BYTES;
         assert_eq!(
             u32::from_le_bytes(payload[header_len..header_len + 4].try_into().unwrap()),
-            SNAPSHOT_DOMAIN_CHUNKS_MAGIC
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_CHUNKS_MAGIC
         );
         assert_eq!(
             u32::from_le_bytes(payload[header_len + 4..header_len + 8].try_into().unwrap()),

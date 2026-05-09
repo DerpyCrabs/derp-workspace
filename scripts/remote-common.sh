@@ -61,7 +61,7 @@ run_tar_sync() {
   while IFS= read -r -d '' arg; do
     tar_excludes+=("$arg")
   done < <(remote_tar_exclude_args)
-  remote_sh=$(printf 'set -euo pipefail; mkdir -p %q && cd %q && backup="" && if [[ -f scripts/derp-session.local.env ]]; then backup=$(mktemp) && cp -a scripts/derp-session.local.env "$backup"; fi && rm -rf compositor shell_wire e2e-test-client resources scripts && if [[ -d shell ]]; then find shell -mindepth 1 -maxdepth 1 ! -name node_modules ! -name dist -exec rm -rf {} +; fi && tar xzf - && if [[ -n "$backup" ]] && [[ -f "$backup" ]]; then mkdir -p scripts && cp -a "$backup" scripts/derp-session.local.env && rm -f "$backup"; fi' "$REMOTE_REPO" "$REMOTE_REPO")
+  remote_sh=$(printf 'set -euo pipefail; mkdir -p %q && cd %q && backup="" && if [[ -f scripts/derp-session.local.env ]]; then backup=$(mktemp) && cp -a scripts/derp-session.local.env "$backup"; fi && rm -rf compositor shell_wire e2e-test-client resources scripts wire_schema && if [[ -d shell ]]; then find shell -mindepth 1 -maxdepth 1 ! -name node_modules ! -name dist -exec rm -rf {} +; fi && tar xzf - && if [[ -n "$backup" ]] && [[ -f "$backup" ]]; then mkdir -p scripts && cp -a "$backup" scripts/derp-session.local.env && rm -f "$backup"; fi' "$REMOTE_REPO" "$REMOTE_REPO")
   remote_cmd=$(printf 'exec /usr/bin/env bash -c %q' "$remote_sh")
   (
     cd "$REPO_ROOT"

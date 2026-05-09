@@ -13,9 +13,7 @@ export {
   SHELL_UI_SCREENSHOT_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
 } from './backedShellWindows'
-
-export const SHELL_WINDOW_FLAG_SHELL_HOSTED = 1
-export const SHELL_WINDOW_FLAG_SCRATCHPAD = 2
+export { SHELL_WINDOW_FLAG_SCRATCHPAD, SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/bridge/wireSchema.generated'
 
 export type ShellUiMeasureEnv = ShellMeasureEnv
 

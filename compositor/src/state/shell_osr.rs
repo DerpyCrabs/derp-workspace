@@ -292,7 +292,7 @@ impl ShellOsrState {
         workspace_bounds: Option<Rectangle<i32, Logical>>,
         current_tray_strip: Option<Rectangle<i32, Logical>>,
     ) -> Option<ShellExclusionZonesApply> {
-        if payload.len() < 16 {
+        if payload.len() < shell_wire::SHELL_SHARED_STATE_PREFIX_BYTES {
             return None;
         }
         let snapshot_epoch = u64::from_le_bytes(payload[0..8].try_into().unwrap());
@@ -307,8 +307,8 @@ impl ShellOsrState {
             );
             return None;
         }
-        let payload = &payload[16..];
-        if payload.len() < 8 {
+        let payload = &payload[shell_wire::SHELL_SHARED_STATE_PREFIX_BYTES..];
+        if payload.len() < shell_wire::SHELL_SHARED_STATE_EXCLUSION_HEADER_BYTES {
             return None;
         }
         let mut cursor = shell_wire::WireCursor::new(payload);
@@ -317,22 +317,32 @@ impl ShellOsrState {
         if has_tray_strip > 1 {
             return None;
         }
-        let base_len = 8usize
-            .saturating_add(rect_count.saturating_mul(20))
-            .saturating_add(if has_tray_strip == 1 { 16 } else { 0 });
+        let base_len = shell_wire::SHELL_SHARED_STATE_EXCLUSION_HEADER_BYTES
+            .saturating_add(rect_count.saturating_mul(
+                shell_wire::SHELL_SHARED_STATE_EXCLUSION_RECT_BYTES,
+            ))
+            .saturating_add(if has_tray_strip == 1 {
+                shell_wire::SHELL_SHARED_STATE_EXCLUSION_TRAY_STRIP_BYTES
+            } else {
+                0
+            });
         if payload.len() < base_len {
             return None;
         }
         let mut overlay_open = false;
         let mut next_floating: Vec<Rectangle<i32, Logical>> = Vec::new();
         if payload.len() > base_len {
-            if payload.len() < base_len + 8 {
+            if payload.len()
+                < base_len + shell_wire::SHELL_SHARED_STATE_EXCLUSION_FLOATING_HEADER_BYTES
+            {
                 return None;
             }
             let mut floating_cursor = shell_wire::WireCursor::new(&payload[base_len..]);
             overlay_open = floating_cursor.read_u32().map(|open| open != 0)?;
             let fc = floating_cursor.read_u32().map(|count| count as usize)?;
-            let expected = base_len + 8 + fc.saturating_mul(20);
+            let expected = base_len
+                + shell_wire::SHELL_SHARED_STATE_EXCLUSION_FLOATING_HEADER_BYTES
+                + fc.saturating_mul(shell_wire::SHELL_SHARED_STATE_EXCLUSION_RECT_BYTES);
             if expected != payload.len() {
                 return None;
             }
@@ -430,7 +440,7 @@ impl ShellOsrState {
         pointer_grab_id: Option<u32>,
         pointer_grab_is_shell_hosted: bool,
     ) -> Option<ShellUiWindowsApply> {
-        if payload.len() < 16 {
+        if payload.len() < shell_wire::SHELL_SHARED_STATE_PREFIX_BYTES {
             return None;
         }
         let snapshot_epoch = u64::from_le_bytes(payload[0..8].try_into().unwrap());
@@ -445,17 +455,19 @@ impl ShellOsrState {
             );
             return None;
         }
-        let payload = &payload[16..];
+        let payload = &payload[shell_wire::SHELL_SHARED_STATE_PREFIX_BYTES..];
         const MAX: usize = shell_wire::MAX_SHELL_UI_WINDOWS as usize;
-        if payload.len() < 8 {
+        if payload.len() < shell_wire::SHELL_SHARED_STATE_UI_WINDOWS_HEADER_BYTES {
             return None;
         }
         let mut cursor = shell_wire::WireCursor::new(payload);
         let generation = cursor.read_u32()?;
         let count = cursor.read_u32().map(|count| count as usize)?;
         let need = count
-            .checked_mul(28)
-            .and_then(|count_len| 8usize.checked_add(count_len));
+            .checked_mul(shell_wire::SHELL_SHARED_STATE_UI_WINDOWS_ROW_BYTES)
+            .and_then(|count_len| {
+                shell_wire::SHELL_SHARED_STATE_UI_WINDOWS_HEADER_BYTES.checked_add(count_len)
+            });
         if need != Some(payload.len()) {
             return None;
         }

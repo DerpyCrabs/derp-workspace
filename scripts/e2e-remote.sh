@@ -123,7 +123,7 @@ trap e2e_remote_restore_session_env EXIT
 e2e_remote_list_sync_paths() {
   (
     cd "$REPO_ROOT" || exit 1
-    for d in compositor shell_wire e2e-test-client resources; do
+    for d in compositor shell_wire e2e-test-client resources wire_schema; do
       [[ -d "$d" ]] || continue
       find "$d" -type f 2>/dev/null || true
     done
@@ -142,7 +142,7 @@ e2e_remote_list_sync_paths() {
 e2e_remote_list_native_build_paths() {
   (
     cd "$REPO_ROOT" || exit 1
-    for d in compositor shell_wire e2e-test-client; do
+    for d in compositor shell_wire e2e-test-client wire_schema; do
       [[ -d "$d" ]] || continue
       find "$d" -type f 2>/dev/null || true
     done
