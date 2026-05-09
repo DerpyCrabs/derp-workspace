@@ -1490,6 +1490,19 @@ function App() {
     measureEnv: shellMeasureEnv,
   });
 
+  createEffect(() => {
+    const main = mainRef;
+    if (!main || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      shellSharedStateSync.requestSharedStateSync({
+        shellUi: "invalidate-all",
+        exclusion: "sync",
+      });
+    });
+    observer.observe(main, { box: "border-box" });
+    onCleanup(() => observer.disconnect());
+  });
+
   const workspaceLayoutBridge = createWorkspaceLayoutBridge({
     getWorkspaceState: workspaceSnapshot,
     getAllWindowsMap: allWindowsMap,

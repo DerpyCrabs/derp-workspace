@@ -40,6 +40,7 @@ import {
   type ShellSnapshot,
   type WindowSnapshot,
 } from "../lib/runtime.ts";
+import { postJson } from "../lib/setup.ts";
 
 function resolveWindowOutputName(
   compositor: CompositorSnapshot,
@@ -57,6 +58,63 @@ function resolveWindowOutputName(
   if (output) return output.name;
   if (window.output_name) return window.output_name;
   return null;
+}
+
+function outputLayoutScreens(outputs: CompositorSnapshot["outputs"]) {
+  return outputs.map((output) => ({
+    name: output.name,
+    x: output.x,
+    y: output.y,
+    transform: 0,
+  }));
+}
+
+function reorderedOutputLayoutScreens(outputs: CompositorSnapshot["outputs"]) {
+  const ordered = [...outputs].sort((a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name));
+  const reversed = [...ordered].reverse();
+  let x = ordered[0]?.x ?? 0;
+  const y = ordered[0]?.y ?? 0;
+  return reversed.map((output) => {
+    const row = {
+      name: output.name,
+      x,
+      y,
+      transform: 0,
+    };
+    x += output.width;
+    return row;
+  });
+}
+
+function canonicalOutputLayoutScreens(outputs: CompositorSnapshot["outputs"]) {
+  const ordered = [...outputs].sort((a, b) => a.name.localeCompare(b.name));
+  let x = 0;
+  return ordered.map((output) => {
+    const row = {
+      name: output.name,
+      x,
+      y: 0,
+      transform: 0,
+    };
+    x += output.width;
+    return row;
+  });
+}
+
+async function applyOutputLayout(base: string, screens: ReturnType<typeof outputLayoutScreens>) {
+  await postJson(base, "/test/output/layout", { screens });
+}
+
+function rectsEqual(
+  left: { x: number; y: number; width: number; height: number },
+  right: { x: number; y: number; width: number; height: number },
+) {
+  return (
+    Math.abs(left.x - right.x) <= 2 &&
+    Math.abs(left.y - right.y) <= 2 &&
+    Math.abs(left.width - right.width) <= 2 &&
+    Math.abs(left.height - right.height) <= 2
+  );
 }
 
 async function ensureProgramsMenuSearchReady(
@@ -797,5 +855,144 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact("multimonitor-native-move.json", nativeMoved);
     await writeJsonArtifact("multimonitor-shell-move.json", settingsMoved);
     await writeTextArtifact("settings-displays-page.html", displaysHtml);
+  });
+
+  test("multi-monitor output reorder refreshes shell ui windows and exclusion rects", async ({
+    base,
+  }) => {
+    const initial = await getSnapshots(base);
+    if (initial.compositor.outputs.length < 2) {
+      throw new SkipError("requires at least two outputs");
+    }
+    const originalLayout = canonicalOutputLayoutScreens(initial.compositor.outputs);
+    await applyOutputLayout(base, originalLayout);
+    const canonical = await waitFor(
+      "wait for canonical output layout",
+      async () => {
+        const snapshots = await getSnapshots(base);
+        const order = [...snapshots.compositor.outputs]
+          .sort((a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name))
+          .map((output) => output.name)
+          .join("|");
+        return order === originalLayout.map((output) => output.name).join("|")
+          ? snapshots
+          : null;
+      },
+      5000,
+      100,
+    );
+    const reorderedLayout = reorderedOutputLayoutScreens(canonical.compositor.outputs);
+    const originalOrder = [...canonical.compositor.outputs]
+      .sort((a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name))
+      .map((output) => output.name)
+      .join("|");
+    const targetOrder = reorderedLayout.map((output) => output.name).join("|");
+    if (targetOrder === originalOrder) {
+      throw new SkipError("output order cannot be changed");
+    }
+
+    try {
+      await openSettings(base, "click");
+      const before = await waitFor(
+        "wait for settings shared state before output reorder",
+        async () => {
+          const snapshots = await getSnapshots(base);
+          const shellUi = snapshots.compositor.shell_window_frames?.find(
+            (entry) => entry.id === SHELL_UI_SETTINGS_WINDOW_ID,
+          );
+          const settingsWindow = compositorWindowById(
+            snapshots.compositor,
+            SHELL_UI_SETTINGS_WINDOW_ID,
+          );
+          if (!shellUi || !settingsWindow) return null;
+          if (!snapshots.compositor.shell_exclusion_global?.length)
+            return null;
+          return { ...snapshots, shellUi, settingsWindow };
+        },
+        5000,
+        100,
+      );
+
+      await applyOutputLayout(base, reorderedLayout);
+      const after = await waitFor(
+        "wait for shell shared state after output reorder",
+        async () => {
+          const snapshots = await getSnapshots(base);
+          const order = [...snapshots.compositor.outputs]
+            .sort((a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name))
+            .map((output) => output.name)
+            .join("|");
+          if (order !== targetOrder) return null;
+          const settingsWindow = compositorWindowById(
+            snapshots.compositor,
+            SHELL_UI_SETTINGS_WINDOW_ID,
+          );
+          const shellSettingsWindow = shellWindowById(
+            snapshots.shell,
+            SHELL_UI_SETTINGS_WINDOW_ID,
+          );
+          const shellUi = snapshots.compositor.shell_window_frames?.find(
+            (entry) => entry.id === SHELL_UI_SETTINGS_WINDOW_ID,
+          );
+          if (!settingsWindow || !shellSettingsWindow || !shellUi) return null;
+          if (
+            shellSettingsWindow.frame_x === undefined ||
+            shellSettingsWindow.frame_y === undefined
+          )
+            return null;
+          if (
+            Math.abs(shellUi.global.x - shellSettingsWindow.frame_x) > 8 ||
+            Math.abs(shellUi.global.y - shellSettingsWindow.frame_y) > 32
+          )
+            return null;
+          const missingTaskbarExclusions = snapshots.shell.taskbars.filter(
+            (taskbar) =>
+              !snapshots.compositor.shell_exclusion_global?.some((rect) =>
+                rectsEqual(rect, {
+                  x: taskbar.rect.global_x,
+                  y: taskbar.rect.global_y,
+                  width: taskbar.rect.width,
+                  height: taskbar.rect.height,
+                }),
+              ),
+          );
+          if (missingTaskbarExclusions.length > 0) return null;
+          return { ...snapshots, shellUi, settingsWindow };
+        },
+        5000,
+        100,
+      );
+
+      await writeJsonArtifact("multimonitor-output-reorder-shared-state.json", {
+        originalLayout,
+        reorderedLayout,
+        before: {
+          outputs: before.compositor.outputs,
+          shellUi: before.shellUi,
+          exclusions: before.compositor.shell_exclusion_global,
+        },
+        after: {
+          outputs: after.compositor.outputs,
+          shellUi: after.shellUi,
+          exclusions: after.compositor.shell_exclusion_global,
+          taskbars: after.shell.taskbars,
+        },
+      });
+    } finally {
+      await applyOutputLayout(base, originalLayout);
+      await waitFor(
+        "wait for original output layout restore",
+        async () => {
+          const snapshots = await getSnapshots(base);
+          const order = [...snapshots.compositor.outputs]
+            .sort((a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name))
+            .map((output) => output.name)
+            .join("|");
+          return order === originalOrder ? snapshots : null;
+        },
+        5000,
+        100,
+      );
+    }
   });
 });

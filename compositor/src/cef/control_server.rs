@@ -1586,6 +1586,17 @@ fn handle_one(
         return Ok(());
     }
 
+    if req_path == "/test/output/layout" {
+        let screens = v
+            .get("screens")
+            .cloned()
+            .ok_or_else(|| "output layout: missing screens".to_string())?;
+        let json = serde_json::json!({ "screens": screens }).to_string();
+        uplink.shell_apply_output_layout(json);
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if req_path == "/test/screenshot" {
         let rect = match (
             v.get("x").and_then(|x| x.as_i64()),

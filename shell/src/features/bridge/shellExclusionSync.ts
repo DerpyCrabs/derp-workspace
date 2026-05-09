@@ -246,6 +246,10 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
 
   function syncExclusionZonesNow() {
     void options.exclusionReactiveDeps()
+    const stamp = sharedShellStateStampKey()
+    if (stamp !== lastExclusionStamp) {
+      for (const token of exclusionRegistry.keys()) dirtyExclusionTokens.add(token)
+    }
     if (
       !pendingExclusionStateWrite &&
       !exclusionStructureDirty &&
@@ -293,7 +297,6 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
     const mergedBase = mergeExclusionRects([...rects, ...floatingRaw])
     options.onHudChange(hud)
     const floatingForPayload = mergeExclusionRects(floatingRaw)
-    const stamp = sharedShellStateStampKey()
     if (
       !pendingExclusionStateWrite &&
       lastExclusionBase !== null &&
@@ -309,6 +312,7 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
     }
     if (!writeShellExclusionState(mergedBase, snapshot.tray_strip, overlayOpen, floatingForPayload)) {
       pendingExclusionStateWrite = true
+      lastExclusionStamp = stamp
       return
     }
     pendingExclusionStateWrite = false
@@ -353,7 +357,7 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
       return
     }
     const resizeObserver =
-      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => scheduleExclusionZonesSync()) : null
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => invalidateAllShellExclusionRects()) : null
     resizeObserver?.observe(main, { box: 'border-box' })
     queueMicrotask(() => scheduleExclusionZonesSync())
     onCleanup(() => resizeObserver?.disconnect())

@@ -79,6 +79,10 @@ function flush(keepDirtyForRaf = false) {
   const hasPendingRaf = raf !== 0
   if (!keepDirtyForRaf) raf = 0
   microtaskQueued = false
+  const stamp = sharedShellStateStampKey()
+  if (stamp !== lastSharedStateStamp) {
+    for (const token of registry.keys()) dirtyRegistryTokens.add(token)
+  }
   if (!structureDirty && dirtyRegistryTokens.size === 0 && lastWindows !== null) return
   const frame = currentShellMeasureFrame()
   const dirtyTokens = [...dirtyRegistryTokens]
@@ -99,7 +103,6 @@ function flush(keepDirtyForRaf = false) {
     if (e.cached) windows.push(e.cached)
   }
   windows.sort((a, b) => a.z - b.z || a.id - b.id)
-  const stamp = sharedShellStateStampKey()
   if (sameWindows(windows, lastWindows) && stamp === lastSharedStateStamp) return
   const nextGeneration = generation + 1
   const sharedOk = writeShellUiWindowsState(nextGeneration, windows)

@@ -156,4 +156,35 @@ describe('shellUiWindows', () => {
     expect(send).toHaveBeenCalledTimes(2)
     expect(measure).toHaveBeenCalledTimes(1)
   })
+
+  it('remeasures and rewrites when the compositor snapshot epoch changes', async () => {
+    const send = vi.fn()
+    vi.stubGlobal('window', {
+      __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE: 2,
+      __DERP_LAST_COMPOSITOR_STATE_EPOCH: 2,
+      __DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION: 3,
+      __DERP_SHELL_UI_WINDOWS_STATE_PATH: '/tmp/ui-windows.bin',
+      __derpShellSharedStateWrite: send.mockReturnValue(true),
+    })
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+
+    const mod = await import('./shellUiWindows')
+    const measure = vi.fn(() => ({
+      id: 31,
+      z: 1,
+      gx: 0,
+      gy: 0,
+      gw: 10,
+      gh: 10,
+    }))
+    mod.registerShellUiWindow(31, measure)
+
+    mod.flushShellUiWindowsSyncNow()
+    ;(window as Window & { __DERP_LAST_COMPOSITOR_STATE_EPOCH?: number }).__DERP_LAST_COMPOSITOR_STATE_EPOCH = 4
+    mod.flushShellUiWindowsSyncNow()
+
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(measure).toHaveBeenCalledTimes(2)
+  })
 })

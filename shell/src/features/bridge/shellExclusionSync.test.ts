@@ -118,6 +118,52 @@ describe('createShellExclusionSync', () => {
     dispose()
   })
 
+  it('remeasures and rewrites exclusions when the compositor snapshot epoch changes', async () => {
+    const send = vi.fn().mockReturnValue(true)
+    vi.stubGlobal('window', {
+      __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE: 2,
+      __DERP_LAST_COMPOSITOR_STATE_EPOCH: 2,
+      __DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION: 3,
+      __DERP_SHELL_EXCLUSION_STATE_PATH: '/tmp/exclusion.bin',
+      __derpShellSharedStateWrite: send,
+    })
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+
+    const mod = await import('./shellExclusionSync')
+    const measure = vi.fn(() => ({ x: 1, y: 2, w: 3, h: 4 }))
+    const registration = mod.registerShellExclusionRect('base', 'epoch', measure)
+    const main = {
+      getBoundingClientRect: vi.fn(() => rect(0, 0, 1920, 1080)),
+    } as unknown as HTMLElement
+
+    let runtime: ReturnType<typeof mod.createShellExclusionSync> | null = null
+    const dispose = createRoot((dispose) => {
+      runtime = mod.createShellExclusionSync({
+        mainEl: () => main,
+        outputGeom: () => ({ w: 1920, h: 1080 }),
+        layoutCanvasOrigin: () => null,
+        taskbarScreens: () => [],
+        taskbarHeight: 36,
+        taskbarAutoHide: () => false,
+        windows: () => [],
+        onHudChange: vi.fn(),
+        exclusionReactiveDeps: () => 0,
+      })
+      return dispose
+    })
+
+    runtime!.syncExclusionZonesNow()
+    ;(window as Window & { __DERP_LAST_COMPOSITOR_STATE_EPOCH?: number }).__DERP_LAST_COMPOSITOR_STATE_EPOCH = 4
+    runtime!.syncExclusionZonesNow()
+
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(measure).toHaveBeenCalledTimes(2)
+
+    registration.unregister()
+    dispose()
+  })
+
   it('flushes removed exclusions immediately', async () => {
     const send = vi.fn().mockReturnValue(true)
     vi.stubGlobal('window', {
