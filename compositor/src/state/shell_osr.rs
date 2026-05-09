@@ -318,9 +318,9 @@ impl ShellOsrState {
             return None;
         }
         let base_len = shell_wire::SHELL_SHARED_STATE_EXCLUSION_HEADER_BYTES
-            .saturating_add(rect_count.saturating_mul(
-                shell_wire::SHELL_SHARED_STATE_EXCLUSION_RECT_BYTES,
-            ))
+            .saturating_add(
+                rect_count.saturating_mul(shell_wire::SHELL_SHARED_STATE_EXCLUSION_RECT_BYTES),
+            )
             .saturating_add(if has_tray_strip == 1 {
                 shell_wire::SHELL_SHARED_STATE_EXCLUSION_TRAY_STRIP_BYTES
             } else {
