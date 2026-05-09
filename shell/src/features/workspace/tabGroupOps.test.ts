@@ -14,12 +14,8 @@ import {
 } from './tabGroupOps'
 import {
   createEmptyWorkspaceState,
-  enterWorkspaceSplitView,
-  groupIdForWindow,
-  mergeWorkspaceGroups,
   reconcileWorkspaceState,
-  setWorkspaceActiveTab,
-  setWorkspaceWindowPinned,
+  type WorkspaceState,
 } from '@/features/workspace/workspaceState'
 
 function makeWindow(window_id: number, title = `Window ${window_id}`, minimized = false) {
@@ -33,6 +29,10 @@ function makeWindow(window_id: number, title = `Window ${window_id}`, minimized 
 
 const OrigElement = globalThis.Element
 
+function workspaceState(partial: Partial<WorkspaceState>): WorkspaceState {
+  return { ...createEmptyWorkspaceState(), ...partial }
+}
+
 function asElem(props: Record<string, unknown>): Element {
   return Object.assign(
     Object.create((globalThis as unknown as { Element: { prototype: object } }).Element.prototype),
@@ -42,11 +42,13 @@ function asElem(props: Record<string, unknown>): Element {
 
 describe('tabGroupOps', () => {
   it('counts leading pinned tabs and clamps inserts after them', () => {
-    let state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
-    const groupId = state.groups.find((group) => group.windowIds.includes(2))!.id
-    state = mergeWorkspaceGroups(state, 3, 1)
-    state = setWorkspaceWindowPinned(state, 2, true)
-    state = setWorkspaceWindowPinned(state, 1, true)
+    const groupId = 'group-2'
+    const state = workspaceState({
+      groups: [{ id: groupId, windowIds: [2, 1, 3] }],
+      activeTabByGroupId: { [groupId]: 1 },
+      pinnedWindowIds: [2, 1],
+      nextGroupSeq: 4,
+    })
     expect(leadingPinnedTabCount(state, groupId)).toBe(2)
     expect(clampTabInsertIndex(state, groupId, 0, false)).toBe(2)
     expect(clampTabInsertIndex(state, groupId, 1, false)).toBe(2)
@@ -54,22 +56,32 @@ describe('tabGroupOps', () => {
   })
 
   it('returns tabs in the persisted group order', () => {
-    const state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2]), 1, 2)
-    const groupId = state.groups.find((group) => group.windowIds.includes(2))!.id
+    const groupId = 'group-2'
+    const state = workspaceState({
+      groups: [{ id: groupId, windowIds: [2, 1] }],
+      activeTabByGroupId: { [groupId]: 1 },
+      nextGroupSeq: 3,
+    })
     expect(tabsInGroup([makeWindow(1), makeWindow(2)], state, groupId).map((window) => window.window_id)).toEqual([2, 1])
   })
 
   it('resolves the active group tab when it is present', () => {
-    const merged = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2]), 1, 2)
-    const groupId = merged.groups.find((group) => group.windowIds.includes(2))!.id
-    const state = setWorkspaceActiveTab(merged, groupId, 1)
+    const groupId = 'group-2'
+    const state = workspaceState({
+      groups: [{ id: groupId, windowIds: [2, 1] }],
+      activeTabByGroupId: { [groupId]: 1 },
+      nextGroupSeq: 3,
+    })
     expect(resolveGroupVisibleWindowId(state, groupId, [makeWindow(1), makeWindow(2)])).toBe(1)
   })
 
   it('skips minimized active tab in favor of first visible member', () => {
-    const merged = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2]), 1, 2)
-    const groupId = merged.groups.find((group) => group.windowIds.includes(2))!.id
-    const state = setWorkspaceActiveTab(merged, groupId, 1)
+    const groupId = 'group-2'
+    const state = workspaceState({
+      groups: [{ id: groupId, windowIds: [2, 1] }],
+      activeTabByGroupId: { [groupId]: 1 },
+      nextGroupSeq: 3,
+    })
     expect(
       resolveGroupVisibleWindowId(state, groupId, [
         makeWindow(1, 'One', true),
@@ -95,9 +107,13 @@ describe('tabGroupOps', () => {
   })
 
   it('resolves the right tab as visible when split view is active', () => {
-    let state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2]), 1, 2)
-    const groupId = groupIdForWindow(state, 2)!
-    state = enterWorkspaceSplitView(state, groupId, 2)
+    const groupId = 'group-2'
+    const state = workspaceState({
+      groups: [{ id: groupId, windowIds: [2, 1] }],
+      activeTabByGroupId: { [groupId]: 1 },
+      splitByGroupId: { [groupId]: { leftWindowId: 2, leftPaneFraction: 0.5 } },
+      nextGroupSeq: 3,
+    })
     expect(resolveGroupVisibleWindowId(state, groupId, [makeWindow(1), makeWindow(2)])).toBe(1)
   })
 
@@ -113,10 +129,13 @@ describe('tabGroupOps', () => {
   })
 
   it('maps split right-strip indices back to group indices', () => {
-    let state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
-    const groupId = groupIdForWindow(state, 2)!
-    state = mergeWorkspaceGroups(state, 3, 1)
-    state = enterWorkspaceSplitView(state, groupId, 2)
+    const groupId = 'group-2'
+    const state = workspaceState({
+      groups: [{ id: groupId, windowIds: [2, 1, 3] }],
+      activeTabByGroupId: { [groupId]: 1 },
+      splitByGroupId: { [groupId]: { leftWindowId: 2, leftPaneFraction: 0.5 } },
+      nextGroupSeq: 4,
+    })
     expect(insertIndexAfterAllRightTabs(state, groupId)).toBe(3)
     expect(rightStripIndexToGroupInsertIndex(state, groupId, 0)).toBe(1)
     expect(rightStripIndexToGroupInsertIndex(state, groupId, 1)).toBe(2)
@@ -124,9 +143,13 @@ describe('tabGroupOps', () => {
   })
 
   it('builds taskbar labels with the hidden-tab count', () => {
-    const merged = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2]), 1, 2)
-    const groupId = merged.groups.find((group) => group.windowIds.includes(2))!.id
-    expect(groupTaskbarLabel(merged, groupId, [makeWindow(1, 'Alpha'), makeWindow(2, 'Beta')])).toBe('Alpha (+1)')
+    const groupId = 'group-2'
+    const state = workspaceState({
+      groups: [{ id: groupId, windowIds: [2, 1] }],
+      activeTabByGroupId: { [groupId]: 1 },
+      nextGroupSeq: 3,
+    })
+    expect(groupTaskbarLabel(state, groupId, [makeWindow(1, 'Alpha'), makeWindow(2, 'Beta')])).toBe('Alpha (+1)')
   })
 
   it('parses tab drop slots from DOM attributes', () => {
@@ -155,7 +178,14 @@ describe('tabGroupOps', () => {
     ElementShim.prototype = Object.create(Object.getPrototypeOf(Object.prototype))
     globalThis.Element = ElementShim as unknown as typeof globalThis.Element
     try {
-      const state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
+      const state = workspaceState({
+        groups: [
+          { id: 'group-2', windowIds: [2, 1] },
+          { id: 'group-3', windowIds: [3] },
+        ],
+        activeTabByGroupId: { 'group-2': 1, 'group-3': 3 },
+        nextGroupSeq: 4,
+      })
       const tab = asElem({
         closest(sel: string) {
           if (sel === '[data-workspace-tab]') return this as unknown as Element
@@ -314,7 +344,14 @@ describe('tabGroupOps', () => {
     docAny.elementsFromPoint = () => [overlay]
     docAny.querySelectorAll = (() => [tab] as unknown as ReturnType<Document['querySelectorAll']>) as Document['querySelectorAll']
     try {
-      const state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
+      const state = workspaceState({
+        groups: [
+          { id: 'group-2', windowIds: [2, 1] },
+          { id: 'group-3', windowIds: [3] },
+        ],
+        activeTabByGroupId: { 'group-2': 1, 'group-3': 3 },
+        nextGroupSeq: 4,
+      })
       expect(findMergeTarget(state, 3, 180, 40)).toEqual({ groupId: 'group-2', targetWindowId: 2, insertIndex: 1 })
     } finally {
       if (origElementsFromPoint) docAny.elementsFromPoint = origElementsFromPoint
@@ -414,7 +451,14 @@ describe('tabGroupOps', () => {
       return [] as unknown as ReturnType<Document['querySelectorAll']>
     }) as Document['querySelectorAll']
     try {
-      const state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
+      const state = workspaceState({
+        groups: [
+          { id: 'group-2', windowIds: [2, 1] },
+          { id: 'group-3', windowIds: [3] },
+        ],
+        activeTabByGroupId: { 'group-2': 1, 'group-3': 3 },
+        nextGroupSeq: 4,
+      })
       expect(findMergeTarget(state, 3, 292, 40)).toEqual({ groupId: 'group-2', targetWindowId: 1, insertIndex: 2 })
     } finally {
       if (origElementsFromPoint) docAny.elementsFromPoint = origElementsFromPoint

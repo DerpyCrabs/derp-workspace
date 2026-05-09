@@ -741,6 +741,184 @@ mod tests {
     }
 
     #[test]
+    fn compositor_reconciles_window_lifecycle_into_workspace_groups() {
+        let state = WorkspaceState::default();
+        let next = reconcile_workspace_state(&state, &[7, 3]);
+        assert_eq!(
+            next.groups,
+            vec![group("group-1", &[3]), group("group-2", &[7])]
+        );
+        assert_eq!(next.active_tab_by_group_id["group-1"], 3);
+        assert_eq!(next.active_tab_by_group_id["group-2"], 7);
+
+        let pruned = reconcile_workspace_state(&next, &[3]);
+        assert_eq!(pruned.groups, vec![group("group-1", &[3])]);
+        assert_eq!(pruned.active_tab_by_group_id["group-1"], 3);
+    }
+
+    #[test]
+    fn compositor_owns_tab_order_pinning_and_split_mutations() {
+        let state = WorkspaceState {
+            groups: vec![
+                group("group-1", &[1]),
+                group("group-2", &[2]),
+                group("group-3", &[3]),
+            ],
+            active_tab_by_group_id: HashMap::from([
+                ("group-1".to_string(), 1),
+                ("group-2".to_string(), 2),
+                ("group-3".to_string(), 3),
+            ]),
+            next_group_seq: 4,
+            ..WorkspaceState::default()
+        };
+        let state = state
+            .apply_mutation(&WorkspaceMutation::MoveWindowToWindow {
+                window_id: 1,
+                target_window_id: 2,
+                insert_index: 1,
+            })
+            .expect("merge tab into group");
+        let state = state
+            .apply_mutation(&WorkspaceMutation::MoveWindowToWindow {
+                window_id: 3,
+                target_window_id: 1,
+                insert_index: 2,
+            })
+            .expect("merge second tab into group");
+        let group_id = group_id_for_window(&state, 2).expect("target group");
+        assert_eq!(
+            state
+                .groups
+                .iter()
+                .find(|group| group.id == group_id)
+                .expect("group")
+                .window_ids,
+            vec![2, 1, 3]
+        );
+
+        let state = state
+            .apply_mutation(&WorkspaceMutation::SetWindowPinned {
+                window_id: 1,
+                pinned: true,
+            })
+            .expect("pin moved tab");
+        assert_eq!(
+            state
+                .groups
+                .iter()
+                .find(|group| group.id == group_id)
+                .expect("group")
+                .window_ids,
+            vec![1, 2, 3]
+        );
+
+        let state = state
+            .apply_mutation(&WorkspaceMutation::EnterSplit {
+                group_id: group_id.to_string(),
+                left_window_id: 1,
+                left_pane_fraction: 0.9,
+            })
+            .expect("enter split");
+        assert_eq!(
+            state.split_by_group_id[group_id],
+            WorkspaceGroupSplitState {
+                left_window_id: 1,
+                left_pane_fraction: 0.7,
+            }
+        );
+        assert_ne!(state.active_tab_by_group_id[group_id], 1);
+    }
+
+    #[test]
+    fn compositor_detach_clears_tiling_metadata_for_split_tab() {
+        let state = WorkspaceState {
+            groups: vec![group("group-1", &[1, 2])],
+            active_tab_by_group_id: HashMap::from([("group-1".to_string(), 1)]),
+            monitor_tiles: vec![WorkspaceMonitorTileState {
+                output_id: "make:model:serial-a".to_string(),
+                output_name: "DP-1".to_string(),
+                entries: vec![WorkspaceMonitorTileEntry {
+                    window_id: 1,
+                    zone: "left-half".to_string(),
+                    bounds: WorkspaceRect {
+                        x: 0,
+                        y: 0,
+                        width: 960,
+                        height: 1040,
+                    },
+                }],
+            }],
+            pre_tile_geometry: vec![WorkspacePreTileGeometry {
+                window_id: 1,
+                bounds: WorkspaceRect {
+                    x: 120,
+                    y: 100,
+                    width: 900,
+                    height: 700,
+                },
+            }],
+            next_group_seq: 2,
+            ..WorkspaceState::default()
+        };
+        let next = state
+            .apply_mutation(&WorkspaceMutation::SplitWindowToOwnGroup { window_id: 1 })
+            .expect("split window into own group");
+        assert_eq!(
+            next.groups,
+            vec![group("group-1", &[2]), group("group-2", &[1])]
+        );
+        assert!(next.monitor_tiles.is_empty());
+        assert!(next.pre_tile_geometry.is_empty());
+    }
+
+    #[test]
+    fn compositor_keeps_multi_monitor_tile_identity_authoritative() {
+        let state = WorkspaceState {
+            groups: vec![group("group-1", &[1]), group("group-2", &[2])],
+            active_tab_by_group_id: HashMap::from([
+                ("group-1".to_string(), 1),
+                ("group-2".to_string(), 2),
+            ]),
+            next_group_seq: 3,
+            ..WorkspaceState::default()
+        };
+        let state = state
+            .apply_mutation(&WorkspaceMutation::SetMonitorTile {
+                output_id: Some("make:model:serial-a".to_string()),
+                output_name: "DP-1".to_string(),
+                window_id: 1,
+                zone: "left-half".to_string(),
+                bounds: WorkspaceRect {
+                    x: 0,
+                    y: 0,
+                    width: 960,
+                    height: 1040,
+                },
+            })
+            .expect("set first monitor tile");
+        let state = state
+            .apply_mutation(&WorkspaceMutation::SetMonitorTile {
+                output_id: Some("make:model:serial-b".to_string()),
+                output_name: "DP-1".to_string(),
+                window_id: 2,
+                zone: "right-half".to_string(),
+                bounds: WorkspaceRect {
+                    x: 960,
+                    y: 0,
+                    width: 960,
+                    height: 1040,
+                },
+            })
+            .expect("set second monitor tile");
+        assert_eq!(state.monitor_tiles.len(), 2);
+        assert_eq!(state.monitor_tiles[0].output_id, "make:model:serial-a");
+        assert_eq!(state.monitor_tiles[0].entries[0].window_id, 1);
+        assert_eq!(state.monitor_tiles[1].output_id, "make:model:serial-b");
+        assert_eq!(state.monitor_tiles[1].entries[0].window_id, 2);
+    }
+
+    #[test]
     fn workspace_protocol_manifest_matches_rust_model() {
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../../../resources/workspace-protocol.json"))

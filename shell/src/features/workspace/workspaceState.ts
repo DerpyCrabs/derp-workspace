@@ -1,5 +1,4 @@
 export * from './workspaceSnapshot'
-export * from './workspaceDraftOps'
 export {
   createEmptyWorkspaceSnapshot as createEmptyWorkspaceState,
   normalizeWorkspaceSnapshot as normalizeWorkspaceState,

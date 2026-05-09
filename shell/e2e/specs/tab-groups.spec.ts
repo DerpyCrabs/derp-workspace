@@ -1,3 +1,8 @@
+import { execFile } from 'node:child_process'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
+
 import {
   BTN_LEFT,
   KEY,
@@ -49,6 +54,54 @@ import {
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 import { fileBrowserSnapshot, openFileBrowserFromLauncher } from '../lib/fileBrowserFixtureNav.ts'
+
+const execFileAsync = promisify(execFile)
+const here = path.dirname(fileURLToPath(import.meta.url))
+const repoRoot = path.resolve(here, '..', '..', '..')
+const derpctlBin = process.env.DERP_E2E_DERPCTL_BIN || path.join(repoRoot, 'target', 'release', 'derpctl')
+
+type DerpctlReply = {
+  ok: boolean
+  result?: any
+  error?: { message?: string }
+}
+
+async function derpctl(args: string[]): Promise<DerpctlReply> {
+  const { stdout } = await execFileAsync(derpctlBin, args, { cwd: repoRoot })
+  const reply = JSON.parse(stdout) as DerpctlReply
+  if (!reply.ok) {
+    throw new Error(`derpctl ${args.join(' ')} failed: ${reply.error?.message ?? 'unknown error'}`)
+  }
+  return reply
+}
+
+async function compositorWorkspaceGroups() {
+  const reply = await derpctl(['state', '--domains', 'workspace'])
+  const groups = reply.result?.workspace?.groups
+  assert(Array.isArray(groups), 'derpctl workspace groups missing')
+  return groups as Array<{ id?: string; windowIds?: number[]; window_ids?: number[] }>
+}
+
+async function assertShellTabGroupMatchesCompositorWorkspace(
+  shellGroup: { group_id: string; member_window_ids: number[] },
+  expectedWindowIds: number[],
+) {
+  const groups = await compositorWorkspaceGroups()
+  const compositorGroup = groups.find((group) => {
+    const ids = group.windowIds ?? group.window_ids ?? []
+    return ids.length === expectedWindowIds.length && expectedWindowIds.every((windowId) => ids.includes(windowId))
+  })
+  assert(compositorGroup, `missing compositor workspace group for ${expectedWindowIds.join(',')}`)
+  assert(
+    !compositorGroup.id || compositorGroup.id === shellGroup.group_id,
+    `shell group ${shellGroup.group_id} does not match compositor group ${compositorGroup.id}`,
+  )
+  assert(
+    shellGroup.member_window_ids.length === expectedWindowIds.length &&
+      expectedWindowIds.every((windowId) => shellGroup.member_window_ids.includes(windowId)),
+    `shell group members ${shellGroup.member_window_ids.join(',')} do not match compositor ${expectedWindowIds.join(',')}`,
+  )
+}
 
 function tabRect(shell: ShellSnapshot, windowId: number) {
   const group = tabGroupByWindow(shell, windowId)
@@ -1313,6 +1366,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
       released = true
       const grouped = await timing.step('wait for merged members', () =>
         waitForGroupedMembers(base, [target.windowId, jsWindow.window.window_id], jsWindow.window.window_id),
+      )
+      await timing.step('assert compositor owns merged workspace group', () =>
+        assertShellTabGroupMatchesCompositorWorkspace(grouped.group, [target.windowId, jsWindow.window.window_id]),
       )
       const focused = await timing.step('wait for grouped shell window focus', () =>
         waitForShellUiFocus(base, jsWindow.window.window_id),
