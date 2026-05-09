@@ -203,7 +203,7 @@ async function refreshDefaultApplications(): Promise<void> {
 }
 
 async function warmDefaultApplications() {
-  const base = await waitForShellHttpBase(4000)
+  const base = await waitForShellHttpBase()
   if (!base) return
   await refreshDefaultApplications()
 }

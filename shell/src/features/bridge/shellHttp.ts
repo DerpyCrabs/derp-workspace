@@ -1,3 +1,7 @@
+export const DERP_SHELL_HTTP_READY_EVENT = 'derp-shell-http-ready'
+
+let shellHttpReadyPromise: Promise<string | null> | null = null
+
 export function shellHttpBase(): string | null {
   if (typeof window === 'undefined') return null
   const u = window.__DERP_SHELL_HTTP
@@ -13,15 +17,23 @@ export function shellHttpBase(): string | null {
   return null
 }
 
-export async function waitForShellHttpBase(timeoutMs: number = 2000): Promise<string | null> {
+export function waitForShellHttpBase(): Promise<string | null> {
   const ready = shellHttpBase()
-  if (ready) return ready
-  if (typeof window === 'undefined') return null
-  const startedAt = Date.now()
-  while (Date.now() - startedAt < timeoutMs) {
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 50))
-    const next = shellHttpBase()
-    if (next) return next
+  if (ready || typeof window === 'undefined') return Promise.resolve(ready)
+  if (!shellHttpReadyPromise) {
+    shellHttpReadyPromise = new Promise((resolve) => {
+      window.addEventListener(
+        DERP_SHELL_HTTP_READY_EVENT,
+        () => {
+          resolve(shellHttpBase())
+        },
+        { once: true },
+      )
+    })
   }
-  return null
+  return shellHttpReadyPromise
+}
+
+export function __resetShellHttpReadyForTests() {
+  shellHttpReadyPromise = null
 }

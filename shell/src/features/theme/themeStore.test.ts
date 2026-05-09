@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  __resetShellHttpReadyForTests,
+  DERP_SHELL_HTTP_READY_EVENT,
+} from '@/features/bridge/shellHttp'
+import {
   __resetThemeStoreForTests,
   getThemeSettings,
   parseThemeSettingsResponse,
@@ -11,6 +15,7 @@ import {
 
 afterEach(() => {
   __resetThemeStoreForTests()
+  __resetShellHttpReadyForTests()
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
@@ -68,16 +73,15 @@ describe('themeStore', () => {
   })
 
   it('waits for shell http injection before loading persisted settings', async () => {
-    vi.useFakeTimers()
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       text: vi.fn().mockResolvedValue(JSON.stringify({ palette: 'caffeine', mode: 'dark' })),
     })
 
-    const fakeWindow = {
+    const fakeWindow = Object.assign(new EventTarget(), {
       matchMedia: vi.fn().mockReturnValue({ matches: false }),
-    } as unknown as Window & typeof globalThis
+    }) as unknown as Window & typeof globalThis
 
     vi.stubGlobal('window', fakeWindow)
     vi.stubGlobal('fetch', fetchMock)
@@ -85,11 +89,9 @@ describe('themeStore', () => {
     const refreshPromise = refreshThemeSettingsFromRemote()
     expect(getThemeSettings()).toEqual({ palette: 'default', mode: 'system' })
 
-    setTimeout(() => {
-      ;(fakeWindow as typeof fakeWindow & { __DERP_SHELL_HTTP?: string }).__DERP_SHELL_HTTP = 'http://127.0.0.1:7777'
-    }, 75)
+    ;(fakeWindow as typeof fakeWindow & { __DERP_SHELL_HTTP?: string }).__DERP_SHELL_HTTP = 'http://127.0.0.1:7777'
+    fakeWindow.dispatchEvent(new Event(DERP_SHELL_HTTP_READY_EVENT))
 
-    await vi.advanceTimersByTimeAsync(100)
     await refreshPromise
 
     expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:7777/settings_theme')

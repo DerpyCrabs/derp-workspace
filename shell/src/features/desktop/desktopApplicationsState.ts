@@ -243,7 +243,7 @@ async function refreshDesktopApplications(): Promise<void> {
 }
 
 async function warmDesktopApplications() {
-  const base = await waitForShellHttpBase(4000)
+  const base = await waitForShellHttpBase()
   if (!base) return
   await refreshDesktopApplications()
 }

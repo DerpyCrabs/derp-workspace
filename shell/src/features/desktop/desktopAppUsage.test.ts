@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { __resetShellHttpReadyForTests, DERP_SHELL_HTTP_READY_EVENT } from '@/features/bridge/shellHttp'
 import {
   __resetDesktopAppUsageForTests,
   desktopAppUsageKey,
@@ -21,6 +22,7 @@ const firefox: DesktopAppEntry = {
 
 afterEach(() => {
   __resetDesktopAppUsageForTests()
+  __resetShellHttpReadyForTests()
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
@@ -73,7 +75,6 @@ describe('desktopAppUsage', () => {
   })
 
   it('waits for shell http injection before flushing queued launches', async () => {
-    vi.useFakeTimers()
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -87,7 +88,7 @@ describe('desktopAppUsage', () => {
         text: vi.fn().mockResolvedValue('{"ok":true}'),
       })
 
-    const fakeWindow = {} as Window & typeof globalThis
+    const fakeWindow = new EventTarget() as Window & typeof globalThis
 
     vi.stubGlobal('window', fakeWindow)
     vi.stubGlobal('fetch', fetchMock)
@@ -95,12 +96,10 @@ describe('desktopAppUsage', () => {
     expect(recordDesktopAppLaunch(firefox)).toEqual({ [desktopAppUsageKey(firefox)]: 1 })
 
     const refreshPromise = refreshDesktopAppUsageFromRemote()
-    setTimeout(() => {
-      ;(fakeWindow as typeof fakeWindow & { __DERP_SHELL_HTTP?: string }).__DERP_SHELL_HTTP =
-        'http://127.0.0.1:7777'
-    }, 75)
+    ;(fakeWindow as typeof fakeWindow & { __DERP_SHELL_HTTP?: string }).__DERP_SHELL_HTTP =
+      'http://127.0.0.1:7777'
+    fakeWindow.dispatchEvent(new Event(DERP_SHELL_HTTP_READY_EVENT))
 
-    await vi.advanceTimersByTimeAsync(150)
     await refreshPromise
     await Promise.resolve()
 

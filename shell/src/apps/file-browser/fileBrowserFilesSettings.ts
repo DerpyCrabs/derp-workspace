@@ -121,7 +121,7 @@ async function refresh(): Promise<void> {
 }
 
 async function warm(): Promise<void> {
-  const base = await waitForShellHttpBase(4000)
+  const base = await waitForShellHttpBase()
   if (!base) return
   await refresh()
 }

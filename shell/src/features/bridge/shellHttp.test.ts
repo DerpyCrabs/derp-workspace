@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { shellHttpBase, waitForShellHttpBase } from './shellHttp'
+import {
+  __resetShellHttpReadyForTests,
+  DERP_SHELL_HTTP_READY_EVENT,
+  shellHttpBase,
+  waitForShellHttpBase,
+} from './shellHttp'
 
 describe('shellHttpBase', () => {
   afterEach(() => {
     vi.useRealTimers()
+    __resetShellHttpReadyForTests()
     vi.unstubAllGlobals()
   })
 
@@ -37,18 +43,33 @@ describe('shellHttpBase', () => {
     expect(shellHttpBase()).toBeNull()
   })
 
-  it('waits for injected shell http base', async () => {
-    vi.useFakeTimers()
-    const fakeWindow = {} as Window & typeof globalThis
+  it('resolves readiness immediately when shell http base is already injected', async () => {
+    vi.stubGlobal('window', {
+      __DERP_SHELL_HTTP: 'http://127.0.0.1:7777/',
+      location: { origin: 'file://' },
+    })
+
+    await expect(waitForShellHttpBase()).resolves.toBe('http://127.0.0.1:7777')
+  })
+
+  it('resolves readiness from the shell http ready event when injection is late', async () => {
+    const listeners = new Map<string, EventListenerOrEventListenerObject>()
+    const fakeWindow = {
+      location: { origin: 'file://' },
+      addEventListener: vi.fn((event: string, listener: EventListenerOrEventListenerObject) => {
+        listeners.set(event, listener)
+      }),
+    } as unknown as Window & typeof globalThis
     vi.stubGlobal('window', fakeWindow)
 
     const promise = waitForShellHttpBase()
-    setTimeout(() => {
-      ;(fakeWindow as typeof fakeWindow & { __DERP_SHELL_HTTP?: string }).__DERP_SHELL_HTTP =
-        'http://127.0.0.1:7777/'
-    }, 75)
+    ;(fakeWindow as typeof fakeWindow & { __DERP_SHELL_HTTP?: string }).__DERP_SHELL_HTTP =
+      'http://127.0.0.1:7777/'
+    const listener = listeners.get(DERP_SHELL_HTTP_READY_EVENT)
+    expect(listener).toBeDefined()
+    if (typeof listener === 'function') listener(new Event(DERP_SHELL_HTTP_READY_EVENT))
+    else listener?.handleEvent(new Event(DERP_SHELL_HTTP_READY_EVENT))
 
-    await vi.advanceTimersByTimeAsync(100)
     await expect(promise).resolves.toBe('http://127.0.0.1:7777')
   })
 })
