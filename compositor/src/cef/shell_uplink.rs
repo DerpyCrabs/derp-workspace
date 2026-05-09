@@ -561,6 +561,9 @@ fn handle_uplink_list(
             let json = cef_string_userfree_to_string(&args.string(2));
             e2e_bridge::publish_shell_perf(request_id, json);
         }
+        "e2e_shell_event" => {
+            e2e_bridge::publish_shell_event();
+        }
         "e2e_test_window_open_response" => {
             let request_id = args.int(1) as u64;
             let ok = args.int(2) != 0;
@@ -1214,6 +1217,13 @@ wrap_v8_handler! {
                     let _ = list.set_string(2, Some(&CefString::from(menu_path.as_str())));
                     let _ = list.set_int(3, item_id);
                 }
+                "e2e_shell_event" => {
+                    if let Some(a1) = args.get(1).and_then(|a| a.as_ref()) {
+                        if a1.is_double() != 0 {
+                            let _ = list.set_double(1, a1.double_value());
+                        }
+                    }
+                }
                 "e2e_snapshot_response" | "e2e_html_response" | "e2e_perf_response" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
                         return_exception!("e2e response requires request id");
@@ -1242,7 +1252,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, taskbar_pin_add, taskbar_pin_remove, taskbar_pin_launch, shell_hosted_window_state, shell_hosted_window_title, command_palette_activate, request_compositor_sync, spawn, move_begin, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_output_vrr, set_taskbar_auto_hide, set_taskbar_side, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response, e2e_perf_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
+                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, taskbar_pin_add, taskbar_pin_remove, taskbar_pin_launch, shell_hosted_window_state, shell_hosted_window_title, command_palette_activate, request_compositor_sync, spawn, move_begin, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_output_vrr, set_taskbar_auto_hide, set_taskbar_side, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_shell_event, e2e_snapshot_response, e2e_html_response, e2e_perf_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
                     );
                 }
             }

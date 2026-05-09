@@ -1,5 +1,6 @@
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { inflateSync } from 'node:zlib'
 
@@ -1292,24 +1293,48 @@ export async function discoverBase(): Promise<string> {
 }
 
 export async function discoverReadyBase(timeoutMs = 15000): Promise<string> {
-  return waitFor(
-    'wait for shell http base',
-    async () => {
+  const started = Date.now()
+  const timeout = abortAfter(timeoutMs)
+  const compositor = startCompositorEventStream()
+  let lastError: unknown = null
+  const evaluate = async () => {
+    try {
       const base = await discoverBase()
-      try {
-        const [compositor, shell] = await Promise.all([
-          getJson<CompositorSnapshot>(base, '/test/state/compositor'),
-          getJson<ShellSnapshot>(base, '/test/state/shell'),
-        ])
-        if (!isShellUiReadyForE2e(compositor, shell)) return null
-        return base
-      } catch {
-        return null
-      }
-    },
-    timeoutMs,
-    50,
-  )
+      const [compositor, shell] = await Promise.all([
+        getJson<CompositorSnapshot>(base, '/test/state/compositor'),
+        getJson<ShellSnapshot>(base, '/test/state/shell'),
+      ])
+      if (!isShellUiReadyForE2e(compositor, shell)) return null
+      return base
+    } catch (error) {
+      lastError = error
+      return null
+    }
+  }
+  try {
+    const initial = await evaluate()
+    if (initial) return initial
+    while (!timeout.signal.aborted) {
+      await compositor.lines.next(timeout.signal)
+      const ready = await evaluate()
+      if (ready) return ready
+    }
+  } catch (error) {
+    if (!timeout.signal.aborted) lastError = error
+  } finally {
+    compositor.child.kill('SIGTERM')
+  }
+  recordTimingEvent({
+    kind: 'wait',
+    label: 'wait for shell http base',
+    elapsedMs: Date.now() - started,
+    attempts: 0,
+    status: lastError ? 'errored' : 'timed_out',
+  })
+  if (lastError) {
+    throw new Error(`wait for shell http base: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
+  }
+  throw new Error(`wait for shell http base: timed out after ${timeoutMs}ms`)
 }
 
 function isShellUiReadyForE2e(compositor: CompositorSnapshot, shell: ShellSnapshot): boolean {
@@ -1682,15 +1707,6 @@ export function approxEqual(actual: number, expected: number, tolerance: number,
   }
 }
 
-function waitIntervalMs(intervalMs: number, attempts: number): number {
-  if (intervalMs <= 8) return intervalMs
-  if (attempts <= 1) return Math.min(intervalMs, 8)
-  if (attempts === 2) return Math.min(intervalMs, 16)
-  if (attempts === 3) return Math.min(intervalMs, 24)
-  if (attempts === 4) return Math.min(intervalMs, 32)
-  return intervalMs
-}
-
 export async function waitForSessionRestoreIdle(base: string, timeoutMs = 5000): Promise<ShellSnapshot> {
   return waitFor(
     'wait for session restore idle',
@@ -1703,11 +1719,147 @@ export async function waitForSessionRestoreIdle(base: string, timeoutMs = 5000):
   )
 }
 
-export async function waitFor<T>(description: string, fn: () => Promise<T | null>, timeoutMs = 5000, intervalMs = 50): Promise<T> {
+class EventLineQueue {
+  private buffer = ''
+  private lines: string[] = []
+  private waiters: Array<(line: string) => void> = []
+  private failed: unknown = null
+
+  push(chunk: Buffer | string) {
+    this.buffer += chunk.toString()
+    const parts = this.buffer.split(/\r?\n/)
+    this.buffer = parts.pop() ?? ''
+    for (const line of parts) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      const waiter = this.waiters.shift()
+      if (waiter) waiter(trimmed)
+      else this.lines.push(trimmed)
+    }
+  }
+
+  fail(error: unknown) {
+    this.failed = error
+    for (const waiter of this.waiters.splice(0)) waiter('')
+  }
+
+  next(signal: AbortSignal): Promise<string> {
+    if (this.lines.length > 0) return Promise.resolve(this.lines.shift()!)
+    if (this.failed) return Promise.reject(this.failed)
+    return new Promise((resolve, reject) => {
+      let wrapped: ((line: string) => void) | null = null
+      const cleanup = () => {
+        signal.removeEventListener('abort', onAbort)
+        if (!wrapped) return
+        const index = this.waiters.indexOf(wrapped)
+        if (index >= 0) this.waiters.splice(index, 1)
+      }
+      const onAbort = () => {
+        cleanup()
+        reject(new Error('event wait aborted'))
+      }
+      wrapped = (line: string) => {
+        cleanup()
+        if (this.failed) reject(this.failed)
+        else resolve(line)
+      }
+      this.waiters.push(wrapped)
+      signal.addEventListener('abort', onAbort, { once: true })
+    })
+  }
+}
+
+function repoRoot(): string {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+}
+
+function derpctlBin(): string {
+  return process.env.DERP_E2E_DERPCTL_BIN || path.join(repoRoot(), 'target', 'release', process.platform === 'win32' ? 'derpctl.exe' : 'derpctl')
+}
+
+function startCompositorEventStream(): { child: ChildProcess; lines: EventLineQueue } {
+  const child = spawn(derpctlBin(), ['events', '--domains', 'outputs,windows,workspace,settings,palette,interaction'], {
+    cwd: repoRoot(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  const lines = new EventLineQueue()
+  let stderr = ''
+  child.stdout?.on('data', (chunk) => lines.push(chunk))
+  child.stderr?.on('data', (chunk) => {
+    stderr += chunk.toString()
+  })
+  child.on('exit', (code) => {
+    if (code) lines.fail(new Error(`derpctl events exited ${code}: ${stderr}`))
+  })
+  child.on('error', (error) => lines.fail(error))
+  return { child, lines }
+}
+
+async function shellEventSeq(base: string): Promise<number> {
+  return (await getJson<{ seq: number }>(base, '/test/state/shell/event_seq')).seq
+}
+
+async function waitForShellEvent(base: string, after: number, signal: AbortSignal): Promise<number> {
+  const response = await fetch(`${base}/test/state/shell/next_event?after=${encodeURIComponent(String(after))}`, { signal })
+  if (!response.ok) throw new Error(`wait for shell event failed: ${response.status} ${response.statusText}`)
+  return ((await response.json()) as { seq: number }).seq
+}
+
+export async function waitForShellQuiet(base: string, quietMs: number, timeoutMs = 5000): Promise<void> {
+  const started = Date.now()
+  let seq = await shellEventSeq(base)
+  while (Date.now() - started < timeoutMs) {
+    const quiet = abortAfter(quietMs)
+    try {
+      const nextSeq = await waitForShellEvent(base, seq, quiet.signal)
+      if (nextSeq === seq) return
+      seq = nextSeq
+    } catch (error) {
+      if (quiet.signal.aborted) return
+      throw error
+    }
+  }
+  throw new Error(`wait for shell quiet: timed out after ${timeoutMs}ms`)
+}
+
+export async function waitForCompositorQuiet(quietMs: number, timeoutMs = 5000): Promise<void> {
+  const started = Date.now()
+  const stream = startCompositorEventStream()
+  try {
+    while (Date.now() - started < timeoutMs) {
+      const quiet = abortAfter(quietMs)
+      try {
+        await stream.lines.next(quiet.signal)
+      } catch (error) {
+        if (quiet.signal.aborted) return
+        throw error
+      }
+    }
+  } finally {
+    stream.child.kill('SIGTERM')
+  }
+  throw new Error(`wait for compositor quiet: timed out after ${timeoutMs}ms`)
+}
+
+function abortAfter(timeoutMs: number): AbortController {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  timer.unref?.()
+  return controller
+}
+
+export async function waitFor<T>(description: string, fn: () => Promise<T | null>, timeoutMs = 5000, _intervalMs = 50): Promise<T> {
   const started = Date.now()
   let lastError: unknown = null
   let attempts = 0
-  while (Date.now() - started < timeoutMs) {
+  const base = await discoverBase()
+  const timeout = abortAfter(timeoutMs)
+  let shellSeq = 0
+  try {
+    shellSeq = await shellEventSeq(base)
+  } catch {}
+  const compositor = startCompositorEventStream()
+  const evaluate = async () => {
     attempts += 1
     try {
       const value = await fn()
@@ -1724,25 +1876,37 @@ export async function waitFor<T>(description: string, fn: () => Promise<T | null
     } catch (error) {
       lastError = error
     }
-    const remainingMs = timeoutMs - (Date.now() - started)
-    if (remainingMs <= 0) break
-    await new Promise((resolve) => setTimeout(resolve, Math.min(remainingMs, waitIntervalMs(intervalMs, attempts))))
+    return null
   }
-  attempts += 1
+
   try {
-    const value = await fn()
-    if (value) {
-      recordTimingEvent({
-        kind: 'wait',
-        label: description,
-        elapsedMs: Date.now() - started,
-        attempts,
-        status: 'passed',
+    const initial = await evaluate()
+    if (initial) return initial
+    while (!timeout.signal.aborted) {
+      const iteration = new AbortController()
+      const abortIteration = () => iteration.abort()
+      timeout.signal.addEventListener('abort', abortIteration, { once: true })
+      const shellWait = waitForShellEvent(base, shellSeq, iteration.signal).then((seq) => {
+        shellSeq = seq
+      }).catch((error) => {
+        if (!iteration.signal.aborted) throw error
       })
-      return value
+      const compositorWait = compositor.lines.next(iteration.signal).then(() => {}).catch((error) => {
+        if (!iteration.signal.aborted) throw error
+      })
+      try {
+        await Promise.race([shellWait, compositorWait])
+      } finally {
+        timeout.signal.removeEventListener('abort', abortIteration)
+        iteration.abort()
+      }
+      const value = await evaluate()
+      if (value) return value
     }
   } catch (error) {
-    lastError = error
+    if (!timeout.signal.aborted) lastError = error
+  } finally {
+    compositor.child.kill('SIGTERM')
   }
   recordTimingEvent({
     kind: 'wait',

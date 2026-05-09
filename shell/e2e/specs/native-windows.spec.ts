@@ -798,17 +798,26 @@ export default defineGroup(import.meta.url, ({ test }) => {
       dropBufferAfterDraw: true,
     })
     state.spawnedNativeWindowIds.add(dropped.window.window_id)
-    const gone = await waitForWindowGone(base, dropped.window.window_id, 5000)
-    assert(
-      !(gone.compositor.pending_deferred_window_ids ?? []).includes(dropped.window.window_id),
-      'dropped native window should not remain pending deferred',
-    )
-    assert(
-      !compositorWindowStack(gone.compositor).includes(dropped.window.window_id),
-      'dropped native window should be removed from compositor stack order',
-    )
-    await writeJsonArtifact('native-buffer-drop-pruned-compositor.json', gone.compositor)
-    await writeJsonArtifact('native-buffer-drop-pruned-shell.json', gone.shell)
+    try {
+      const gone = await waitForWindowGone(base, dropped.window.window_id, 5000)
+      assert(
+        !(gone.compositor.pending_deferred_window_ids ?? []).includes(dropped.window.window_id),
+        'dropped native window should not remain pending deferred',
+      )
+      assert(
+        !compositorWindowStack(gone.compositor).includes(dropped.window.window_id),
+        'dropped native window should be removed from compositor stack order',
+      )
+      await writeJsonArtifact('native-buffer-drop-pruned-compositor.json', gone.compositor)
+      await writeJsonArtifact('native-buffer-drop-pruned-shell.json', gone.shell)
+    } finally {
+      const pid = dropped.window.wayland_client_pid
+      if (pid && pid > 0) {
+        await spawnCommand(base, `kill -KILL ${pid} 2>/dev/null || true`)
+      }
+      state.spawnedNativeWindowIds.delete(dropped.window.window_id)
+      state.knownWindowIds.delete(dropped.window.window_id)
+    }
   })
 
   test('native game windows support relative pointer and pointer constraints', async ({ base, state }) => {

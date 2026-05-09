@@ -304,6 +304,8 @@ runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 artifact_dir="${DERP_E2E_ARTIFACT_DIR:-$HOME/.local/state/derp/e2e/artifacts}"
 rm -rf "$artifact_dir"
 mkdir -p "$artifact_dir"
+pkill -u "$(id -un)" -x derp-test-client 2>/dev/null || true
+pkill -u "$(id -un)" -f '[w]leird-' 2>/dev/null || true
 mapfile -t pids < <(pgrep -u "$(id -un)" -x compositor || true)
 if [[ ${#pids[@]} -eq 0 ]]; then
   echo "e2e-remote: no compositor process for user $(id -un); restarting GDM." >&2

@@ -36,6 +36,7 @@ use smithay::{
     },
     input::{
         keyboard::{keysyms, KeysymHandle, Layout, ModifiersState, XkbConfig},
+        pointer::MotionEvent,
         Seat, SeatState,
     },
     reexports::{
@@ -1669,6 +1670,7 @@ impl CompositorState {
         if self.windows.shell_pending_native_focus_window_id == Some(info.window_id) {
             self.windows.shell_pending_native_focus_window_id = None;
         }
+        self.clear_pointer_focus_for_window(info.window_id);
         let keyboard_had_focus = self.keyboard_focused_window_id() == Some(info.window_id);
         if let Some(removed) = self
             .windows
@@ -1678,6 +1680,30 @@ impl CompositorState {
             self.shell_emit_chrome_window_unmapped(removed.window_id, Some(removed));
             self.try_refocus_after_closed_window(info.window_id, keyboard_had_focus);
         }
+    }
+
+    fn clear_pointer_focus_for_window(&mut self, window_id: u32) {
+        let Some(pointer) = self.input_routing.seat.get_pointer() else {
+            return;
+        };
+        if !pointer.current_focus().is_some_and(|surface| {
+            self.windows
+                .window_registry
+                .window_id_for_wl_surface(&surface)
+                == Some(window_id)
+        }) {
+            return;
+        }
+        let location = pointer.current_location();
+        pointer.motion(
+            self,
+            None,
+            &MotionEvent {
+                location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: 0,
+            },
+        );
     }
 
     fn cleanup_disconnected_wayland_client(&mut self, client_id: ClientId) {
@@ -1703,6 +1729,9 @@ impl CompositorState {
         let focused_removed = infos
             .iter()
             .any(|info| self.keyboard_focused_window_id() == Some(info.window_id));
+        for info in &infos {
+            self.clear_pointer_focus_for_window(info.window_id);
+        }
         let doomed_windows: Vec<_> = self
             .output_topology
             .space
@@ -3720,6 +3749,23 @@ impl CompositorState {
                 .remove(&key)
                 .unwrap();
             let wl0 = pending.window.toplevel().unwrap().wl_surface();
+            let existing = self.windows.window_registry.snapshot_for_wl_surface(wl0);
+            let title = if title.trim().is_empty() {
+                existing
+                    .as_ref()
+                    .map(|info| info.title.clone())
+                    .unwrap_or_default()
+            } else {
+                title
+            };
+            let app_id = if app_id.trim().is_empty() {
+                existing
+                    .as_ref()
+                    .map(|info| info.app_id.clone())
+                    .unwrap_or_default()
+            } else {
+                app_id
+            };
             let _ = self.windows.window_registry.set_title(wl0, title);
             let _ = self.windows.window_registry.set_app_id(wl0, app_id);
             let wl0 = wl0.clone();

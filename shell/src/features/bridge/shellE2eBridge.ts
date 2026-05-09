@@ -128,6 +128,40 @@ function flattenTaskbarRowsByMonitor(taskbarRowsByMonitor: ReadonlyMap<string, r
 }
 
 export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
+  let shellEventQueued = false
+  function publishE2eShellEvent() {
+    if (shellEventQueued) return
+    shellEventQueued = true
+    queueMicrotask(() => {
+      shellEventQueued = false
+      window.__derpShellWireSend?.('e2e_shell_event', Date.now())
+    })
+  }
+
+  const mutationObserver = new MutationObserver(() => publishE2eShellEvent())
+  if (document.body) {
+    mutationObserver.observe(document.body, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+      characterData: true,
+    })
+  }
+  document.addEventListener('scroll', publishE2eShellEvent, { capture: true, passive: true })
+  let scrollAnimationFrame = 0
+  let lastScrollKey = ''
+  const monitorScrollState = () => {
+    const key = Array.from(document.querySelectorAll<HTMLElement>('[data-programs-menu-scroll]'))
+      .map((el) => `${Math.round(el.scrollTop)}:${Math.round(el.scrollLeft)}:${el.scrollHeight}:${el.clientHeight}`)
+      .join('|')
+    if (key !== lastScrollKey) {
+      lastScrollKey = key
+      publishE2eShellEvent()
+    }
+    scrollAnimationFrame = requestAnimationFrame(monitorScrollState)
+  }
+  scrollAnimationFrame = requestAnimationFrame(monitorScrollState)
+
   function publishE2eShellSnapshot(requestId: number) {
     const send = window.__derpShellWireSend
     if (!send) return
@@ -230,6 +264,9 @@ export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
   }
 
   return () => {
+    mutationObserver.disconnect()
+    cancelAnimationFrame(scrollAnimationFrame)
+    document.removeEventListener('scroll', publishE2eShellEvent, { capture: true })
     delete window.__DERP_E2E_REQUEST_SNAPSHOT
     delete window.__DERP_E2E_REQUEST_HTML
     delete window.__DERP_E2E_REQUEST_PERF

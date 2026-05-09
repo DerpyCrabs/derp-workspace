@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { watch } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +14,6 @@ import {
   getSnapshots,
   readPngRgba,
   shellQuote,
-  SkipError,
   syncTest,
   waitFor,
   waitForWindowGone,
@@ -55,6 +55,47 @@ async function readText(filePath: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+async function waitForTextFileIncludes(
+  description: string,
+  filePath: string,
+  needle: string,
+  timeoutMs: number,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  const check = async () => {
+    const text = await readText(filePath);
+    return text?.includes(needle) ? text : null;
+  };
+  const initial = await check();
+  if (initial) return initial;
+  return await new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const finish = (result: string | Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      watcher.close();
+      if (result instanceof Error) reject(result);
+      else resolve(result);
+    };
+    const retry = () => {
+      void check()
+        .then((result) => {
+          if (result) finish(result);
+        })
+        .catch(() => {});
+    };
+    const watcher = watch(path.dirname(filePath), (_event, filename) => {
+      if (filename?.toString() === path.basename(filePath)) retry();
+    });
+    const remaining = Math.max(0, deadline - Date.now());
+    const timer = setTimeout(() => {
+      finish(new Error(`${description}: timed out after ${timeoutMs}ms`));
+    }, remaining);
+    retry();
+  });
 }
 
 function windowForPid(
@@ -173,6 +214,92 @@ async function closeWleirdWindow(
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
+  test("surface output enters update when moved between monitors", async ({
+    base,
+    state,
+  }) => {
+    await syncTest(base);
+    const probe = await spawnWleirdProcess(base, "surface-outputs");
+    let windowId: number | null = null;
+    try {
+      const initial = await waitForTextFileIncludes(
+        "wait for wleird surface output report",
+        probe.outputPath,
+        'Surface "toplevel":',
+        5000,
+      );
+      const compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      const outputs = [...compositor.outputs].sort(
+        (a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name),
+      );
+      const current = windowForPid(compositor, probe.pid);
+      assert(current, "wleird-surface-outputs did not create an xdg toplevel");
+      windowId = current.window_id;
+      state.spawnedNativeWindowIds.add(windowId);
+      state.knownWindowIds.add(windowId);
+      const target =
+        outputs.find((output) => output.name !== current.output_name) ??
+        outputs[0];
+      assert(target, "missing compositor output for wleird-surface-outputs");
+      await derpctl([
+        "window",
+        "move",
+        String(current.window_id),
+        "--x",
+        String(target.x + 120),
+        "--y",
+        String(target.y + 120),
+        "--width",
+        "420",
+        "--height",
+        "320",
+      ]);
+      const moved = await waitFor(
+        "wait for wleird surface output move",
+        async () => {
+          const next = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = windowForPid(next, probe.pid);
+          return window && window.output_name === target.name
+            ? { compositor: next, window }
+            : null;
+        },
+        5000,
+        40,
+      );
+      await closeWleirdWindow(base, windowId, probe.pid);
+      windowId = null;
+      const afterOutput = await readText(probe.outputPath);
+      assert(
+        afterOutput?.includes('Surface "toplevel":'),
+        "wleird-surface-outputs did not report toplevel output state",
+      );
+      assert(afterOutput, "wleird-surface-outputs report disappeared");
+      assert(
+        afterOutput !== initial,
+        "wleird-surface-outputs did not update output report after move",
+      );
+      await writeJsonArtifact("wleird-surface-outputs.json", {
+        initial,
+        afterOutput,
+        outputs,
+        target,
+        window: moved.window,
+      });
+    } finally {
+      if (windowId !== null) {
+        await closeWleirdWindow(base, windowId, probe.pid);
+      } else {
+        await killWleirdPid(probe.pid);
+      }
+    }
+  });
+
   test("damage-paint submits visible fine-grained content", async ({
     base,
     state,
@@ -291,111 +418,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
       });
     } finally {
       await closeWleirdWindow(base, probe.window.window_id, probe.pid);
-    }
-  });
-
-  test("surface output enters update when moved between monitors", async ({
-    base,
-    state,
-  }) => {
-    await syncTest(base);
-    const probe = await spawnWleirdProcess(base, "surface-outputs");
-    let windowId: number | null = null;
-    try {
-      let initial: string;
-      try {
-        initial = await waitFor(
-          "wait for wleird surface output report",
-          async () => {
-            const output = await readText(probe.outputPath);
-            return output?.includes('Surface "toplevel":') ? output : null;
-          },
-          5000,
-          40,
-        );
-      } catch (error) {
-        const compositor = await getJson<CompositorSnapshot>(
-          base,
-          "/test/state/compositor",
-        );
-        await writeJsonArtifact("wleird-surface-outputs-no-report.json", {
-          pid: probe.pid,
-          status: await readText(probe.statusPath),
-          output: await readText(probe.outputPath),
-          compositor,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        throw new SkipError(
-          "wleird-surface-outputs did not report output state",
-        );
-      }
-      const compositor = await getJson<CompositorSnapshot>(
-        base,
-        "/test/state/compositor",
-      );
-      const outputs = [...compositor.outputs].sort(
-        (a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name),
-      );
-      const current = windowForPid(compositor, probe.pid);
-      if (!current) {
-        await writeJsonArtifact("wleird-surface-outputs-no-window.json", {
-          pid: probe.pid,
-          initial,
-          compositor,
-        });
-        throw new SkipError(
-          "wleird-surface-outputs did not create a mapped xdg toplevel",
-        );
-      }
-      windowId = current.window_id;
-      state.spawnedNativeWindowIds.add(windowId);
-      state.knownWindowIds.add(windowId);
-      const target =
-        outputs.find((output) => output.name !== current.output_name) ??
-        outputs[0];
-      assert(target, "missing compositor output for wleird-surface-outputs");
-      await derpctl([
-        "window",
-        "move",
-        String(current.window_id),
-        "--x",
-        String(target.x + 120),
-        "--y",
-        String(target.y + 120),
-        "--width",
-        "420",
-        "--height",
-        "320",
-      ]);
-      const moved = await waitFor(
-        "wait for wleird surface output move",
-        async () => {
-          const next = await getJson<CompositorSnapshot>(
-            base,
-            "/test/state/compositor",
-          );
-          const window = windowForPid(next, probe.pid);
-          return window && window.output_name === target.name
-            ? { compositor: next, window }
-            : null;
-        },
-        5000,
-        40,
-      );
-      const afterOutput = await readText(probe.outputPath);
-      await writeJsonArtifact("wleird-surface-outputs.json", {
-        initial,
-        afterOutput,
-        outputs,
-        target,
-        window: moved.window,
-      });
-    } finally {
-      if (windowId !== null) {
-        await closeWleirdWindow(base, windowId, probe.pid);
-      } else {
-        await killWleirdPid(probe.pid);
-      }
     }
   });
 

@@ -829,6 +829,25 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/test/state/shell/event_seq" {
+        let seq = crate::cef::e2e_bridge::shell_event_seq()?;
+        let json = serde_json::json!({ "seq": seq }).to_string();
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/test/state/shell/next_event" {
+        let last_seq = query_str
+            .and_then(|query| query_param_raw(query, "after"))
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        let seq =
+            crate::cef::e2e_bridge::wait_for_shell_event_after(last_seq, Duration::from_secs(30))?;
+        let json = serde_json::json!({ "seq": seq }).to_string();
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/test/snapshot/sync" {
         let json = sync_shell_compositor_snapshot_json(browser)?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;

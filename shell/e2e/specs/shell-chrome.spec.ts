@@ -48,6 +48,8 @@ import {
   waitForPowerMenuOpen,
   waitForProgramsMenuClosed,
   waitForProgramsMenuOpen,
+  waitForCompositorQuiet,
+  waitForShellQuiet,
   waitForWindowSwitcherClosed,
   waitForWindowSwitcherOpen,
   waitForVolumeMenuClosed,
@@ -204,8 +206,6 @@ async function waitForProgramsMenuScrollStable(
   base: string,
   minimumTop: number,
 ) {
-  let lastTop = -1;
-  let stableSamples = 0;
   await waitFor(
     "wait for programs menu scroll settle",
     async () => {
@@ -213,38 +213,34 @@ async function waitForProgramsMenuScrollStable(
       const metrics = shell.programs_menu_list_scroll;
       if (!metrics || !shell.programs_menu_open) return null;
       if (metrics.scroll_top < minimumTop) return null;
-      if (Math.abs(metrics.scroll_top - lastTop) > 1) {
-        lastTop = metrics.scroll_top;
-        stableSamples = 0;
-        return null;
-      }
-      stableSamples += 1;
-      return stableSamples >= 2 ? shell : null;
+      return shell;
     },
     400,
-    25,
   );
+  await waitForShellQuiet(base, 75, 400);
 }
 
 async function waitForPointerIdle(base: string) {
-  let lastPointerKey = "";
-  let lastChangedAt = Date.now();
-  await waitFor(
+  const before = await waitFor(
     "wait for pointer idle",
     async () => {
       const { compositor } = await getSnapshots(base);
       const pointer = compositor.pointer;
       if (!pointer) return null;
-      const nextKey = `${Math.round(pointer.x)}:${Math.round(pointer.y)}`;
-      if (nextKey !== lastPointerKey) {
-        lastPointerKey = nextKey;
-        lastChangedAt = Date.now();
-        return null;
-      }
-      return Date.now() - lastChangedAt >= 75 ? compositor : null;
+      return compositor;
     },
     400,
-    25,
+  );
+  const beforePointer = before.pointer;
+  assert(beforePointer, "missing pointer before idle wait");
+  await waitForCompositorQuiet(75, 400);
+  const { compositor: after } = await getSnapshots(base);
+  const afterPointer = after.pointer;
+  assert(afterPointer, "missing pointer after idle wait");
+  assert(
+    Math.round(beforePointer.x) === Math.round(afterPointer.x) &&
+      Math.round(beforePointer.y) === Math.round(afterPointer.y),
+    `pointer moved after quiet: ${beforePointer.x}:${beforePointer.y} -> ${afterPointer.x}:${afterPointer.y}`,
   );
 }
 

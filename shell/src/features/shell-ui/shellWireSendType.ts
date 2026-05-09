@@ -47,6 +47,7 @@ export type ShellCompositorWireOp =
   | 'hosted_window_open'
   | 'backed_window_open'
   | 'e2e_snapshot_response'
+  | 'e2e_shell_event'
   | 'e2e_html_response'
   | 'e2e_perf_response'
   | 'e2e_test_window_open_response'

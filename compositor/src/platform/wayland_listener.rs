@@ -41,6 +41,9 @@ pub fn init_wayland_listener(
                     if let Err(e) = display.get_mut().dispatch_clients(&mut state.state) {
                         tracing::warn!(?e, "wayland client dispatch failed");
                     }
+                    if let Err(e) = display.get_mut().flush_clients() {
+                        tracing::warn!(?e, "wayland client flush failed");
+                    }
                 }
                 state.state.handle_pending_wayland_client_disconnects();
                 if std::mem::take(&mut state.state.windows.wayland_commit_needs_render) {

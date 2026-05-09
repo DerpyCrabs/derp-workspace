@@ -1,3 +1,4 @@
+import { watch } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createConnection } from "node:net";
@@ -7,6 +8,7 @@ import { promisify } from "node:util";
 
 import {
   artifactDir,
+  artifactPath,
   assert,
   buildNativeSpawnCommand,
   captureScreenshotRect,
@@ -33,6 +35,7 @@ import {
   waitForWindowGone,
   writeJsonArtifact,
   type CompositorSnapshot,
+  type ShellSnapshot,
 } from "../lib/runtime.ts";
 import {
   closeWindow,
@@ -88,6 +91,77 @@ async function readStatusJson<T>(filePath: string): Promise<T | null> {
     return JSON.parse(await readFile(filePath, "utf8")) as T;
   } catch {
     return null;
+  }
+}
+
+async function waitForStatusJson<T>(
+  filePath: string,
+  description: string,
+  predicate: (status: T) => boolean,
+  timeoutMs = 5000,
+): Promise<T> {
+  const initial = await readStatusJson<T>(filePath);
+  if (initial && predicate(initial)) return initial;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      const finish = (value: T) => {
+        cleanup();
+        resolve(value);
+      };
+      const fail = (error: unknown) => {
+        cleanup();
+        reject(error);
+      };
+      const check = async () => {
+        const status = await readStatusJson<T>(filePath);
+        if (status && predicate(status)) finish(status);
+      };
+      const watcher = watch(filePath, { persistent: false }, () => {
+        void check().catch(fail);
+      });
+      const onAbort = () => fail(new Error(`${description}: timed out after ${timeoutMs}ms`));
+      const cleanup = () => {
+        clearTimeout(timer);
+        controller.signal.removeEventListener("abort", onAbort);
+        watcher.close();
+      };
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+      void check().catch(fail);
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      await new Promise<void>((resolve, reject) => {
+        const dir = path.dirname(filePath);
+        const name = path.basename(filePath);
+        const check = async () => {
+          const status = await readStatusJson<T>(filePath);
+          if (status && predicate(status)) {
+            cleanup();
+            resolve();
+          }
+        };
+        const watcher = watch(dir, { persistent: false }, (_, changedName) => {
+          if (changedName && changedName.toString() !== name) return;
+          void check().catch(reject);
+        });
+        const onAbort = () => {
+          cleanup();
+          reject(new Error(`${description}: timed out after ${timeoutMs}ms`));
+        };
+        const cleanup = () => {
+          clearTimeout(timer);
+          controller.signal.removeEventListener("abort", onAbort);
+          watcher.close();
+        };
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+        void check().catch(reject);
+      });
+      const status = await readStatusJson<T>(filePath);
+      if (status && predicate(status)) return status;
+    }
+    throw error;
   }
 }
 
@@ -401,36 +475,60 @@ export default defineGroup(import.meta.url, ({ test }) => {
     state.spawnedNativeWindowIds.add(native.window.window_id);
     try {
       await waitForNativeFocus(base, native.window.window_id);
-      await movePoint(
+      const readyCompositor = await getJson<CompositorSnapshot>(
         base,
-        native.window.x + Math.floor(native.window.width / 2),
-        native.window.y + Math.floor(native.window.height / 2),
+        "/test/state/compositor",
       );
+      const readyWindow =
+        compositorWindowById(readyCompositor, native.window.window_id) ??
+        native.window;
+      const outsidePoint = {
+        x: Math.max(0, readyWindow.x - 24),
+        y: Math.max(0, readyWindow.y - 24),
+      };
+      const gesturePoint = {
+        x: readyWindow.x + Math.floor(readyWindow.width / 2),
+        y: readyWindow.y + Math.floor(readyWindow.height / 2),
+      };
+      await movePoint(base, outsidePoint.x, outsidePoint.y);
+      await movePoint(base, gesturePoint.x, gesturePoint.y);
       await waitFor(
+        "wait for pointer over gesture probe",
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const pointer = compositor.pointer;
+          if (!pointer) return null;
+          return Math.round(pointer.x) === gesturePoint.x &&
+            Math.round(pointer.y) === gesturePoint.y
+            ? compositor
+            : null;
+        },
+      );
+      await waitForStatusJson<Record<string, number>>(
+        statusPath,
         "wait for gesture probe status file",
-        () => readStatusJson<Record<string, number>>(statusPath),
-        5000,
-        100,
+        () => true,
+      );
+      await waitForStatusJson<Record<string, number>>(
+        statusPath,
+        "wait for gesture probe pointer enter",
+        (status) => status.pointer_enter >= 1,
       );
       await pointerGesture(base, "swipe");
       await pointerGesture(base, "pinch");
-      const delivered = await waitFor(
+      const delivered = await waitForStatusJson<Record<string, number>>(
+        statusPath,
         "wait for native pointer gestures",
-        async () => {
-          const status =
-            await readStatusJson<Record<string, number>>(statusPath);
-          if (!status) return null;
-          return status.swipe_begin >= 1 &&
+        (status) =>
+          status.swipe_begin >= 1 &&
             status.swipe_update >= 1 &&
             status.swipe_end >= 1 &&
             status.pinch_begin >= 1 &&
             status.pinch_update >= 1 &&
-            status.pinch_end >= 1
-            ? status
-            : null;
-        },
-        5000,
-        100,
+            status.pinch_end >= 1,
       );
       await movePoint(base, native.window.x + 24, native.window.y + 24);
       await pointerWheel(base, 0, -120);
@@ -819,7 +917,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
             (entry) =>
               !entry.shell_hosted &&
               !state.knownWindowIds.has(entry.window_id) &&
-              entry.title.includes(title),
+              entry.title.includes(title) &&
+              entry.lifecycle === "mapped" &&
+              entry.width > 0 &&
+              entry.height > 0,
           );
           if (!status?.frame_b_committed || !window) return null;
           return { status, compositor, window };
@@ -898,6 +999,34 @@ export default defineGroup(import.meta.url, ({ test }) => {
       });
     } finally {
       if (windowId !== null) {
+        const beforeClose = await getSnapshots(base);
+        const window = compositorWindowById(beforeClose.compositor, windowId);
+        const outside = beforeClose.shell.controls?.taskbar_programs_toggle;
+        const point = outside
+          ? {
+              x: outside.global_x + Math.floor(outside.width / 2),
+              y: outside.global_y + Math.floor(outside.height / 2),
+            }
+          : {
+              x: Math.max(0, (window?.x ?? 24) - 24),
+              y: Math.max(0, (window?.y ?? 24) - 24),
+            };
+        await movePoint(base, point.x, point.y);
+        await waitFor(
+          "wait for cursor shape pointer outside closing client",
+          async () => {
+            const compositor = await getJson<CompositorSnapshot>(
+              base,
+              "/test/state/compositor",
+            );
+            return Math.round(compositor.pointer?.x ?? -1) === point.x &&
+              Math.round(compositor.pointer?.y ?? -1) === point.y
+              ? compositor
+              : null;
+          },
+          3000,
+          100,
+        );
         await closeWindow(base, windowId);
         await waitForWindowGone(base, windowId, 5000);
       }
@@ -944,7 +1073,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
             (entry) =>
               !entry.shell_hosted &&
               !state.knownWindowIds.has(entry.window_id) &&
-              entry.title.includes(title),
+              entry.title.includes(title) &&
+              entry.lifecycle === "mapped" &&
+              entry.width > 0 &&
+              entry.height > 0,
           );
           if (!status || !window) return null;
           if (status.stress_committed !== stressFrames) return null;
@@ -1450,6 +1582,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     };
     await postJson(base, "/settings_cursor", nextSettings);
     const title = `Derp Cursor Shape Probe ${Date.now()}`;
+    const statusPath = artifactPath(`cursor-shape-status-${Date.now()}.json`);
     const command = [
       shellQuote(nativeBin()),
       "--title",
@@ -1461,6 +1594,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       "--height",
       "240",
       "--cursor-shape-pointer",
+      "--cursor-shape-status-json",
+      shellQuote(statusPath),
     ].join(" ");
     let windowId: number | null = null;
     try {
@@ -1476,7 +1611,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
             (entry) =>
               !entry.shell_hosted &&
               !state.knownWindowIds.has(entry.window_id) &&
-              entry.title.includes(title),
+              entry.title.includes(title) &&
+              entry.lifecycle === "mapped" &&
+              entry.width > 0 &&
+              entry.height > 0,
           );
           return window ? { compositor, window } : null;
         },
@@ -1485,11 +1623,57 @@ export default defineGroup(import.meta.url, ({ test }) => {
       );
       windowId = spawned.window.window_id;
       state.knownWindowIds.add(spawned.window.window_id);
-      await movePoint(
+      const cursorReadyCompositor = await getJson<CompositorSnapshot>(
         base,
-        spawned.window.x + Math.floor(spawned.window.width / 2),
-        spawned.window.y + Math.floor(spawned.window.height / 2),
+        "/test/state/compositor",
       );
+      const cursorWindow =
+        compositorWindowById(cursorReadyCompositor, spawned.window.window_id) ??
+        spawned.window;
+      await waitForStatusJson<Record<string, number>>(
+        statusPath,
+        "wait for cursor shape client ready",
+        (status) => status.device_ready >= 1,
+        5000,
+      );
+      const shellBeforeEnter = await getJson<ShellSnapshot>(
+        base,
+        "/test/state/shell",
+      );
+      const outside = shellBeforeEnter.controls?.taskbar_programs_toggle;
+      const enterPoint = {
+        x: cursorWindow.x + Math.floor(cursorWindow.width / 2),
+        y: cursorWindow.y + Math.floor(cursorWindow.height / 2),
+      };
+      await writeJsonArtifact("cursor-shape-pointer-before-enter.json", {
+        windowId: spawned.window.window_id,
+        cursorWindow,
+        outside,
+        enterPoint,
+        statusPath,
+      });
+      if (outside) {
+        await movePoint(
+          base,
+          outside.global_x + Math.floor(outside.width / 2),
+          outside.global_y + Math.floor(outside.height / 2),
+        );
+      } else {
+        await movePoint(
+          base,
+          Math.max(0, cursorWindow.x - 24),
+          Math.max(0, cursorWindow.y - 24),
+        );
+      }
+      await movePoint(base, enterPoint.x, enterPoint.y);
+      const cursorStatus = await waitForStatusJson<Record<string, number>>(
+        statusPath,
+        "wait for cursor shape client enter",
+        (status) =>
+          status.pointer_enter >= 1 && status.shape_set >= 1,
+        5000,
+      );
+      await waitForNativeFocus(base, spawned.window.window_id);
       const shaped = await waitFor(
         "wait for pointer cursor shape",
         async () => {
@@ -1507,6 +1691,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await writeJsonArtifact("cursor-shape-pointer.json", {
         windowId: spawned.window.window_id,
         settings: nextSettings,
+        statusPath,
+        cursorStatus,
         cursorTheme: shaped.cursor_theme,
         cursorSize: shaped.cursor_size,
         cursorShape: shaped.cursor_shape,

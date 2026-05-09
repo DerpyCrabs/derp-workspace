@@ -248,6 +248,8 @@ struct Args {
     xdg_icon_shm: bool,
     #[arg(long)]
     gesture_status_json: Option<String>,
+    #[arg(long)]
+    cursor_shape_status_json: Option<String>,
 }
 
 fn main() {
@@ -503,6 +505,11 @@ fn main() {
         gesture_ready: false,
         gesture_status_json: args.gesture_status_json,
         gesture_status: GestureStatus::default(),
+        cursor_shape_status_json: args.cursor_shape_status_json,
+        cursor_shape_ready_pending: false,
+        cursor_shape_ready: false,
+        cursor_shape_pointer_enter: 0,
+        cursor_shape_set: 0,
         pointer_constraint: None,
         constraint_locked: false,
         constraint_confined: false,
@@ -521,6 +528,14 @@ fn main() {
                 .expect("roundtrip pointer gesture setup");
             state.gesture_ready = true;
             state.write_gesture_status();
+        }
+        if state.cursor_shape_ready_pending {
+            state.cursor_shape_ready_pending = false;
+            event_queue
+                .roundtrip(&mut state)
+                .expect("roundtrip cursor shape setup");
+            state.cursor_shape_ready = true;
+            state.write_cursor_shape_status();
         }
     }
 }
@@ -707,6 +722,11 @@ struct TestClient {
     gesture_ready: bool,
     gesture_status_json: Option<String>,
     gesture_status: GestureStatus,
+    cursor_shape_status_json: Option<String>,
+    cursor_shape_ready_pending: bool,
+    cursor_shape_ready: bool,
+    cursor_shape_pointer_enter: u32,
+    cursor_shape_set: u32,
     pointer_constraint: Option<PointerConstraintHandle>,
     constraint_locked: bool,
     constraint_confined: bool,
@@ -724,6 +744,7 @@ struct GestureStatus {
     pinch_end: u32,
     hold_begin: u32,
     hold_end: u32,
+    pointer_enter: u32,
     last_swipe_delta: (f64, f64),
     last_pinch_delta: (f64, f64),
     last_pinch_scale: f64,
@@ -878,6 +899,33 @@ impl TestClient {
         self.gesture_ready_pending = true;
     }
 
+    fn ensure_cursor_shape_pointer_state(&mut self, qh: &QueueHandle<Self>) {
+        if self.cursor_shape_device.is_some() {
+            return;
+        }
+        let (Some(manager), Some(pointer)) =
+            (self.cursor_shape_manager.as_ref(), self.pointer.as_ref())
+        else {
+            return;
+        };
+        self.cursor_shape_device = Some(manager.get_pointer(pointer, qh, ()));
+        self.cursor_shape_ready = false;
+        self.cursor_shape_ready_pending = true;
+    }
+
+    fn write_cursor_shape_status(&self) {
+        let Some(path) = self.cursor_shape_status_json.as_ref() else {
+            return;
+        };
+        let json = format!(
+            "{{\"device_ready\":{},\"pointer_enter\":{},\"shape_set\":{}}}",
+            if self.cursor_shape_ready { 1 } else { 0 },
+            self.cursor_shape_pointer_enter,
+            self.cursor_shape_set
+        );
+        let _ = std::fs::write(path, json);
+    }
+
     fn write_gesture_status(&self) {
         let Some(path) = self.gesture_status_json.as_ref() else {
             return;
@@ -889,6 +937,7 @@ impl TestClient {
                 "\"swipe_begin\":{},\"swipe_update\":{},\"swipe_end\":{},",
                 "\"pinch_begin\":{},\"pinch_update\":{},\"pinch_end\":{},",
                 "\"hold_begin\":{},\"hold_end\":{},",
+                "\"pointer_enter\":{},",
                 "\"last_swipe_delta\":[{:.3},{:.3}],",
                 "\"last_pinch_delta\":[{:.3},{:.3}],",
                 "\"last_pinch_scale\":{:.6},\"last_pinch_rotation\":{:.6},",
@@ -903,6 +952,7 @@ impl TestClient {
             status.pinch_end,
             status.hold_begin,
             status.hold_end,
+            status.pointer_enter,
             status.last_swipe_delta.0,
             status.last_swipe_delta.1,
             status.last_pinch_delta.0,
@@ -2909,6 +2959,7 @@ impl SeatHandler for TestClient {
             self.pointer = Some(pointer);
             self.ensure_game_pointer_state(qh);
             self.ensure_gesture_pointer_state(qh);
+            self.ensure_cursor_shape_pointer_state(qh);
         }
     }
 
@@ -2941,6 +2992,9 @@ impl SeatHandler for TestClient {
             if let Some(gesture) = self.gesture_hold.take() {
                 gesture.destroy();
             }
+            if let Some(device) = self.cursor_shape_device.take() {
+                device.destroy();
+            }
             self.gesture_ready = false;
             self.gesture_ready_pending = false;
             if let Some(pointer) = self.pointer.take() {
@@ -2964,33 +3018,29 @@ impl PointerHandler for TestClient {
         events: &[PointerEvent],
     ) {
         for event in events {
-            let Some(seat) = self.pointer_seat.as_ref() else {
+            let Some(seat) = self.pointer_seat.clone() else {
                 continue;
             };
             match event.kind {
                 PointerEventKind::Enter { serial, .. } => {
-                    if self.cursor_shape_device.is_none() {
-                        if let (Some(manager), Some(pointer)) =
-                            (self.cursor_shape_manager.as_ref(), self.pointer.as_ref())
-                        {
-                            self.cursor_shape_device = Some(manager.get_pointer(pointer, qh, ()));
-                        }
-                    }
+                    self.gesture_status.pointer_enter =
+                        self.gesture_status.pointer_enter.saturating_add(1);
+                    self.write_gesture_status();
+                    self.cursor_shape_pointer_enter =
+                        self.cursor_shape_pointer_enter.saturating_add(1);
+                    self.ensure_cursor_shape_pointer_state(qh);
                     if let Some(device) = self.cursor_shape_device.as_ref() {
                         device.set_shape(serial, CursorShape::Pointer);
+                        self.cursor_shape_set = self.cursor_shape_set.saturating_add(1);
                     }
+                    self.write_cursor_shape_status();
                     if self.request_token_on_pointer_enter {
-                        self.request_spawn_activation(
-                            qh,
-                            serial,
-                            seat.clone(),
-                            event.surface.clone(),
-                        );
+                        self.request_spawn_activation(qh, serial, seat, event.surface.clone());
                     }
                 }
                 PointerEventKind::Press { serial, .. }
                 | PointerEventKind::Release { serial, .. } => {
-                    self.request_spawn_activation(qh, serial, seat.clone(), event.surface.clone());
+                    self.request_spawn_activation(qh, serial, seat, event.surface.clone());
                 }
                 _ => {}
             }

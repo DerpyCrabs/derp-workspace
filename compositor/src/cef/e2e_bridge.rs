@@ -11,6 +11,7 @@ struct PendingShellResponseState {
     shell_perf: HashMap<u64, String>,
     shell_test_window_open: HashMap<u64, bool>,
     shell_reset_tiling_config: HashMap<u64, bool>,
+    shell_event_seq: u64,
 }
 
 fn response_state() -> &'static (Mutex<PendingShellResponseState>, Condvar) {
@@ -23,6 +24,7 @@ fn response_state() -> &'static (Mutex<PendingShellResponseState>, Condvar) {
                 shell_perf: HashMap::new(),
                 shell_test_window_open: HashMap::new(),
                 shell_reset_tiling_config: HashMap::new(),
+                shell_event_seq: 0,
             }),
             Condvar::new(),
         )
@@ -31,6 +33,43 @@ fn response_state() -> &'static (Mutex<PendingShellResponseState>, Condvar) {
 
 pub(crate) fn next_request_id() -> u64 {
     NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+pub(crate) fn publish_shell_event() {
+    let (lock, condvar) = response_state();
+    let mut state = lock.lock().expect("e2e shell response state");
+    state.shell_event_seq = state.shell_event_seq.wrapping_add(1);
+    condvar.notify_all();
+}
+
+pub(crate) fn shell_event_seq() -> Result<u64, String> {
+    let (lock, _) = response_state();
+    let state = lock
+        .lock()
+        .map_err(|_| "shell event state poisoned".to_string())?;
+    Ok(state.shell_event_seq)
+}
+
+pub(crate) fn wait_for_shell_event_after(last_seq: u64, timeout: Duration) -> Result<u64, String> {
+    let deadline = Instant::now() + timeout;
+    let (lock, condvar) = response_state();
+    let mut state = lock
+        .lock()
+        .map_err(|_| "shell event state poisoned".to_string())?;
+    loop {
+        if state.shell_event_seq != last_seq {
+            return Ok(state.shell_event_seq);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Ok(state.shell_event_seq);
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let (next_state, _) = condvar
+            .wait_timeout(state, remaining)
+            .map_err(|_| "shell event wait poisoned".to_string())?;
+        state = next_state;
+    }
 }
 
 pub(crate) fn publish_shell_snapshot(request_id: u64, json: String) {

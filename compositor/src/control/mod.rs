@@ -22,7 +22,14 @@ use crate::{
     window_registry::WindowKind,
 };
 
-const DOMAINS: &[&str] = &["outputs", "windows", "workspace", "settings", "palette"];
+const DOMAINS: &[&str] = &[
+    "outputs",
+    "windows",
+    "workspace",
+    "settings",
+    "palette",
+    "interaction",
+];
 const COMMANDS: &[&str] = &[
     "schema",
     "commands",
@@ -61,6 +68,7 @@ pub struct ControlDomains {
     workspace: bool,
     settings: bool,
     palette: bool,
+    interaction: bool,
 }
 
 impl ControlDomains {
@@ -71,6 +79,7 @@ impl ControlDomains {
             workspace: true,
             settings: true,
             palette: true,
+            interaction: true,
         }
     }
 
@@ -116,11 +125,19 @@ impl ControlDomains {
         if self.palette {
             out.push("palette");
         }
+        if self.interaction {
+            out.push("interaction");
+        }
         out
     }
 
     fn is_empty(self) -> bool {
-        !self.outputs && !self.windows && !self.workspace && !self.settings && !self.palette
+        !self.outputs
+            && !self.windows
+            && !self.workspace
+            && !self.settings
+            && !self.palette
+            && !self.interaction
     }
 
     fn intersection(self, other: Self) -> Self {
@@ -130,6 +147,7 @@ impl ControlDomains {
             workspace: self.workspace && other.workspace,
             settings: self.settings && other.settings,
             palette: self.palette && other.palette,
+            interaction: self.interaction && other.interaction,
         }
     }
 }
@@ -143,6 +161,7 @@ fn parse_domain_names<'a>(values: impl Iterator<Item = &'a str>) -> Result<Contr
             "workspace" => domains.workspace = true,
             "settings" => domains.settings = true,
             "palette" => domains.palette = true,
+            "interaction" => domains.interaction = true,
             "all" => return Ok(ControlDomains::all()),
             "" => {}
             other => return Err(format!("unknown domain {other}")),
@@ -162,6 +181,7 @@ pub(crate) struct ControlRevisions {
     workspace: u64,
     settings: u64,
     palette: u64,
+    interaction: u64,
 }
 
 impl ControlRevisions {
@@ -171,6 +191,7 @@ impl ControlRevisions {
             .max(self.workspace)
             .max(self.settings)
             .max(self.palette)
+            .max(self.interaction)
     }
 
     fn changed_since(self, previous: Self) -> ControlDomains {
@@ -180,6 +201,7 @@ impl ControlRevisions {
             workspace: self.workspace != previous.workspace,
             settings: self.settings != previous.settings,
             palette: self.palette != previous.palette,
+            interaction: self.interaction != previous.interaction,
         }
     }
 }
@@ -1062,6 +1084,7 @@ impl CompositorState {
                 .max(self.workspace_layout.control_workspace_revision),
             settings: self.session_services.control_settings_revision(),
             palette: self.session_services.command_palette_revision(),
+            interaction: self.input_routing.shell_interaction_revision,
         }
     }
 
@@ -1101,6 +1124,17 @@ impl CompositorState {
         }
         if domains.palette {
             state.insert("palette".into(), self.command_palette_state_value());
+        }
+        if domains.interaction {
+            state.insert(
+                "interaction".into(),
+                json!({
+                    "shell_move_window_id": self.input_routing.shell_move_window_id,
+                    "shell_resize_window_id": self.input_routing.shell_resize_window_id,
+                    "shell_pointer_grab_window_id": self.input_routing.shell_ui_pointer_grab,
+                    "shell_interaction_serial": self.input_routing.shell_interaction_serial,
+                }),
+            );
         }
         Ok(Value::Object(state))
     }

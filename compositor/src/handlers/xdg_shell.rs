@@ -47,6 +47,17 @@ fn toplevel_title_app_id(surface: &ToplevelSurface) -> (String, String) {
     })
 }
 
+fn process_name_for_pid(pid: Option<i32>) -> Option<String> {
+    let pid = pid?;
+    if pid <= 0 {
+        return None;
+    }
+    std::fs::read_to_string(format!("/proc/{pid}/comm"))
+        .ok()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
 impl XdgShellHandler for CompositorState {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell_state
@@ -54,18 +65,26 @@ impl XdgShellHandler for CompositorState {
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let wl0 = surface.wl_surface().clone();
-        let (title, app_id) = toplevel_title_app_id(&surface);
+        let (raw_title, raw_app_id) = toplevel_title_app_id(&surface);
+        let mut title = raw_title.clone();
+        let mut app_id = raw_app_id.clone();
         let parent = surface.parent();
         let wayland_client_pid = wl0
             .client()
             .and_then(|c: Client| c.get_credentials(&self.core.display_handle).ok())
             .map(|cr| cr.pid);
+        if title.trim().is_empty() && app_id.trim().is_empty() {
+            if let Some(process_name) = process_name_for_pid(wayland_client_pid) {
+                title.clone_from(&process_name);
+                app_id = process_name;
+            }
+        }
         let map_at_output_origin =
             self.toplevel_is_embedded_shell_host(&title, &app_id, wayland_client_pid);
         let defer_map = crate::state::toplevel_should_defer_initial_map(
             parent.as_ref(),
-            &title,
-            &app_id,
+            &raw_title,
+            &raw_app_id,
             map_at_output_origin,
         );
         let window = Window::new_wayland_window(surface);
@@ -149,6 +168,25 @@ impl XdgShellHandler for CompositorState {
                     initial_client_rect,
                 },
             );
+            self.output_topology.space.map_element(
+                DerpSpaceElem::Wayland(window.clone()),
+                (map_x, map_y),
+                false,
+            );
+            if let Some(tl) = window.toplevel() {
+                if let Some(rect) = initial_client_rect {
+                    tl.with_pending_state(|state| {
+                        state.states.unset(xdg_toplevel::State::Fullscreen);
+                        state.fullscreen_output = None;
+                        state.states.unset(xdg_toplevel::State::Maximized);
+                        state.size = Some(smithay::utils::Size::from((
+                            rect.size.w.max(1),
+                            rect.size.h.max(1),
+                        )));
+                    });
+                }
+                tl.send_pending_configure();
+            }
             tracing::warn!(
                 target: "derp_toplevel",
                 window_id = reg.window_id,

@@ -410,6 +410,23 @@ async function cleanupFileBrowserFootReproWindows(base: string): Promise<void> {
       await waitForWindowGone(base, windowId, 3000)
     } catch {}
   }
+  await waitFor(
+    'wait for file browser foot repro cleanup',
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const shellLeftovers = shell.windows.filter(
+        (window) => (window.shell_hosted && window.app_id === 'derp.files') || (!window.shell_hosted && window.app_id === 'foot'),
+      )
+      const compositorLeftovers = compositor.windows.filter(
+        (window) => (window.shell_hosted && window.app_id === 'derp.files') || (!window.shell_hosted && window.app_id === 'foot'),
+      )
+      return shellLeftovers.length === 0 && compositorLeftovers.length === 0
+        ? { compositor, shell }
+        : null
+    },
+    8000,
+    50,
+  )
 }
 
 async function runMaximizeFileBrowserThenFootScenario(harness: HarnessState): Promise<Record<string, unknown>> {
