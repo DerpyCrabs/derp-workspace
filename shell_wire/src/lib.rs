@@ -217,6 +217,23 @@ impl<'a> WireCursor<'a> {
         Some(bytes)
     }
 
+    pub fn read_utf8(&mut self, len: usize) -> Option<Result<&'a str, std::str::Utf8Error>> {
+        Some(std::str::from_utf8(self.read_bytes(len)?))
+    }
+
+    pub fn peek_u32_at(&self, offset: usize) -> Option<u32> {
+        let bytes = self.payload.get(offset..offset.checked_add(4)?)?;
+        Some(u32::from_le_bytes(bytes.try_into().ok()?))
+    }
+
+    pub fn set_offset(&mut self, offset: usize) -> Option<()> {
+        if offset > self.payload.len() {
+            return None;
+        }
+        self.offset = offset;
+        Some(())
+    }
+
     pub fn remaining(&self) -> usize {
         self.payload.len().saturating_sub(self.offset)
     }
@@ -255,11 +272,27 @@ pub fn read_shared_snapshot_header(src: &[u8]) -> Result<SharedSnapshotHeader, S
     if src.len() < SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize {
         return Err("shared snapshot header slice too small".to_string());
     }
+    let mut cursor = WireCursor::new(src);
+    let magic = cursor
+        .read_u32()
+        .ok_or_else(|| "shared snapshot header slice too small".to_string())?;
+    cursor
+        .set_offset(8)
+        .ok_or_else(|| "shared snapshot header slice too small".to_string())?;
+    let payload_len = cursor
+        .read_u32()
+        .ok_or_else(|| "shared snapshot header slice too small".to_string())?;
+    let flags = cursor
+        .read_u32()
+        .ok_or_else(|| "shared snapshot header slice too small".to_string())?;
+    let sequence = cursor
+        .read_u64()
+        .ok_or_else(|| "shared snapshot header slice too small".to_string())?;
     Ok(SharedSnapshotHeader {
-        magic: u32::from_le_bytes(src[0..4].try_into().unwrap()),
-        payload_len: u32::from_le_bytes(src[8..12].try_into().unwrap()),
-        flags: u32::from_le_bytes(src[12..16].try_into().unwrap()),
-        sequence: u64::from_le_bytes(src[16..24].try_into().unwrap()),
+        magic,
+        payload_len,
+        flags,
+        sequence,
     })
 }
 
@@ -508,64 +541,106 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
     if body.len() < 32 {
         return Err(DecodeError::BadOutputLayoutPayload);
     }
-    let msg = u32::from_le_bytes(body[0..4].try_into().unwrap());
+    let mut cursor = WireCursor::new(body);
+    let msg = cursor
+        .read_u32()
+        .ok_or(DecodeError::BadOutputLayoutPayload)?;
     if msg != MSG_OUTPUT_LAYOUT {
         return Err(DecodeError::UnknownMsgType);
     }
-    let revision = u64::from_le_bytes(body[4..12].try_into().unwrap());
-    let canvas_logical_w = u32::from_le_bytes(body[12..16].try_into().unwrap());
-    let canvas_logical_h = u32::from_le_bytes(body[16..20].try_into().unwrap());
-    let canvas_physical_w = u32::from_le_bytes(body[20..24].try_into().unwrap());
-    let canvas_physical_h = u32::from_le_bytes(body[24..28].try_into().unwrap());
-    let count = u32::from_le_bytes(body[28..32].try_into().unwrap());
+    let revision = cursor
+        .read_u64()
+        .ok_or(DecodeError::BadOutputLayoutPayload)?;
+    let canvas_logical_w = cursor
+        .read_u32()
+        .ok_or(DecodeError::BadOutputLayoutPayload)?;
+    let canvas_logical_h = cursor
+        .read_u32()
+        .ok_or(DecodeError::BadOutputLayoutPayload)?;
+    let canvas_physical_w = cursor
+        .read_u32()
+        .ok_or(DecodeError::BadOutputLayoutPayload)?;
+    let canvas_physical_h = cursor
+        .read_u32()
+        .ok_or(DecodeError::BadOutputLayoutPayload)?;
+    let count = cursor
+        .read_u32()
+        .ok_or(DecodeError::BadOutputLayoutPayload)?;
     if count == 0 || count > MAX_OUTPUT_LAYOUT_SCREENS {
         return Err(DecodeError::BadOutputLayoutPayload);
     }
-    let mut off = 32usize;
     let mut screens = Vec::with_capacity(count as usize);
     for _ in 0..count {
-        if off + 4 > body.len() {
-            return Err(DecodeError::BadOutputLayoutPayload);
-        }
-        let nl = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-        off += 4;
+        let nl = cursor
+            .read_u32()
+            .ok_or(DecodeError::BadOutputLayoutPayload)? as usize;
         if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
             return Err(DecodeError::BadOutputLayoutPayload);
         }
-        if off + nl + 4 > body.len() {
-            return Err(DecodeError::BadOutputLayoutPayload);
-        }
-        let name = std::str::from_utf8(&body[off..off + nl])
+        let name = cursor
+            .read_utf8(nl)
+            .ok_or(DecodeError::BadOutputLayoutPayload)?
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
-        off += nl;
-        let il = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-        off += 4;
+        let il = cursor
+            .read_u32()
+            .ok_or(DecodeError::BadOutputLayoutPayload)? as usize;
         if il > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
             return Err(DecodeError::BadOutputLayoutPayload);
         }
-        if off + il + 24 > body.len() {
-            return Err(DecodeError::BadOutputLayoutPayload);
-        }
-        let identity = std::str::from_utf8(&body[off..off + il])
+        let identity = cursor
+            .read_utf8(il)
+            .ok_or(DecodeError::BadOutputLayoutPayload)?
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
-        off += il;
         let fixed_len = {
-            let remaining = body.len().saturating_sub(off);
-            let candidate_w = u32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap());
-            let candidate_h = u32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
+            let off = cursor.offset();
+            let remaining = cursor.remaining();
+            let candidate_w = cursor
+                .peek_u32_at(
+                    off.checked_add(8)
+                        .ok_or(DecodeError::BadOutputLayoutPayload)?,
+                )
+                .ok_or(DecodeError::BadOutputLayoutPayload)?;
+            let candidate_h = cursor
+                .peek_u32_at(
+                    off.checked_add(12)
+                        .ok_or(DecodeError::BadOutputLayoutPayload)?,
+                )
+                .ok_or(DecodeError::BadOutputLayoutPayload)?;
             let max_physical_w = canvas_physical_w.max(canvas_logical_w).max(candidate_w);
             let max_physical_h = canvas_physical_h.max(canvas_logical_h).max(candidate_h);
             let looks_like_physical_tail = remaining >= 40
-                && u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap()) <= 1
-                && u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap()) <= 1
-                && (1..=max_physical_w.saturating_mul(8).max(1)).contains(&u32::from_le_bytes(
-                    body[off + 32..off + 36].try_into().unwrap(),
-                ))
-                && (1..=max_physical_h.saturating_mul(8).max(1)).contains(&u32::from_le_bytes(
-                    body[off + 36..off + 40].try_into().unwrap(),
-                ));
+                && cursor
+                    .peek_u32_at(
+                        off.checked_add(24)
+                            .ok_or(DecodeError::BadOutputLayoutPayload)?,
+                    )
+                    .ok_or(DecodeError::BadOutputLayoutPayload)?
+                    <= 1
+                && cursor
+                    .peek_u32_at(
+                        off.checked_add(28)
+                            .ok_or(DecodeError::BadOutputLayoutPayload)?,
+                    )
+                    .ok_or(DecodeError::BadOutputLayoutPayload)?
+                    <= 1
+                && (1..=max_physical_w.saturating_mul(8).max(1)).contains(
+                    &cursor
+                        .peek_u32_at(
+                            off.checked_add(32)
+                                .ok_or(DecodeError::BadOutputLayoutPayload)?,
+                        )
+                        .ok_or(DecodeError::BadOutputLayoutPayload)?,
+                )
+                && (1..=max_physical_h.saturating_mul(8).max(1)).contains(
+                    &cursor
+                        .peek_u32_at(
+                            off.checked_add(36)
+                                .ok_or(DecodeError::BadOutputLayoutPayload)?,
+                        )
+                        .ok_or(DecodeError::BadOutputLayoutPayload)?,
+                );
             if looks_like_physical_tail {
                 40
             } else if remaining >= 32 {
@@ -574,18 +649,34 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
                 24
             }
         };
-        if off + fixed_len > body.len() {
+        if cursor.remaining() < fixed_len {
             return Err(DecodeError::BadOutputLayoutPayload);
         }
-        let x = i32::from_le_bytes(body[off..off + 4].try_into().unwrap());
-        let y = i32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap());
-        let w = u32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap());
-        let h = u32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
-        let transform = u32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
-        let refresh_milli_hz = u32::from_le_bytes(body[off + 20..off + 24].try_into().unwrap());
+        let x = cursor
+            .read_i32()
+            .ok_or(DecodeError::BadOutputLayoutPayload)?;
+        let y = cursor
+            .read_i32()
+            .ok_or(DecodeError::BadOutputLayoutPayload)?;
+        let w = cursor
+            .read_u32()
+            .ok_or(DecodeError::BadOutputLayoutPayload)?;
+        let h = cursor
+            .read_u32()
+            .ok_or(DecodeError::BadOutputLayoutPayload)?;
+        let transform = cursor
+            .read_u32()
+            .ok_or(DecodeError::BadOutputLayoutPayload)?;
+        let refresh_milli_hz = cursor
+            .read_u32()
+            .ok_or(DecodeError::BadOutputLayoutPayload)?;
         let (vrr_supported, vrr_enabled) = if fixed_len >= 32 {
-            let supported = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
-            let enabled = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
+            let supported = cursor
+                .read_u32()
+                .ok_or(DecodeError::BadOutputLayoutPayload)?;
+            let enabled = cursor
+                .read_u32()
+                .ok_or(DecodeError::BadOutputLayoutPayload)?;
             if supported > 1 || enabled > 1 || enabled > supported {
                 return Err(DecodeError::BadOutputLayoutPayload);
             }
@@ -595,13 +686,18 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         };
         let (physical_w, physical_h) = if fixed_len == 40 {
             (
-                u32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap()).max(1),
-                u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap()).max(1),
+                cursor
+                    .read_u32()
+                    .ok_or(DecodeError::BadOutputLayoutPayload)?
+                    .max(1),
+                cursor
+                    .read_u32()
+                    .ok_or(DecodeError::BadOutputLayoutPayload)?
+                    .max(1),
             )
         } else {
             (w.max(1), h.max(1))
         };
-        off += fixed_len;
         screens.push(OutputLayoutScreen {
             name,
             identity,
@@ -622,61 +718,58 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
             taskbar_side: TASKBAR_SIDE_BOTTOM,
         });
     }
-    if off + 4 > body.len() {
-        return Err(DecodeError::BadOutputLayoutPayload);
-    }
-    let pl = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-    off += 4;
+    let pl = cursor
+        .read_u32()
+        .ok_or(DecodeError::BadOutputLayoutPayload)? as usize;
     if pl > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
-        return Err(DecodeError::BadOutputLayoutPayload);
-    }
-    if off + pl > body.len() {
         return Err(DecodeError::BadOutputLayoutPayload);
     }
     let shell_chrome_primary = if pl == 0 {
         None
     } else {
         Some(
-            std::str::from_utf8(&body[off..off + pl])
+            cursor
+                .read_utf8(pl)
+                .ok_or(DecodeError::BadOutputLayoutPayload)?
                 .map_err(|_| DecodeError::BadUtf8Command)?
                 .to_string(),
         )
     };
-    off += pl;
+    if pl == 0 {
+        cursor
+            .read_bytes(0)
+            .ok_or(DecodeError::BadOutputLayoutPayload)?;
+    }
     let mut taskbar_auto_hide = false;
-    if off < body.len() {
-        if off + 8 > body.len() {
-            return Err(DecodeError::BadOutputLayoutPayload);
-        }
-        let auto_hide = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
-        off += 4;
+    if cursor.remaining() > 0 {
+        let auto_hide = cursor
+            .read_u32()
+            .ok_or(DecodeError::BadOutputLayoutPayload)?;
         if auto_hide > 1 {
             return Err(DecodeError::BadOutputLayoutPayload);
         }
         taskbar_auto_hide = auto_hide != 0;
-        let side_count = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-        off += 4;
+        let side_count = cursor
+            .read_u32()
+            .ok_or(DecodeError::BadOutputLayoutPayload)? as usize;
         if side_count > MAX_OUTPUT_LAYOUT_SCREENS as usize {
             return Err(DecodeError::BadOutputLayoutPayload);
         }
         for _ in 0..side_count {
-            if off + 4 > body.len() {
-                return Err(DecodeError::BadOutputLayoutPayload);
-            }
-            let nl = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-            off += 4;
+            let nl = cursor
+                .read_u32()
+                .ok_or(DecodeError::BadOutputLayoutPayload)? as usize;
             if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
                 return Err(DecodeError::BadOutputLayoutPayload);
             }
-            if off + nl + 4 > body.len() {
-                return Err(DecodeError::BadOutputLayoutPayload);
-            }
-            let name = std::str::from_utf8(&body[off..off + nl])
+            let name = cursor
+                .read_utf8(nl)
+                .ok_or(DecodeError::BadOutputLayoutPayload)?
                 .map_err(|_| DecodeError::BadUtf8Command)?
                 .to_string();
-            off += nl;
-            let side = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
-            off += 4;
+            let side = cursor
+                .read_u32()
+                .ok_or(DecodeError::BadOutputLayoutPayload)?;
             if side > TASKBAR_SIDE_RIGHT {
                 return Err(DecodeError::BadOutputLayoutPayload);
             }
@@ -685,36 +778,39 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
             }
         }
     }
-    if off < body.len() {
-        if off + 4 > body.len() {
-            return Err(DecodeError::BadOutputLayoutPayload);
-        }
-        let usable_count = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-        off += 4;
+    if cursor.remaining() > 0 {
+        let usable_count = cursor
+            .read_u32()
+            .ok_or(DecodeError::BadOutputLayoutPayload)? as usize;
         if usable_count > MAX_OUTPUT_LAYOUT_SCREENS as usize {
             return Err(DecodeError::BadOutputLayoutPayload);
         }
         for _ in 0..usable_count {
-            if off + 4 > body.len() {
-                return Err(DecodeError::BadOutputLayoutPayload);
-            }
-            let nl = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-            off += 4;
+            let nl = cursor
+                .read_u32()
+                .ok_or(DecodeError::BadOutputLayoutPayload)? as usize;
             if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
                 return Err(DecodeError::BadOutputLayoutPayload);
             }
-            if off + nl + 16 > body.len() {
-                return Err(DecodeError::BadOutputLayoutPayload);
-            }
-            let name = std::str::from_utf8(&body[off..off + nl])
+            let name = cursor
+                .read_utf8(nl)
+                .ok_or(DecodeError::BadOutputLayoutPayload)?
                 .map_err(|_| DecodeError::BadUtf8Command)?
                 .to_string();
-            off += nl;
-            let usable_x = i32::from_le_bytes(body[off..off + 4].try_into().unwrap());
-            let usable_y = i32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap());
-            let usable_w = u32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap()).max(1);
-            let usable_h = u32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap()).max(1);
-            off += 16;
+            let usable_x = cursor
+                .read_i32()
+                .ok_or(DecodeError::BadOutputLayoutPayload)?;
+            let usable_y = cursor
+                .read_i32()
+                .ok_or(DecodeError::BadOutputLayoutPayload)?;
+            let usable_w = cursor
+                .read_u32()
+                .ok_or(DecodeError::BadOutputLayoutPayload)?
+                .max(1);
+            let usable_h = cursor
+                .read_u32()
+                .ok_or(DecodeError::BadOutputLayoutPayload)?
+                .max(1);
             if let Some(screen) = screens.iter_mut().find(|screen| screen.name == name) {
                 screen.usable_x = usable_x;
                 screen.usable_y = usable_y;
@@ -723,7 +819,7 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
             }
         }
     }
-    if off != body.len() {
+    if cursor.remaining() != 0 {
         return Err(DecodeError::BadOutputLayoutPayload);
     }
     Ok(DecodedCompositorToShellMessage::OutputLayout {
@@ -2165,89 +2261,67 @@ fn decode_window_strings_body(
     if body.len() < 36 {
         return Err(DecodeError::BadWindowPayload);
     }
-    let msg = u32::from_le_bytes(body[0..4].try_into().unwrap());
+    let mut cursor = WireCursor::new(body);
+    let msg = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)?;
     if msg != expect_type {
         return Err(DecodeError::UnknownMsgType);
     }
-    let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
-    let surface_id = u32::from_le_bytes(body[8..12].try_into().unwrap());
-    let x = i32::from_le_bytes(body[12..16].try_into().unwrap());
-    let y = i32::from_le_bytes(body[16..20].try_into().unwrap());
-    let w = i32::from_le_bytes(body[20..24].try_into().unwrap());
-    let h = i32::from_le_bytes(body[24..28].try_into().unwrap());
-    let title_len = u32::from_le_bytes(body[28..32].try_into().unwrap()) as usize;
-    let app_len = u32::from_le_bytes(body[32..36].try_into().unwrap()) as usize;
+    let window_id = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)?;
+    let surface_id = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)?;
+    let x = cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?;
+    let y = cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?;
+    let w = cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?;
+    let h = cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?;
+    let title_len = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)? as usize;
+    let app_len = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)? as usize;
     if title_len > MAX_WINDOW_STRING_BYTES as usize || app_len > MAX_WINDOW_STRING_BYTES as usize {
         return Err(DecodeError::BadWindowPayload);
     }
-    let end = 36usize
-        .checked_add(title_len)
-        .and_then(|a| a.checked_add(app_len))
-        .ok_or(DecodeError::BadWindowPayload)?;
-    if end > body.len() {
-        return Err(DecodeError::BadWindowPayload);
-    }
-    let title = std::str::from_utf8(&body[36..36 + title_len])
+    let title = cursor
+        .read_utf8(title_len)
+        .ok_or(DecodeError::BadWindowPayload)?
         .map_err(|_| DecodeError::BadUtf8Command)?
         .to_string();
-    let app_id = std::str::from_utf8(&body[36 + title_len..end])
+    let app_id = cursor
+        .read_utf8(app_len)
+        .ok_or(DecodeError::BadWindowPayload)?
         .map_err(|_| DecodeError::BadUtf8Command)?
         .to_string();
     match expect_type {
         MSG_WINDOW_METADATA => {
-            let mut cursor = end;
             let mut icon_name = String::new();
             let mut icon_buffers = Vec::new();
-            if cursor != body.len() {
-                if cursor + 8 > body.len() {
-                    return Err(DecodeError::BadWindowPayload);
-                }
+            if cursor.remaining() != 0 {
                 let icon_name_len =
-                    u32::from_le_bytes(body[cursor..cursor + 4].try_into().unwrap()) as usize;
-                cursor += 4;
+                    cursor.read_u32().ok_or(DecodeError::BadWindowPayload)? as usize;
                 if icon_name_len > MAX_WINDOW_STRING_BYTES as usize {
                     return Err(DecodeError::BadWindowPayload);
                 }
-                let icon_name_end = cursor
-                    .checked_add(icon_name_len)
-                    .ok_or(DecodeError::BadWindowPayload)?;
-                if icon_name_end + 4 > body.len() {
-                    return Err(DecodeError::BadWindowPayload);
-                }
-                icon_name = std::str::from_utf8(&body[cursor..icon_name_end])
+                icon_name = cursor
+                    .read_utf8(icon_name_len)
+                    .ok_or(DecodeError::BadWindowPayload)?
                     .map_err(|_| DecodeError::BadUtf8Command)?
                     .to_string();
-                cursor = icon_name_end;
                 let icon_buffer_count =
-                    u32::from_le_bytes(body[cursor..cursor + 4].try_into().unwrap()) as usize;
-                cursor += 4;
+                    cursor.read_u32().ok_or(DecodeError::BadWindowPayload)? as usize;
                 if icon_buffer_count > MAX_WINDOW_ICON_BUFFERS as usize {
                     return Err(DecodeError::BadWindowPayload);
                 }
-                let icon_buffers_end = cursor
-                    .checked_add(
-                        icon_buffer_count
-                            .checked_mul(12)
-                            .ok_or(DecodeError::BadWindowPayload)?,
-                    )
+                let icon_buffers_bytes = icon_buffer_count
+                    .checked_mul(12)
                     .ok_or(DecodeError::BadWindowPayload)?;
-                if icon_buffers_end > body.len() {
+                if cursor.remaining() < icon_buffers_bytes {
                     return Err(DecodeError::BadWindowPayload);
                 }
                 for _ in 0..icon_buffer_count {
                     icon_buffers.push(ShellWindowIconBufferSnapshot {
-                        width: i32::from_le_bytes(body[cursor..cursor + 4].try_into().unwrap()),
-                        height: i32::from_le_bytes(
-                            body[cursor + 4..cursor + 8].try_into().unwrap(),
-                        ),
-                        scale: i32::from_le_bytes(
-                            body[cursor + 8..cursor + 12].try_into().unwrap(),
-                        ),
+                        width: cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?,
+                        height: cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?,
+                        scale: cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?,
                     });
-                    cursor += 12;
                 }
             }
-            if body.len() != cursor {
+            if cursor.remaining() != 0 {
                 return Err(DecodeError::BadWindowPayload);
             }
             Ok(DecodedCompositorToShellMessage::WindowMetadata {
@@ -2260,37 +2334,28 @@ fn decode_window_strings_body(
             })
         }
         MSG_WINDOW_MAPPED => {
-            let (pos_after_csd, client_side_decoration) = if body.len() == end {
-                (end, false)
-            } else if body.len() < end + 4 {
-                return Err(DecodeError::BadWindowPayload);
+            let client_side_decoration = if cursor.remaining() == 0 {
+                false
             } else {
-                let c = u32::from_le_bytes(body[end..end + 4].try_into().unwrap());
+                let c = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)?;
                 if c > 1 {
                     return Err(DecodeError::BadWindowPayload);
                 }
-                (end + 4, c != 0)
+                c != 0
             };
-            let output_name = if body.len() == pos_after_csd {
+            let output_name = if cursor.remaining() == 0 {
                 String::new()
             } else {
-                if body.len() < pos_after_csd + 4 {
-                    return Err(DecodeError::BadWindowPayload);
-                }
-                let ol =
-                    u32::from_le_bytes(body[pos_after_csd..pos_after_csd + 4].try_into().unwrap())
-                        as usize;
+                let ol = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)? as usize;
                 if ol > MAX_WINDOW_STRING_BYTES as usize {
                     return Err(DecodeError::BadWindowPayload);
                 }
-                let tail = pos_after_csd
-                    .checked_add(4)
-                    .and_then(|a| a.checked_add(ol))
-                    .ok_or(DecodeError::BadWindowPayload)?;
-                if body.len() != tail {
+                if cursor.remaining() != ol {
                     return Err(DecodeError::BadWindowPayload);
                 }
-                std::str::from_utf8(&body[pos_after_csd + 4..tail])
+                cursor
+                    .read_utf8(ol)
+                    .ok_or(DecodeError::BadWindowPayload)?
                     .map_err(|_| DecodeError::BadUtf8Command)?
                     .to_string()
             };
@@ -2551,19 +2616,19 @@ fn decode_compositor_to_shell_body(
             if body.len() < 28 {
                 return Err(DecodeError::BadWindowPayload);
             }
-            let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
-            let surface_id = u32::from_le_bytes(body[8..12].try_into().unwrap());
-            let x = i32::from_le_bytes(body[12..16].try_into().unwrap());
-            let y = i32::from_le_bytes(body[16..20].try_into().unwrap());
-            let w = i32::from_le_bytes(body[20..24].try_into().unwrap());
-            let h = i32::from_le_bytes(body[24..28].try_into().unwrap());
+            let window_id = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)?;
+            let surface_id = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)?;
+            let x = cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?;
+            let y = cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?;
+            let w = cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?;
+            let h = cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?;
             let (maximized, fullscreen, csd_base) = if body.len() == 28 {
                 (false, false, None)
             } else if body.len() < 36 {
                 return Err(DecodeError::BadWindowPayload);
             } else {
-                let mx = u32::from_le_bytes(body[28..32].try_into().unwrap());
-                let fs = u32::from_le_bytes(body[32..36].try_into().unwrap());
+                let mx = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)?;
+                let fs = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)?;
                 if mx > 1 || fs > 1 {
                     return Err(DecodeError::BadWindowPayload);
                 }
@@ -2577,7 +2642,7 @@ fn decode_compositor_to_shell_body(
                     } else if body.len() < base + 4 {
                         return Err(DecodeError::BadWindowPayload);
                     } else {
-                        let c = u32::from_le_bytes(body[base..base + 4].try_into().unwrap());
+                        let c = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)?;
                         if c > 1 {
                             return Err(DecodeError::BadWindowPayload);
                         }
@@ -2591,7 +2656,7 @@ fn decode_compositor_to_shell_body(
                 if body.len() < pos + 4 {
                     return Err(DecodeError::BadWindowPayload);
                 }
-                let ol = u32::from_le_bytes(body[pos..pos + 4].try_into().unwrap()) as usize;
+                let ol = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)? as usize;
                 if ol > MAX_WINDOW_STRING_BYTES as usize {
                     return Err(DecodeError::BadWindowPayload);
                 }
@@ -2602,7 +2667,9 @@ fn decode_compositor_to_shell_body(
                 if body.len() != tail && body.len() != tail + WINDOW_GEOMETRY_RECTS_BYTES {
                     return Err(DecodeError::BadWindowPayload);
                 }
-                let output_name = std::str::from_utf8(&body[pos + 4..tail])
+                let output_name = cursor
+                    .read_utf8(ol)
+                    .ok_or(DecodeError::BadWindowPayload)?
                     .map_err(|_| DecodeError::BadUtf8Command)?
                     .to_string();
                 (output_name, tail)
@@ -2614,20 +2681,19 @@ fn decode_compositor_to_shell_body(
                     if body.len() != rect_pos + WINDOW_GEOMETRY_RECTS_BYTES {
                         return Err(DecodeError::BadWindowPayload);
                     }
-                    let schema =
-                        u32::from_le_bytes(body[rect_pos..rect_pos + 4].try_into().unwrap());
+                    let schema = cursor.read_u32().ok_or(DecodeError::BadWindowPayload)?;
                     if schema != WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION {
                         return Err(DecodeError::BadWindowPayload);
                     }
                     (
-                        i32::from_le_bytes(body[rect_pos + 4..rect_pos + 8].try_into().unwrap()),
-                        i32::from_le_bytes(body[rect_pos + 8..rect_pos + 12].try_into().unwrap()),
-                        i32::from_le_bytes(body[rect_pos + 12..rect_pos + 16].try_into().unwrap()),
-                        i32::from_le_bytes(body[rect_pos + 16..rect_pos + 20].try_into().unwrap()),
-                        i32::from_le_bytes(body[rect_pos + 20..rect_pos + 24].try_into().unwrap()),
-                        i32::from_le_bytes(body[rect_pos + 24..rect_pos + 28].try_into().unwrap()),
-                        i32::from_le_bytes(body[rect_pos + 28..rect_pos + 32].try_into().unwrap()),
-                        i32::from_le_bytes(body[rect_pos + 32..rect_pos + 36].try_into().unwrap()),
+                        cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?,
+                        cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?,
+                        cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?,
+                        cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?,
+                        cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?,
+                        cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?,
+                        cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?,
+                        cursor.read_i32().ok_or(DecodeError::BadWindowPayload)?,
                     )
                 };
             Ok(DecodedCompositorToShellMessage::WindowGeometry {
@@ -3100,22 +3166,30 @@ fn decode_window_list_compositor_body(
     if body.len() < 16 {
         return Err(DecodeError::BadWindowListPayload);
     }
-    let msg = u32::from_le_bytes(body[0..4].try_into().unwrap());
+    let mut cursor = WireCursor::new(body);
+    let msg = cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?;
     if msg != MSG_WINDOW_LIST {
         return Err(DecodeError::UnknownMsgType);
     }
-    let revision = u64::from_le_bytes(body[4..12].try_into().unwrap());
-    let count = u32::from_le_bytes(body[12..16].try_into().unwrap()) as usize;
+    let revision = cursor.read_u64().ok_or(DecodeError::BadWindowListPayload)?;
+    let count = cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)? as usize;
     if count > MAX_WINDOW_LIST_ENTRIES as usize {
         return Err(DecodeError::BadWindowListPayload);
     }
     let (mut off, row_bytes) = if body.len() >= WINDOW_LIST_HEADER_BYTES {
-        let schema_version = u32::from_le_bytes(body[16..20].try_into().unwrap());
-        let row_bytes = u32::from_le_bytes(body[20..24].try_into().unwrap()) as usize;
+        let schema_version = cursor
+            .peek_u32_at(16)
+            .ok_or(DecodeError::BadWindowListPayload)?;
+        let row_bytes = cursor
+            .peek_u32_at(20)
+            .ok_or(DecodeError::BadWindowListPayload)? as usize;
         if schema_version == WINDOW_LIST_SCHEMA_VERSION {
             if row_bytes != WINDOW_LIST_ROW_BYTES {
                 return Err(DecodeError::BadWindowListPayload);
             }
+            cursor
+                .set_offset(WINDOW_LIST_HEADER_BYTES)
+                .ok_or(DecodeError::BadWindowListPayload)?;
             (WINDOW_LIST_HEADER_BYTES, row_bytes)
         } else {
             (WINDOW_LIST_HEADER_BYTES_V1, WINDOW_LIST_ROW_BYTES_V1)
@@ -3128,13 +3202,16 @@ fn decode_window_list_compositor_body(
         if off + row_bytes > body.len() {
             return Err(DecodeError::BadWindowListPayload);
         }
-        let window_id = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
-        let surface_id = u32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap());
-        let stack_z = u32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap());
-        let x = i32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
-        let y = i32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
-        let w = i32::from_le_bytes(body[off + 20..off + 24].try_into().unwrap());
-        let h = i32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
+        cursor
+            .set_offset(off)
+            .ok_or(DecodeError::BadWindowListPayload)?;
+        let window_id = cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?;
+        let surface_id = cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?;
+        let stack_z = cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?;
+        let x = cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?;
+        let y = cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?;
+        let w = cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?;
+        let h = cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?;
         let (
             client_x,
             client_y,
@@ -3154,22 +3231,22 @@ fn decode_window_list_compositor_body(
             app_len,
         ) = if row_bytes == WINDOW_LIST_ROW_BYTES {
             (
-                i32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap()),
-                i32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap()),
-                i32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap()),
-                i32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap()),
-                i32::from_le_bytes(body[off + 44..off + 48].try_into().unwrap()),
-                i32::from_le_bytes(body[off + 48..off + 52].try_into().unwrap()),
-                i32::from_le_bytes(body[off + 52..off + 56].try_into().unwrap()),
-                i32::from_le_bytes(body[off + 56..off + 60].try_into().unwrap()),
-                u32::from_le_bytes(body[off + 60..off + 64].try_into().unwrap()),
-                u32::from_le_bytes(body[off + 64..off + 68].try_into().unwrap()),
-                u32::from_le_bytes(body[off + 68..off + 72].try_into().unwrap()),
-                u32::from_le_bytes(body[off + 72..off + 76].try_into().unwrap()),
-                u32::from_le_bytes(body[off + 76..off + 80].try_into().unwrap()),
-                u32::from_le_bytes(body[off + 80..off + 84].try_into().unwrap()),
-                u32::from_le_bytes(body[off + 84..off + 88].try_into().unwrap()) as usize,
-                u32::from_le_bytes(body[off + 88..off + 92].try_into().unwrap()) as usize,
+                cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)? as usize,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)? as usize,
             )
         } else {
             (
@@ -3181,14 +3258,14 @@ fn decode_window_list_compositor_body(
                 y,
                 w,
                 h,
-                u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap()),
-                u32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap()),
-                u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap()),
-                u32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap()),
-                u32::from_le_bytes(body[off + 44..off + 48].try_into().unwrap()),
-                u32::from_le_bytes(body[off + 48..off + 52].try_into().unwrap()),
-                u32::from_le_bytes(body[off + 52..off + 56].try_into().unwrap()) as usize,
-                u32::from_le_bytes(body[off + 56..off + 60].try_into().unwrap()) as usize,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)? as usize,
+                cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)? as usize,
             )
         };
         if minimized > 1
@@ -3205,154 +3282,102 @@ fn decode_window_list_compositor_body(
             return Err(DecodeError::BadWindowListPayload);
         }
         off += row_bytes;
-        let tend = off
-            .checked_add(title_len)
+        cursor
+            .set_offset(off)
             .ok_or(DecodeError::BadWindowListPayload)?;
-        let aend = tend
-            .checked_add(app_len)
-            .ok_or(DecodeError::BadWindowListPayload)?;
-        if aend > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let title = std::str::from_utf8(&body[off..tend])
+        let title = cursor
+            .read_utf8(title_len)
+            .ok_or(DecodeError::BadWindowListPayload)?
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
-        let app_id = std::str::from_utf8(&body[tend..aend])
+        let app_id = cursor
+            .read_utf8(app_len)
+            .ok_or(DecodeError::BadWindowListPayload)?
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
-        off = aend;
-        if off + 4 > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let output_id_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-        off += 4;
+        let output_id_len = cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)? as usize;
         if output_id_len > MAX_WINDOW_STRING_BYTES as usize {
             return Err(DecodeError::BadWindowListPayload);
         }
-        if off + output_id_len > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let output_id = std::str::from_utf8(&body[off..off + output_id_len])
+        let output_id = cursor
+            .read_utf8(output_id_len)
+            .ok_or(DecodeError::BadWindowListPayload)?
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
-        off += output_id_len;
-        if off + 4 > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let output_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-        off += 4;
+        let output_len = cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)? as usize;
         if output_len > MAX_WINDOW_STRING_BYTES as usize {
             return Err(DecodeError::BadWindowListPayload);
         }
-        if off + output_len > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let output_name = std::str::from_utf8(&body[off..off + output_len])
+        let output_name = cursor
+            .read_utf8(output_len)
+            .ok_or(DecodeError::BadWindowListPayload)?
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
-        off += output_len;
-        if off + 4 > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let capture_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-        off += 4;
+        let capture_len = cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)? as usize;
         if capture_len > MAX_WINDOW_STRING_BYTES as usize {
             return Err(DecodeError::BadWindowListPayload);
         }
-        if off + capture_len > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let capture_identifier = std::str::from_utf8(&body[off..off + capture_len])
+        let capture_identifier = cursor
+            .read_utf8(capture_len)
+            .ok_or(DecodeError::BadWindowListPayload)?
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
-        off += capture_len;
-        if off + 4 > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let kind_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-        off += 4;
+        let kind_len = cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)? as usize;
         if kind_len > MAX_WINDOW_STRING_BYTES as usize {
             return Err(DecodeError::BadWindowListPayload);
         }
-        if off + kind_len > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let kind = std::str::from_utf8(&body[off..off + kind_len])
+        let kind = cursor
+            .read_utf8(kind_len)
+            .ok_or(DecodeError::BadWindowListPayload)?
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
-        off += kind_len;
-        if off + 4 > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let x11_class_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-        off += 4;
+        let x11_class_len = cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)? as usize;
         if x11_class_len > MAX_WINDOW_STRING_BYTES as usize {
             return Err(DecodeError::BadWindowListPayload);
         }
-        if off + x11_class_len > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let x11_class = std::str::from_utf8(&body[off..off + x11_class_len])
+        let x11_class = cursor
+            .read_utf8(x11_class_len)
+            .ok_or(DecodeError::BadWindowListPayload)?
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
-        off += x11_class_len;
-        if off + 4 > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let x11_instance_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-        off += 4;
+        let x11_instance_len = cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)? as usize;
         if x11_instance_len > MAX_WINDOW_STRING_BYTES as usize {
             return Err(DecodeError::BadWindowListPayload);
         }
-        if off + x11_instance_len > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let x11_instance = std::str::from_utf8(&body[off..off + x11_instance_len])
+        let x11_instance = cursor
+            .read_utf8(x11_instance_len)
+            .ok_or(DecodeError::BadWindowListPayload)?
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
-        off += x11_instance_len;
-        if off + 4 > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let icon_name_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-        off += 4;
+        let icon_name_len = cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)? as usize;
         if icon_name_len > MAX_WINDOW_STRING_BYTES as usize {
             return Err(DecodeError::BadWindowListPayload);
         }
-        if off + icon_name_len > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let icon_name = std::str::from_utf8(&body[off..off + icon_name_len])
+        let icon_name = cursor
+            .read_utf8(icon_name_len)
+            .ok_or(DecodeError::BadWindowListPayload)?
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
-        off += icon_name_len;
-        if off + 4 > body.len() {
-            return Err(DecodeError::BadWindowListPayload);
-        }
-        let icon_buffer_count = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-        off += 4;
+        let icon_buffer_count =
+            cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)? as usize;
         if icon_buffer_count > MAX_WINDOW_ICON_BUFFERS as usize {
             return Err(DecodeError::BadWindowListPayload);
         }
-        let icon_buffers_end = off
-            .checked_add(
-                icon_buffer_count
-                    .checked_mul(12)
-                    .ok_or(DecodeError::BadWindowListPayload)?,
-            )
+        let icon_buffers_bytes = icon_buffer_count
+            .checked_mul(12)
             .ok_or(DecodeError::BadWindowListPayload)?;
-        if icon_buffers_end > body.len() {
+        if cursor.remaining() < icon_buffers_bytes {
             return Err(DecodeError::BadWindowListPayload);
         }
         let mut icon_buffers = Vec::with_capacity(icon_buffer_count);
         for _ in 0..icon_buffer_count {
             icon_buffers.push(ShellWindowIconBufferSnapshot {
-                width: i32::from_le_bytes(body[off..off + 4].try_into().unwrap()),
-                height: i32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap()),
-                scale: i32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap()),
+                width: cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
+                height: cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
+                scale: cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
             });
-            off += 12;
         }
+        off = cursor.offset();
         windows.push(ShellWindowSnapshot {
             window_id,
             surface_id,
@@ -3399,12 +3424,19 @@ fn decode_window_order_compositor_body(
     if body.len() < 16 {
         return Err(DecodeError::BadWindowOrderPayload);
     }
-    let msg = u32::from_le_bytes(body[0..4].try_into().unwrap());
+    let mut cursor = WireCursor::new(body);
+    let msg = cursor
+        .read_u32()
+        .ok_or(DecodeError::BadWindowOrderPayload)?;
     if msg != MSG_WINDOW_ORDER {
         return Err(DecodeError::UnknownMsgType);
     }
-    let revision = u64::from_le_bytes(body[4..12].try_into().unwrap());
-    let count = u32::from_le_bytes(body[12..16].try_into().unwrap()) as usize;
+    let revision = cursor
+        .read_u64()
+        .ok_or(DecodeError::BadWindowOrderPayload)?;
+    let count = cursor
+        .read_u32()
+        .ok_or(DecodeError::BadWindowOrderPayload)? as usize;
     if count > MAX_WINDOW_LIST_ENTRIES as usize {
         return Err(DecodeError::BadWindowOrderPayload);
     }
@@ -3418,14 +3450,16 @@ fn decode_window_order_compositor_body(
     if body.len() != expected {
         return Err(DecodeError::BadWindowOrderPayload);
     }
-    let mut off = 16usize;
     let mut windows = Vec::with_capacity(count);
     for _ in 0..count {
         windows.push(ShellWindowOrderEntry {
-            window_id: u32::from_le_bytes(body[off..off + 4].try_into().unwrap()),
-            stack_z: u32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap()),
+            window_id: cursor
+                .read_u32()
+                .ok_or(DecodeError::BadWindowOrderPayload)?,
+            stack_z: cursor
+                .read_u32()
+                .ok_or(DecodeError::BadWindowOrderPayload)?,
         });
-        off += 8;
     }
     Ok(DecodedCompositorToShellMessage::WindowOrder { revision, windows })
 }
@@ -3955,8 +3989,17 @@ mod tests {
             encode_compositor_pointer_axis(1, 2, 3, 4, 0),
             encode_compositor_key(CEF_KEYEVENT_KEYDOWN, 0, 65, 65, 65, 65),
             encode_output_geometry(1920, 1080, 1920, 1080),
-            encode_output_layout(1, 1920, 1080, 1920, 1080, &[screen], Some("DP-1"), false)
-                .unwrap(),
+            encode_output_layout(
+                1,
+                1920,
+                1080,
+                1920,
+                1080,
+                &[screen.clone()],
+                Some("DP-1"),
+                false,
+            )
+            .unwrap(),
             encode_window_mapped(1, 2, 3, 4, 5, 6, "Title", "app", true, "DP-1").unwrap(),
             encode_window_unmapped(1),
             encode_window_geometry(
@@ -4024,6 +4067,56 @@ mod tests {
         let mut state = encode_window_state(1, true);
         set_body_u32(&mut state, 8, 2);
         assert_compositor_malformed_no_panic(state);
+
+        let mut layout =
+            encode_output_layout(1, 1920, 1080, 1920, 1080, &[screen], Some("DP-1"), false)
+                .unwrap();
+        set_body_u32(&mut layout, 32, MAX_OUTPUT_LAYOUT_NAME_BYTES + 1);
+        assert_compositor_malformed_no_panic(layout);
+        let mut mapped =
+            encode_window_mapped(1, 2, 3, 4, 5, 6, "Title", "app", true, "DP-1").unwrap();
+        set_body_u32(&mut mapped, 28, MAX_WINDOW_STRING_BYTES + 1);
+        assert_compositor_malformed_no_panic(mapped);
+        let mut metadata = encode_window_metadata(
+            1,
+            2,
+            "Title",
+            "app",
+            "utilities-terminal",
+            &[ShellWindowIconBufferSnapshot {
+                width: 32,
+                height: 32,
+                scale: 1,
+            }],
+        )
+        .unwrap();
+        let metadata_icon_count_offset =
+            36 + "Title".len() + "app".len() + 4 + "utilities-terminal".len();
+        set_body_u32(
+            &mut metadata,
+            metadata_icon_count_offset,
+            MAX_WINDOW_ICON_BUFFERS + 1,
+        );
+        assert_compositor_malformed_no_panic(metadata);
+        let mut geometry = encode_window_geometry(
+            1, 2, 3, 4, 5, 6, 3, 4, 5, 6, 2, 3, 7, 8, false, false, true, "DP-1",
+        )
+        .unwrap();
+        set_body_u32(&mut geometry, 28, 2);
+        assert_compositor_malformed_no_panic(geometry);
+        let mut list = encode_window_list(1, &[window]).unwrap();
+        set_body_u32(&mut list, 20, (WINDOW_LIST_ROW_BYTES + 4) as u32);
+        assert_compositor_malformed_no_panic(list);
+        let mut order = encode_window_order(
+            1,
+            &[ShellWindowOrderEntry {
+                window_id: 1,
+                stack_z: 2,
+            }],
+        )
+        .unwrap();
+        set_body_u32(&mut order, 12, MAX_WINDOW_LIST_ENTRIES + 1);
+        assert_compositor_malformed_no_panic(order);
 
         assert_compositor_malformed_no_panic(partial_string_compositor_packet(
             MSG_COMPOSITOR_KEYBOARD_LAYOUT,
