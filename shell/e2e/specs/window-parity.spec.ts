@@ -7,7 +7,7 @@ import {
   type TestContext,
   type WindowSnapshot,
 } from '../lib/runtime.ts'
-import { clickRect, clickRectWithoutSync, dragBetweenPoints } from '../lib/user.ts'
+import { clickRect, clickRectWithoutSync, dragBetweenPoints, movePoint, pointerButton } from '../lib/user.ts'
 import {
   assert,
   assertRectMinSize,
@@ -234,6 +234,55 @@ async function waitForShellTracksCompositor(base: string, windowId: number, labe
   )
 }
 
+async function waitForResizeRightRect(base: string, windowId: number, label: string) {
+  return waitFor(
+    `${label} right resize control`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const rect = windowControls(shell, windowId)?.resize_right
+      return rect && rect.width >= 2 && rect.height >= 40 ? rect : null
+    },
+    5000,
+    40,
+  )
+}
+
+async function dragRightResizeEdge(base: string, windowId: number, dx: number, label: string) {
+  const before = await waitForShellTracksCompositor(base, windowId, `${label} before resize`)
+  const beforeWindow = shellWindowById(before.shell, windowId)
+  assert(beforeWindow, `${label} missing window before resize`)
+  const handle = await waitForResizeRightRect(base, windowId, label)
+  const startX = handle.global_x + handle.width - 1
+  const startY = handle.global_y + handle.height / 2
+  await movePoint(base, startX, startY)
+  await pointerButton(base, 0x110, 'press')
+  await movePoint(base, startX + dx, startY)
+  const during = await getSnapshots(base)
+  const resizeRect = during.compositor.shell_resize_visual
+  assert(resizeRect, `${label} missing active resize rect`)
+  assert(
+    Math.abs(resizeRect.x + resizeRect.width - (beforeWindow.x + beforeWindow.width + dx)) <= 2,
+    `${label} active right edge should follow pointer: ${JSON.stringify({
+      before: beforeWindow,
+      resizeRect,
+      dx,
+    })}`,
+  )
+  await pointerButton(base, 0x110, 'release')
+  const settled = await waitForChromeSettled(base, windowId, `${label} resize settled`)
+  const afterWindow = shellWindowById(settled.shell, windowId)
+  assert(afterWindow, `${label} missing window after resize`)
+  assert(
+    Math.abs(afterWindow.width - (beforeWindow.width + dx)) <= 2,
+    `${label} resize delta should match pointer delta: ${JSON.stringify({
+      before: beforeWindow,
+      after: afterWindow,
+      dx,
+    })}`,
+  )
+  return { before: beforeWindow, after: afterWindow, during: resizeRect, handle }
+}
+
 async function runChromeContract(context: TestContext, parity: ParityCase) {
   const { base } = context
   const opened = await parity.open(context)
@@ -396,5 +445,13 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
   test('foot maximize click updates chrome without forced snapshot sync', async (context) => {
     await runFootMaximizeWithoutForcedSync(context)
+  })
+
+  test('shell-hosted right resize edge tracks pointer delta at fractional scale', async (context) => {
+    const { base, state } = context
+    const opened = await openShellTestWindow(base, state)
+    await waitForWindowRaised(base, opened.window.window_id)
+    const resize = await dragRightResizeEdge(base, opened.window.window_id, 120, 'shell-hosted fractional resize')
+    await writeJsonArtifact('window-parity-shell-hosted-resize-fractional.json', resize)
   })
 })

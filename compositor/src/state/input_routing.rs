@@ -443,10 +443,32 @@ impl InputRoutingState {
         let Some(kb) = self.seat.get_keyboard() else {
             return 0;
         };
-        Self::cef_flags_from_modifiers(&kb.modifier_state())
+        let mut flags = Self::cef_flags_from_modifiers(&kb.modifier_state());
+        flags |= self.cef_flags_from_pressed_pointer_buttons();
+        flags
     }
 
     pub(crate) const CEF_EVENTFLAG_IS_REPEAT: u32 = 1 << 13;
+    const CEF_EVENTFLAG_LEFT_MOUSE_BUTTON: u32 = 1 << 4;
+    const CEF_EVENTFLAG_MIDDLE_MOUSE_BUTTON: u32 = 1 << 5;
+    const CEF_EVENTFLAG_RIGHT_MOUSE_BUTTON: u32 = 1 << 6;
+    const BTN_LEFT: u32 = 0x110;
+    const BTN_RIGHT: u32 = 0x111;
+    const BTN_MIDDLE: u32 = 0x112;
+
+    fn cef_flags_from_pressed_pointer_buttons(&self) -> u32 {
+        let mut flags = 0u32;
+        if self.pointer_pressed_buttons.contains(&Self::BTN_LEFT) {
+            flags |= Self::CEF_EVENTFLAG_LEFT_MOUSE_BUTTON;
+        }
+        if self.pointer_pressed_buttons.contains(&Self::BTN_MIDDLE) {
+            flags |= Self::CEF_EVENTFLAG_MIDDLE_MOUSE_BUTTON;
+        }
+        if self.pointer_pressed_buttons.contains(&Self::BTN_RIGHT) {
+            flags |= Self::CEF_EVENTFLAG_RIGHT_MOUSE_BUTTON;
+        }
+        flags
+    }
 
     pub(crate) fn cef_flags_from_modifiers(m: &ModifiersState) -> u32 {
         let mut f = 0u32;

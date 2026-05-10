@@ -132,8 +132,14 @@ async function assertRoundedCsdTransparentOutside(
   const png = await readPngRgba(path)
   const scaleX = png.width / capture.width
   const scaleY = png.height / capture.height
+  let windowPixels = {
+    x: (window.x - capture.x) * scaleX,
+    y: (window.y - capture.y) * scaleY,
+    width: window.width * scaleX,
+    height: window.height * scaleY,
+  }
   const radius = Math.min(64, Math.max(18, Math.min(window.width, window.height) / 9))
-  const edgeTolerance = 1 / Math.min(scaleX, scaleY)
+  const edgeTolerance = 1
   const cursorHotspot = cursor
     ? {
         x: (cursor.x - capture.x) * scaleX,
@@ -147,18 +153,41 @@ async function assertRoundedCsdTransparentOutside(
   }
   const channelDelta = (a: [number, number, number], b: [number, number, number]) =>
     Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]))
+  const background = colorAt(0, 0)
+  let minX = png.width
+  let minY = png.height
+  let maxX = -1
+  let maxY = -1
+  for (let y = 0; y < png.height; y += 1) {
+    for (let x = 0; x < png.width; x += 1) {
+      if (channelDelta(colorAt(x, y), background) <= 8) continue
+      minX = Math.min(minX, x)
+      minY = Math.min(minY, y)
+      maxX = Math.max(maxX, x)
+      maxY = Math.max(maxY, y)
+    }
+  }
+  if (maxX >= minX && maxY >= minY) {
+    const observed = {
+      x: minX,
+      y: minY,
+      width: maxX - minX + 1,
+      height: maxY - minY + 1,
+    }
+    if (Math.abs(observed.width - windowPixels.width) <= 2 && Math.abs(observed.height - windowPixels.height) <= 2) {
+      windowPixels = observed
+    }
+  }
   const referenceFor = (
     px: number,
     py: number,
-    x: number,
-    y: number,
     localX: number,
     localY: number,
   ): [number, number, number] => {
-    if (x < window.x) return colorAt(0, py)
-    if (x >= window.x + window.width) return colorAt(png.width - 1, py)
-    if (y < window.y) return colorAt(px, 0)
-    if (y >= window.y + window.height) return colorAt(px, png.height - 1)
+    if (px + 0.5 < windowPixels.x) return colorAt(0, py)
+    if (px + 0.5 >= windowPixels.x + windowPixels.width) return colorAt(png.width - 1, py)
+    if (py + 0.5 < windowPixels.y) return colorAt(px, 0)
+    if (py + 0.5 >= windowPixels.y + windowPixels.height) return colorAt(px, png.height - 1)
     const left = localX < radius
     const top = localY < radius
     const edgeX = left ? 0 : png.width - 1
@@ -172,25 +201,24 @@ async function assertRoundedCsdTransparentOutside(
   let checked = 0
   let maxObservedChannelDelta = 0
   for (let py = 0; py < png.height; py += 1) {
-    const gx = capture.x
-    const y = capture.y + (py + 0.5) / scaleY
     for (let px = 0; px < png.width; px += 1) {
-      const x = gx + (px + 0.5) / scaleX
-      const localX = x - window.x
-      const localY = y - window.y
+      const x = px + 0.5
+      const y = py + 0.5
+      const localX = x - windowPixels.x
+      const localY = y - windowPixels.y
       let shouldBeClear =
-        x < window.x - edgeTolerance ||
-        y < window.y - edgeTolerance ||
-        x >= window.x + window.width + edgeTolerance ||
-        y >= window.y + window.height + edgeTolerance
+        x < windowPixels.x - edgeTolerance ||
+        y < windowPixels.y - edgeTolerance ||
+        x >= windowPixels.x + windowPixels.width + edgeTolerance ||
+        y >= windowPixels.y + windowPixels.height + edgeTolerance
       if (!shouldBeClear) {
         const left = localX < radius
-        const right = localX >= window.width - radius
+        const right = localX >= windowPixels.width - radius
         const top = localY < radius
-        const bottom = localY >= window.height - radius
+        const bottom = localY >= windowPixels.height - radius
         if ((left || right) && (top || bottom)) {
-          const cx = left ? radius : window.width - radius
-          const cy = top ? radius : window.height - radius
+          const cx = left ? radius : windowPixels.width - radius
+          const cy = top ? radius : windowPixels.height - radius
           const dx = localX - cx
           const dy = localY - cy
           shouldBeClear = dx * dx + dy * dy > (radius + 2) * (radius + 2)
@@ -207,7 +235,7 @@ async function assertRoundedCsdTransparentOutside(
         continue
       }
       checked += 1
-      const delta = channelDelta(colorAt(px, py), referenceFor(px, py, x, y, localX, localY))
+      const delta = channelDelta(colorAt(px, py), referenceFor(px, py, localX, localY))
       maxObservedChannelDelta = Math.max(maxObservedChannelDelta, delta)
       if (delta > 8) leaking += 1
     }

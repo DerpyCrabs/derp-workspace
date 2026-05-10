@@ -609,6 +609,22 @@ export interface ShellSnapshot {
     resize_window_id: number | null
     move_proxy_window_id: number | null
     move_capture_window_id: number | null
+    move_rect?: {
+      x: number
+      y: number
+      width: number
+      height: number
+      maximized?: boolean
+      fullscreen?: boolean
+    } | null
+    resize_rect?: {
+      x: number
+      y: number
+      width: number
+      height: number
+      maximized?: boolean
+      fullscreen?: boolean
+    } | null
     super_held?: boolean
     window_switcher_selected_window_id?: number | null
   } | null

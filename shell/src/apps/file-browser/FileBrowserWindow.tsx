@@ -859,6 +859,11 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   function beginPointerDrag(event: PointerEvent, entry: FileBrowserEntry) {
     if (event.button !== 0) return
     if (entry.writable !== true && !fileBrowserEntryCanOpenInShell(entry)) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.currentTarget instanceof HTMLElement) {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    }
     const directory =
       state.activePath && state.activePath !== FILE_BROWSER_FAVORITES_PATH
         ? state.activePath

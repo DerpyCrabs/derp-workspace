@@ -1584,9 +1584,6 @@ export function createShellWindowGestureRuntime(
       }
       shellWindowResize.lastX = cx;
       shellWindowResize.lastY = cy;
-      if (sendDelta) {
-        options.shellWireSend("resize_delta", dx, dy);
-      }
       return;
     }
     shellWindowResize.accumDx += dx;
