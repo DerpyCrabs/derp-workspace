@@ -15,9 +15,31 @@ impl CompositorState {
         let Some(work) = self.shell_maximize_work_area_global_for_output(&out) else {
             return (DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y);
         };
-        let (width, height) = self
-            .preferred_new_toplevel_size(window)
-            .unwrap_or((DEFAULT_XDG_TOPLEVEL_WIDTH, DEFAULT_XDG_TOPLEVEL_HEIGHT));
+        let preferred_size = self.preferred_new_toplevel_size(window);
+        let (mut width, mut height) =
+            preferred_size.unwrap_or((DEFAULT_XDG_TOPLEVEL_WIDTH, DEFAULT_XDG_TOPLEVEL_HEIGHT));
+        if let Some(toplevel) = window.toplevel() {
+            if let Some(info) = self
+                .windows
+                .window_registry
+                .window_id_for_wl_surface(toplevel.wl_surface())
+                .and_then(|window_id| self.windows.window_registry.window_info(window_id))
+            {
+                if preferred_size.is_none() && window_title_is_screen_sharing_indicator(&info.title)
+                {
+                    width = 610;
+                    height = 64;
+                }
+                if let Some(loc) = self.shell_status_indicator_initial_location(
+                    &info.title,
+                    &info.app_id,
+                    width,
+                    height,
+                ) {
+                    return loc;
+                }
+            }
+        }
         self.staggered_toplevel_origin_for_output(&out, &work, width, height)
     }
 
@@ -33,6 +55,100 @@ impl CompositorState {
                 .window_id_for_wl_surface(toplevel.wl_surface())
         })?;
         self.workspace_auto_layout_initial_client_rect_for_window(&out.name(), window_id)
+    }
+
+    pub(crate) fn shell_status_indicator_initial_location(
+        &self,
+        title: &str,
+        app_id: &str,
+        width: i32,
+        height: i32,
+    ) -> Option<(i32, i32)> {
+        if !window_title_is_screen_sharing_indicator(title) {
+            return None;
+        }
+        let width = width.max(1);
+        let height = height.max(1);
+        if let Some(rect) = self
+            .keyboard_focused_window_id()
+            .and_then(|window_id| self.windows.window_registry.window_info(window_id))
+            .filter(|info| {
+                !info.minimized
+                    && !self.window_is_shell_status_indicator(info)
+                    && Self::shell_status_indicator_anchor_matches(app_id, info)
+            })
+            .map(|info| {
+                Rectangle::new(
+                    Point::from((info.x, info.y)),
+                    Size::from((info.width.max(1), info.height.max(1))),
+                )
+            })
+        {
+            if let Some(output) =
+                self.output_for_global_xywh(rect.loc.x, rect.loc.y, rect.size.w, rect.size.h)
+            {
+                if let Some(work) = self.shell_maximize_work_area_global_for_output(&output) {
+                    return Some(Self::bottom_centered_status_indicator_origin(
+                        &work,
+                        Some(&rect),
+                        width,
+                        height,
+                    ));
+                }
+            }
+        }
+        let output = self
+            .input_routing
+            .seat
+            .get_pointer()
+            .and_then(|ptr| self.output_containing_global_point(ptr.current_location()))
+            .or_else(|| self.shell_effective_primary_output())
+            .or_else(|| self.leftmost_output())?;
+        let work = self.shell_maximize_work_area_global_for_output(&output)?;
+        Some(Self::bottom_centered_status_indicator_origin(
+            &work, None, width, height,
+        ))
+    }
+
+    fn shell_status_indicator_anchor_matches(app_id: &str, info: &WindowInfo) -> bool {
+        let app_id = app_id.trim().to_ascii_lowercase();
+        let candidate = info.app_id.trim().to_ascii_lowercase();
+        if !app_id.is_empty() && app_id == candidate {
+            return true;
+        }
+        candidate.contains("chrome")
+            || candidate.contains("chromium")
+            || candidate.contains("brave")
+            || candidate.contains("edge")
+    }
+
+    fn bottom_centered_status_indicator_origin(
+        work: &Rectangle<i32, Logical>,
+        anchor: Option<&Rectangle<i32, Logical>>,
+        width: i32,
+        height: i32,
+    ) -> (i32, i32) {
+        let margin = 24;
+        let target = anchor.unwrap_or(work);
+        let max_x = work.loc.x.saturating_add(work.size.w).saturating_sub(width);
+        let max_y = work
+            .loc
+            .y
+            .saturating_add(work.size.h)
+            .saturating_sub(height);
+        let x = target
+            .loc
+            .x
+            .saturating_add(target.size.w.saturating_sub(width) / 2)
+            .clamp(work.loc.x, max_x.max(work.loc.x));
+        let y = target
+            .loc
+            .y
+            .saturating_add(target.size.h)
+            .saturating_sub(height)
+            .saturating_sub(margin)
+            .clamp(work.loc.y, max_y.max(work.loc.y));
+        (x, y)
     }
 
     pub(super) fn workspace_auto_layout_frame_area_for_output(
@@ -85,7 +201,8 @@ impl CompositorState {
         if info.minimized || info.maximized || info.fullscreen {
             return false;
         }
-        if self.window_info_is_solid_shell_host(info) {
+        if self.window_info_is_solid_shell_host(info) || self.window_is_shell_status_indicator(info)
+        {
             return false;
         }
         info.app_id != "derp.debug" && info.app_id != "derp.settings"

@@ -1239,7 +1239,10 @@ impl CompositorState {
         let Some(info) = self.windows.window_registry.window_info(window_id) else {
             return;
         };
-        if info.minimized || self.window_info_is_solid_shell_host(&info) {
+        if info.minimized
+            || self.window_info_is_solid_shell_host(&info)
+            || self.window_is_shell_status_indicator(&info)
+        {
             return;
         }
         let Some(sid) = self
@@ -1277,6 +1280,7 @@ impl CompositorState {
                 surface_id: Some(sid),
                 window_id: Some(window_id),
             });
+            self.raise_shell_status_indicators();
             self.output_topology.space.elements().for_each(|e| {
                 if let DerpSpaceElem::Wayland(w) = e {
                     w.toplevel().unwrap().send_pending_configure();
@@ -1310,6 +1314,7 @@ impl CompositorState {
             self.windows.shell_pending_native_focus_window_id = Some(window_id);
         }
         self.emit_x11_window_updates(&x11, false, false);
+        self.raise_shell_status_indicators();
     }
 
     pub(super) fn shell_emit_window_state(&mut self, window_id: u32, minimized: bool) {

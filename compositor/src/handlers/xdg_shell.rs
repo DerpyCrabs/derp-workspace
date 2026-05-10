@@ -21,7 +21,7 @@ use smithay::{
     },
 };
 
-use crate::state::read_toplevel_tiling;
+use crate::state::{read_toplevel_tiling, shell_window_row_should_show};
 use crate::{chrome_bridge::ChromeEvent, derp_space::DerpSpaceElem, CompositorState};
 
 fn toplevel_title_app_id(surface: &ToplevelSurface) -> (String, String) {
@@ -219,6 +219,7 @@ impl XdgShellHandler for CompositorState {
             let output_name = current_info.output_name.clone();
             let pending_activation_focus =
                 self.windows.shell_pending_native_focus_window_id == Some(spawn_focus_wid);
+            let shell_status_indicator = self.window_is_shell_status_indicator(&current_info);
             if !(self
                 .workspace_layout
                 .scratchpad_windows
@@ -227,7 +228,9 @@ impl XdgShellHandler for CompositorState {
             {
                 self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: current_info });
             }
-            if !self
+            if shell_status_indicator {
+                self.raise_shell_status_indicators();
+            } else if !self
                 .workspace_layout
                 .scratchpad_windows
                 .contains_key(&spawn_focus_wid)
@@ -326,8 +329,16 @@ impl XdgShellHandler for CompositorState {
                 .map(|i| self.window_info_is_solid_shell_host(i))
                 .unwrap_or(false);
             let new_shell = self.window_info_is_solid_shell_host(&info);
+            let old_visible = old
+                .as_ref()
+                .map(shell_window_row_should_show)
+                .unwrap_or(false);
+            let new_visible = shell_window_row_should_show(&info);
             if new_shell && !old_shell {
                 self.shell_retract_phantom_shell_window(info.window_id);
+            } else if old_visible && !new_visible {
+                self.shell_retract_phantom_shell_window(info.window_id);
+                self.raise_shell_status_indicators();
             } else if !new_shell {
                 let window_id = info.window_id;
                 self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
@@ -352,8 +363,16 @@ impl XdgShellHandler for CompositorState {
                 .map(|i| self.window_info_is_solid_shell_host(i))
                 .unwrap_or(false);
             let new_shell = self.window_info_is_solid_shell_host(&info);
+            let old_visible = old
+                .as_ref()
+                .map(shell_window_row_should_show)
+                .unwrap_or(false);
+            let new_visible = shell_window_row_should_show(&info);
             if new_shell && !old_shell {
                 self.shell_retract_phantom_shell_window(info.window_id);
+            } else if old_visible && !new_visible {
+                self.shell_retract_phantom_shell_window(info.window_id);
+                self.raise_shell_status_indicators();
             } else if !new_shell {
                 let window_id = info.window_id;
                 self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });

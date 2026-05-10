@@ -75,6 +75,14 @@ function rustEnum(name, repr, values, prefix) {
   ].join('\n')
 }
 
+function rustConstArray(name, type, values) {
+  return [
+    `pub const ${name}: &[${type}] = &[`,
+    ...values.map((item) => `    ${item.name},`),
+    '];',
+  ].join('\n')
+}
+
 function tsObject(name, values) {
   return [
     `export const ${name} = {`,
@@ -135,10 +143,10 @@ function renderRust() {
   lines.push('')
   for (const item of schema.byteSizes) lines.push(scalarConstRust(item))
   lines.push('')
-  lines.push(`pub const SHELL_WIRE_MESSAGE_VALUES: &[u32] = &[${schema.messages.map((item) => item.name).join(', ')}];`)
-  lines.push(`pub const SHELL_SNAPSHOT_DOMAIN_VALUES: &[u32] = &[${schema.snapshot.domains.map((item) => item.name).join(', ')}];`)
-  lines.push(`pub const HOT_BATCH_TAG_VALUES: &[u8] = &[${schema.hotBatch.tags.map((item) => item.name).join(', ')}];`)
-  lines.push(`pub const SHELL_SHARED_STATE_KIND_VALUES: &[u32] = &[${schema.sharedState.kinds.map((item) => item.name).join(', ')}];`)
+  lines.push(rustConstArray('SHELL_WIRE_MESSAGE_VALUES', 'u32', schema.messages))
+  lines.push(rustConstArray('SHELL_SNAPSHOT_DOMAIN_VALUES', 'u32', schema.snapshot.domains))
+  lines.push(rustConstArray('HOT_BATCH_TAG_VALUES', 'u8', schema.hotBatch.tags))
+  lines.push(rustConstArray('SHELL_SHARED_STATE_KIND_VALUES', 'u32', schema.sharedState.kinds))
   lines.push('')
   return `${lines.join('\n')}`
 }

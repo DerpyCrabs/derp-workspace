@@ -150,6 +150,12 @@ impl WindowManagementState {
             .collect();
         missing.sort_unstable();
         missing.extend(ordered);
+        missing.sort_by_key(|window_id| {
+            self.window_registry
+                .window_info(*window_id)
+                .map(|info| window_title_is_screen_sharing_indicator(&info.title))
+                .unwrap_or(false)
+        });
         missing
     }
 
@@ -201,7 +207,10 @@ impl WindowManagementState {
         let Some(info) = self.window_registry.window_info(window_id) else {
             return false;
         };
-        if info.minimized || Self::window_info_is_solid_shell_host(&info, shell_ipc_peer_pid) {
+        if info.minimized
+            || Self::window_info_is_solid_shell_host(&info, shell_ipc_peer_pid)
+            || !shell_window_row_should_show(&info)
+        {
             return false;
         }
         if self.window_registry.is_shell_hosted(window_id) {

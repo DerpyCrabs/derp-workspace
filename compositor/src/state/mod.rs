@@ -92,7 +92,7 @@ use smithay::{
         xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
     },
     xwayland::{
-        xwm::{Reorder, ResizeEdge, X11Window, XwmId},
+        xwm::{Reorder, ResizeEdge, WmWindowType, X11Window, XwmId},
         X11Surface, X11Wm, XwmHandler,
     },
 };
@@ -182,8 +182,15 @@ pub(crate) fn toplevel_should_defer_initial_map(
     app_id.trim().is_empty()
 }
 
-pub(crate) fn shell_window_row_should_show(_info: &WindowInfo) -> bool {
-    true
+pub(crate) fn window_title_is_screen_sharing_indicator(title: &str) -> bool {
+    let title = title.trim().to_ascii_lowercase();
+    title.contains(" is sharing your screen")
+        || title.contains(" is sharing a window")
+        || title.contains(" is sharing your tab")
+}
+
+pub(crate) fn shell_window_row_should_show(info: &WindowInfo) -> bool {
+    !window_title_is_screen_sharing_indicator(&info.title)
 }
 
 #[derive(Debug)]
@@ -2199,18 +2206,22 @@ impl CompositorState {
             } else {
                 app_id
             };
-            let _ = self.windows.window_registry.set_title(wl0, title);
-            let _ = self.windows.window_registry.set_app_id(wl0, app_id);
+            let _ = self.windows.window_registry.set_title(wl0, title.clone());
+            let _ = self.windows.window_registry.set_app_id(wl0, app_id.clone());
             let wl0 = wl0.clone();
-            let map_x = pending
-                .initial_client_rect
-                .as_ref()
-                .map(|rect| rect.loc.x)
+            let status_indicator_location = {
+                let geo = pending.window.geometry();
+                self.shell_status_indicator_initial_location(
+                    &title, &app_id, geo.size.w, geo.size.h,
+                )
+            };
+            let map_x = status_indicator_location
+                .map(|loc| loc.0)
+                .or_else(|| pending.initial_client_rect.as_ref().map(|rect| rect.loc.x))
                 .unwrap_or(pending.map_x);
-            let map_y = pending
-                .initial_client_rect
-                .as_ref()
-                .map(|rect| rect.loc.y)
+            let map_y = status_indicator_location
+                .map(|loc| loc.1)
+                .or_else(|| pending.initial_client_rect.as_ref().map(|rect| rect.loc.y))
                 .unwrap_or(pending.map_y);
             self.output_topology.space.map_element(
                 DerpSpaceElem::Wayland(pending.window.clone()),
@@ -2239,6 +2250,7 @@ impl CompositorState {
             let output_name = current_info.output_name.clone();
             let pending_activation_focus =
                 self.windows.shell_pending_native_focus_window_id == Some(spawn_focus_wid);
+            let shell_status_indicator = self.window_is_shell_status_indicator(&current_info);
             if !(self
                 .workspace_layout
                 .scratchpad_windows
@@ -2247,7 +2259,9 @@ impl CompositorState {
             {
                 self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: current_info });
             }
-            if !self
+            if shell_status_indicator {
+                self.raise_shell_status_indicators();
+            } else if !self
                 .workspace_layout
                 .scratchpad_windows
                 .contains_key(&spawn_focus_wid)
@@ -2297,6 +2311,9 @@ impl CompositorState {
     }
 
     pub(crate) fn native_window_uses_shell_chrome(&self, info: &WindowInfo) -> bool {
+        if self.window_is_shell_status_indicator(info) {
+            return false;
+        }
         if self.native_window_shell_decoration_disabled(info.window_id) {
             return self.workspace_window_has_group_chrome(info.window_id);
         }
@@ -2886,7 +2903,9 @@ impl CompositorState {
             }
             ChromeEvent::FocusChanged { window_id, .. } => window_id
                 .and_then(|w| self.windows.window_registry.window_info(w))
-                .map(|i| self.window_info_is_solid_shell_host(&i))
+                .map(|i| {
+                    self.window_info_is_solid_shell_host(&i) || !shell_window_row_should_show(&i)
+                })
                 .unwrap_or(false),
             ChromeEvent::WindowStateChanged { info, .. } => {
                 self.window_info_is_solid_shell_host(info) || !shell_window_row_should_show(info)

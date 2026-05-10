@@ -7,6 +7,7 @@ import {
   compositorWindowStack,
   copyArtifactFile,
   GREEN_NATIVE_TITLE,
+  KEY,
   NATIVE_APP_ID,
   pickMonitorMove,
   RED_NATIVE_TITLE,
@@ -31,6 +32,7 @@ import {
   getJson,
   getShellHtml,
   getSnapshots,
+  keyAction,
   movePoint,
   movePointRelative,
   openDebug,
@@ -44,15 +46,20 @@ import {
   readPngRgba,
   resetPerfCounters,
   runKeybind,
+  shellQuote,
   shellWindowStack,
   spawnCommand,
   spawnNativeWindow,
   shellWindowById,
   syncTest,
+  tabGroupByWindow,
+  taskbarEntry,
   taskbarForMonitor,
   taskbarWindowOrderOnMonitor,
   waitFor,
   waitForNativeFocus,
+  waitForWindowSwitcherClosed,
+  waitForWindowSwitcherOpen,
   waitForShellUiFocus,
   waitForWindowRaised,
   waitForWindowGone,
@@ -120,11 +127,20 @@ async function assertRoundedCsdTransparentOutside(
   label: string,
   capture: { x: number; y: number; width: number; height: number },
   window: { x: number; y: number; width: number; height: number },
+  cursor?: { x: number; y: number; size?: number | null },
 ) {
   const png = await readPngRgba(path)
   const scaleX = png.width / capture.width
   const scaleY = png.height / capture.height
   const radius = Math.min(64, Math.max(18, Math.min(window.width, window.height) / 9))
+  const edgeTolerance = 1 / Math.min(scaleX, scaleY)
+  const cursorHotspot = cursor
+    ? {
+        x: (cursor.x - capture.x) * scaleX,
+        y: (cursor.y - capture.y) * scaleY,
+        size: Math.max(24, cursor.size ?? 24) * Math.max(scaleX, scaleY),
+      }
+    : null
   const colorAt = (x: number, y: number): [number, number, number] => {
     const index = (y * png.width + x) * 4
     return [png.data[index], png.data[index + 1], png.data[index + 2]]
@@ -163,10 +179,10 @@ async function assertRoundedCsdTransparentOutside(
       const localX = x - window.x
       const localY = y - window.y
       let shouldBeClear =
-        x < window.x ||
-        y < window.y ||
-        x >= window.x + window.width ||
-        y >= window.y + window.height
+        x < window.x - edgeTolerance ||
+        y < window.y - edgeTolerance ||
+        x >= window.x + window.width + edgeTolerance ||
+        y >= window.y + window.height + edgeTolerance
       if (!shouldBeClear) {
         const left = localX < radius
         const right = localX >= window.width - radius
@@ -181,6 +197,15 @@ async function assertRoundedCsdTransparentOutside(
         }
       }
       if (!shouldBeClear) continue
+      if (
+        cursorHotspot &&
+        px >= cursorHotspot.x - cursorHotspot.size &&
+        px <= cursorHotspot.x + cursorHotspot.size * 2.5 &&
+        py >= cursorHotspot.y - cursorHotspot.size &&
+        py <= cursorHotspot.y + cursorHotspot.size * 3
+      ) {
+        continue
+      }
       checked += 1
       const delta = channelDelta(colorAt(px, py), referenceFor(px, py, x, y, localX, localY))
       maxObservedChannelDelta = Math.max(maxObservedChannelDelta, delta)
@@ -749,6 +774,126 @@ async function waitForFootWindow(base: string, knownWindowIds: Set<number>, labe
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
+  test('screen sharing indicator stays native-only and above managed windows', async ({ base, state }) => {
+    const stamp = Date.now()
+    const normal = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Managed Native ${stamp}`,
+      token: `managed-native-${stamp}`,
+      strip: 'green',
+      width: 520,
+      height: 340,
+    })
+    const alternate = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Alternate Native ${stamp}`,
+      token: `alternate-native-${stamp}`,
+      strip: 'red',
+      width: 520,
+      height: 340,
+    })
+    const indicator = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: 'meet.example.test is sharing your screen.',
+      appId: 'google-chrome-unstable',
+      token: `sharing-indicator-${stamp}`,
+      strip: 'blue',
+      width: 610,
+      height: 64,
+      moveOnHeaderPress: true,
+    })
+    state.spawnedNativeWindowIds.add(normal.window.window_id)
+    state.spawnedNativeWindowIds.add(alternate.window.window_id)
+    state.spawnedNativeWindowIds.add(indicator.window.window_id)
+
+    const hidden = await waitFor(
+      'wait for sharing indicator hidden from shell model',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const compositorIndicator = compositorWindowById(snapshots.compositor, indicator.window.window_id)
+        if (!compositorIndicator) return null
+        if (shellWindowById(snapshots.shell, indicator.window.window_id)) return null
+        if (taskbarEntry(snapshots.shell, indicator.window.window_id)) return null
+        if (tabGroupByWindow(snapshots.shell, indicator.window.window_id)) return null
+        return snapshots
+      },
+      5000,
+      50,
+    )
+    const hiddenIndicator = compositorWindowById(hidden.compositor, indicator.window.window_id)
+    assert(hiddenIndicator !== null, 'sharing indicator should exist in compositor')
+    const output = outputForWindow(hidden.compositor, hiddenIndicator)
+    assert(output !== null, 'sharing indicator should have an output')
+    const usableY = output.usable_y ?? output.y
+    const usableHeight = output.usable_height ?? output.height
+    assert(
+      hiddenIndicator.y >= usableY + Math.floor(usableHeight * 0.55),
+      `sharing indicator should open near bottom of output: ${JSON.stringify({ indicator: hiddenIndicator, output })}`,
+    )
+
+    const dragStart = {
+      x: Math.round(hiddenIndicator.x + Math.min(hiddenIndicator.width, 180) / 2),
+      y: Math.round(hiddenIndicator.y + Math.min(hiddenIndicator.height, 24) / 2),
+    }
+    await movePoint(base, dragStart.x, dragStart.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    await movePoint(base, dragStart.x + 90, dragStart.y + 36)
+    const duringDrag = await waitFor(
+      'wait for sharing indicator native move',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        if (snapshots.compositor.shell_move_window_id !== indicator.window.window_id) return null
+        return snapshots
+      },
+      1000,
+      20,
+    )
+    await movePoint(base, dragStart.x + 180, dragStart.y + 60)
+    await pointerButton(base, BTN_LEFT, 'release')
+    await syncTest(base)
+    const afterDrag = await waitFor(
+      'wait for sharing indicator drag position',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const moved = compositorWindowById(snapshots.compositor, indicator.window.window_id)
+        if (!moved) return null
+        if (Math.abs(moved.x - hiddenIndicator.x) < 20 && Math.abs(moved.y - hiddenIndicator.y) < 20) return null
+        if (shellWindowById(snapshots.shell, indicator.window.window_id)) return null
+        if (taskbarEntry(snapshots.shell, indicator.window.window_id)) return null
+        if (tabGroupByWindow(snapshots.shell, indicator.window.window_id)) return null
+        return { snapshots, moved }
+      },
+      2000,
+      50,
+    )
+
+    await raiseTaskbarWindow(base, normal.window.window_id)
+    const raised = await waitForWindowRaised(base, normal.window.window_id)
+    const stack = compositorWindowStack(raised.compositor)
+    assert(
+      stack[0] === indicator.window.window_id,
+      `sharing indicator should remain topmost after managed window raise: ${JSON.stringify(stack)}`,
+    )
+
+    await keyAction(base, KEY.alt, 'press')
+    await keyAction(base, KEY.tab, 'tap')
+    const switcher = await waitForWindowSwitcherOpen(base)
+    assert(
+      switcher.window_switcher_selected_window_id !== indicator.window.window_id,
+      'window switcher should not select sharing indicator',
+    )
+    await keyAction(base, KEY.alt, 'release')
+    await waitForWindowSwitcherClosed(base)
+
+    await writeJsonArtifact('screen-sharing-indicator-native-only.json', {
+      normal: normal.window,
+      alternate: alternate.window,
+      indicator: indicator.window,
+      hiddenIndicator,
+      movedIndicator: afterDrag.moved,
+      stack,
+      switcherSelectedWindowId: switcher.window_switcher_selected_window_id,
+      duringDragCompositor: duringDrag.compositor,
+    })
+  })
+
   test('spawn native red and green windows', async ({ base, state }) => {
     const { red, green } = await ensureNativePair(base, state)
     await writeJsonArtifact('native-red-spawn.json', red.snapshot)
@@ -1072,7 +1217,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('real foot native decoration seams stay stable after cursor sweep', async ({ base, state }) => {
-    await spawnCommand(base, 'foot --title derp-native-seam-foot')
+    await spawnCommand(base, `foot --title derp-native-seam-foot sh -c ${shellQuote('printf "\\033[2J\\033[H"; sleep 60')}`)
     const opened = await waitForFootWindow(base, state.knownWindowIds, 'wait for foot native seam window')
     const windowId = opened.window.window_id
     state.knownWindowIds.add(windowId)
@@ -2236,6 +2381,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       height: Math.ceil(visual.height + 20),
     }
     const screenshot = await captureScreenshotRect(base, capture)
+    const pointer = duringDrag.compositor.pointer
+    if (!pointer) throw new Error('transparent CSD drag pointer snapshot missing')
     const transparentCorners = await assertRoundedCsdTransparentOutside(
       screenshot.path,
       'transparent CSD drag corners',
@@ -2245,6 +2392,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
         y: visual.y,
         width: visual.width,
         height: visual.height,
+      },
+      {
+        x: pointer.x,
+        y: pointer.y,
+        size: duringDrag.compositor.cursor_size,
       },
     )
     await pointerButton(base, BTN_LEFT, 'release')

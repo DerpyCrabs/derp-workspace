@@ -34,6 +34,66 @@ impl CompositorState {
             .x11_window_should_hide_to_tray_on_close(info)
     }
 
+    pub(crate) fn x11_window_is_shell_status_indicator(&self, window: &X11Surface) -> bool {
+        window.is_above()
+            || window.is_skip_taskbar()
+            || matches!(
+                window.window_type(),
+                Some(
+                    WmWindowType::Notification
+                        | WmWindowType::Utility
+                        | WmWindowType::Tooltip
+                        | WmWindowType::Splash
+                )
+            )
+    }
+
+    pub(crate) fn window_is_shell_status_indicator(&self, info: &WindowInfo) -> bool {
+        if window_title_is_screen_sharing_indicator(&info.title) {
+            return true;
+        }
+        self.find_x11_window_by_window_id(info.window_id)
+            .is_some_and(|window| self.x11_window_is_shell_status_indicator(&window))
+    }
+
+    pub(crate) fn raise_shell_status_indicators(&mut self) -> bool {
+        let mut raised = false;
+        let mut indicators: Vec<(u32, u32)> = self
+            .windows
+            .window_registry
+            .all_infos()
+            .into_iter()
+            .filter(|info| !info.minimized && self.window_is_shell_status_indicator(info))
+            .map(|info| (self.shell_window_stack_z(info.window_id), info.window_id))
+            .collect();
+        indicators.sort_unstable();
+        for (_, window_id) in indicators {
+            let Some(sid) = self
+                .windows
+                .window_registry
+                .surface_id_for_window(window_id)
+            else {
+                continue;
+            };
+            if let Some(window) = self.find_window_by_surface_id(sid) {
+                self.output_topology
+                    .space
+                    .raise_element(&DerpSpaceElem::Wayland(window.clone()), false);
+                self.shell_window_stack_touch(window_id);
+                raised = true;
+                continue;
+            }
+            if let Some(x11) = self.find_x11_window_by_surface_id(sid) {
+                self.output_topology
+                    .space
+                    .raise_element(&DerpSpaceElem::X11(x11.clone()), false);
+                self.shell_window_stack_touch(window_id);
+                raised = true;
+            }
+        }
+        raised
+    }
+
     pub(crate) fn shell_x11_window_is_tray_hidden(&self, window_id: u32) -> bool {
         self.tray_notifications
             .shell_x11_window_is_tray_hidden(window_id)
@@ -411,6 +471,19 @@ impl CompositorState {
                 self.workspace_auto_layout_initial_client_rect_for_window(&output.name(), window_id)
             {
                 return client_rect;
+            }
+            if self.x11_window_is_shell_status_indicator(window) {
+                if let Some(info) = self.windows.window_registry.window_info(window_id) {
+                    if let Some((x, y)) = self.shell_status_indicator_initial_location(
+                        &info.title,
+                        &info.app_id,
+                        rect.size.w,
+                        rect.size.h,
+                    ) {
+                        rect.loc = Point::from((x, y));
+                        return rect;
+                    }
+                }
             }
         }
         rect.size.w = rect.size.w.min(work.size.w.max(1));

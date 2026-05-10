@@ -30,6 +30,7 @@ impl XWaylandShellHandler for CompositorState {
                     .window_info(window_id)
                     .unwrap_or(info);
                 let output_name = current_info.output_name.clone();
+                let shell_status_indicator = self.window_is_shell_status_indicator(&current_info);
                 if !(self
                     .workspace_layout
                     .scratchpad_windows
@@ -38,7 +39,9 @@ impl XWaylandShellHandler for CompositorState {
                 {
                     self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: current_info });
                 }
-                if !self
+                if shell_status_indicator {
+                    self.raise_shell_status_indicators();
+                } else if !self
                     .workspace_layout
                     .scratchpad_windows
                     .contains_key(&window_id)
@@ -117,6 +120,8 @@ impl XwmHandler for CompositorState {
                         .window_info(window_id)
                         .unwrap_or(info);
                     let output_name = current_info.output_name.clone();
+                    let shell_status_indicator =
+                        self.window_is_shell_status_indicator(&current_info);
                     if !(self
                         .workspace_layout
                         .scratchpad_windows
@@ -127,7 +132,9 @@ impl XwmHandler for CompositorState {
                             info: current_info,
                         });
                     }
-                    if !self
+                    if shell_status_indicator {
+                        self.raise_shell_status_indicators();
+                    } else if !self
                         .workspace_layout
                         .scratchpad_windows
                         .contains_key(&window_id)
@@ -278,12 +285,18 @@ impl XwmHandler for CompositorState {
             smithay::xwayland::xwm::WmWindowProperty::Title
                 | smithay::xwayland::xwm::WmWindowProperty::Class
                 | smithay::xwayland::xwm::WmWindowProperty::MotifHints
+                | smithay::xwayland::xwm::WmWindowProperty::WindowType
                 | smithay::xwayland::xwm::WmWindowProperty::Pid
         );
         let updated = self.emit_x11_window_updates(&window, false, force_metadata_emit);
         if force_metadata_emit {
             if let Some(info) = updated {
-                self.scratchpad_consider_window(info.window_id);
+                if self.window_is_shell_status_indicator(&info) {
+                    self.shell_retract_phantom_shell_window(info.window_id);
+                    self.raise_shell_status_indicators();
+                } else {
+                    self.scratchpad_consider_window(info.window_id);
+                }
             }
         }
     }
