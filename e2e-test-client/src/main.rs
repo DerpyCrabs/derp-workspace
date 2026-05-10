@@ -80,12 +80,14 @@ use wayland_protocols::wp::{
         wp_tearing_control_manager_v1::WpTearingControlManagerV1, wp_tearing_control_v1,
     },
 };
-use wayland_protocols::xdg::toplevel_icon::v1::client::{
-    xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1, xdg_toplevel_icon_v1::XdgToplevelIconV1,
-};
 use wayland_protocols::xdg::decoration::zv1::client::{
     zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
-    zxdg_toplevel_decoration_v1::{Request as XdgDecorationRequest, ZxdgToplevelDecorationV1},
+    zxdg_toplevel_decoration_v1::{
+        Mode as XdgDecorationMode, Request as XdgDecorationRequest, ZxdgToplevelDecorationV1,
+    },
+};
+use wayland_protocols::xdg::toplevel_icon::v1::client::{
+    xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1, xdg_toplevel_icon_v1::XdgToplevelIconV1,
 };
 use wayland_protocols_misc::server_decoration::client::{
     org_kde_kwin_server_decoration::{Mode as KdeServerDecorationMode, OrgKdeKwinServerDecoration},
@@ -258,6 +260,16 @@ struct Args {
     kde_decoration_none: bool,
     #[arg(long, default_value_t = false)]
     xdg_decoration_raw_none: bool,
+    #[arg(long, default_value_t = false)]
+    xdg_decoration_client_side: bool,
+    #[arg(long, default_value_t = false)]
+    move_on_header_press: bool,
+    #[arg(long, default_value_t = false)]
+    rounded_corners: bool,
+    #[arg(long, default_value_t = false)]
+    no_border: bool,
+    #[arg(long, default_value_t = false)]
+    solid_client: bool,
     #[arg(long)]
     gesture_status_json: Option<String>,
     #[arg(long)]
@@ -396,7 +408,8 @@ fn main() {
     } else {
         None
     };
-    let xdg_decoration_manager = if args.xdg_decoration_raw_none {
+    let xdg_decoration_manager = if args.xdg_decoration_raw_none || args.xdg_decoration_client_side
+    {
         Some(
             globals
                 .bind::<ZxdgDecorationManagerV1, _, _>(&qh, 1..=1, ())
@@ -412,7 +425,7 @@ fn main() {
     }
 
     let surface = compositor_state.create_surface(&qh);
-    let window_decorations = if args.xdg_decoration_raw_none {
+    let window_decorations = if args.xdg_decoration_raw_none || args.xdg_decoration_client_side {
         WindowDecorations::None
     } else {
         WindowDecorations::RequestServer
@@ -424,11 +437,14 @@ fn main() {
     window.set_max_size(Some((args.width, args.height)));
     if let Some(manager) = xdg_decoration_manager.as_ref() {
         let decoration = manager.get_toplevel_decoration(window.xdg_toplevel(), &qh, ());
+        let mode = if args.xdg_decoration_raw_none {
+            wayland_client::WEnum::Unknown(0)
+        } else {
+            wayland_client::WEnum::Value(XdgDecorationMode::ClientSide)
+        };
         decoration
-            .send_request(XdgDecorationRequest::SetMode {
-                mode: wayland_client::WEnum::Unknown(0),
-            })
-            .expect("send raw xdg decoration mode none");
+            .send_request(XdgDecorationRequest::SetMode { mode })
+            .expect("send xdg decoration mode");
     }
     if let Some(manager) = kde_server_decoration_manager.as_ref() {
         let decoration = manager.create(window.wl_surface(), &qh, ());
@@ -523,6 +539,10 @@ fn main() {
         activation_token_file: args.activation_token_file,
         request_token_on_pointer_enter: args.request_token_on_pointer_enter,
         spawn_on_press_requested: false,
+        move_on_header_press: args.move_on_header_press,
+        rounded_corners: args.rounded_corners,
+        no_border: args.no_border,
+        solid_client: args.solid_client,
         pointer_constraint_mode,
         fifo,
         presentation,
@@ -698,6 +718,9 @@ impl LayerPanelClient {
             self.height,
             &self.token,
             [40, 180, 220, 255],
+            false,
+            false,
+            false,
         );
         self.surface
             .damage_buffer(0, 0, self.width as i32, self.height as i32);
@@ -740,6 +763,10 @@ struct TestClient {
     activation_token_file: Option<String>,
     request_token_on_pointer_enter: bool,
     spawn_on_press_requested: bool,
+    move_on_header_press: bool,
+    rounded_corners: bool,
+    no_border: bool,
+    solid_client: bool,
     pointer_constraint_mode: PointerConstraintMode,
     fifo: Option<WpFifoV1>,
     presentation: Option<WpPresentation>,
@@ -850,6 +877,9 @@ impl TestClient {
             self.height,
             &self.token,
             self.strip_color,
+            self.rounded_corners,
+            self.no_border,
+            self.solid_client,
         );
 
         self.window
@@ -2446,7 +2476,16 @@ fn run_explicit_sync_protocol_error(mode: &str, args: &Args) {
     }
 }
 
-fn draw_pattern(canvas: &mut [u8], width: u32, height: u32, token: &str, strip_color: [u8; 4]) {
+fn draw_pattern(
+    canvas: &mut [u8],
+    width: u32,
+    height: u32,
+    token: &str,
+    strip_color: [u8; 4],
+    rounded_corners: bool,
+    no_border: bool,
+    solid_client: bool,
+) {
     let seed = hash_token(token);
     let bg = color(seed, 0x10);
     let accent_a = color(seed.rotate_left(11), 0x28);
@@ -2456,7 +2495,11 @@ fn draw_pattern(canvas: &mut [u8], width: u32, height: u32, token: &str, strip_c
     let light = [244, 244, 248, 255];
     let width_i = width as usize;
     let height_i = height as usize;
-    let border_px = (width.min(height) / 40).max(3) as usize;
+    let border_px = if no_border {
+        0
+    } else {
+        (width.min(height) / 40).max(3) as usize
+    };
     let header_h = (height / 7).max(24) as usize;
     let strip_h = (height / 16).max(18) as usize;
     let footer_h = (height / 8).max(28) as usize;
@@ -2469,7 +2512,9 @@ fn draw_pattern(canvas: &mut [u8], width: u32, height: u32, token: &str, strip_c
 
     for y in 0..height_i {
         for x in 0..width_i {
-            let rgba = if x < border_px
+            let mut rgba = if solid_client {
+                strip_color
+            } else if x < border_px
                 || y < border_px
                 || x >= width_i.saturating_sub(border_px)
                 || y >= height_i.saturating_sub(border_px)
@@ -2510,6 +2555,37 @@ fn draw_pattern(canvas: &mut [u8], width: u32, height: u32, token: &str, strip_c
                 }
                 rgba
             };
+            if rounded_corners {
+                let radius = (width.min(height) / 9).clamp(18, 64) as usize;
+                let left = x < radius;
+                let right = x >= width_i.saturating_sub(radius);
+                let top = y < radius;
+                let bottom = y >= height_i.saturating_sub(radius);
+                if (left || right) && (top || bottom) {
+                    let cx = if left {
+                        radius
+                    } else {
+                        width_i.saturating_sub(radius + 1)
+                    };
+                    let cy = if top {
+                        radius
+                    } else {
+                        height_i.saturating_sub(radius + 1)
+                    };
+                    let dx = x.abs_diff(cx);
+                    let dy = y.abs_diff(cy);
+                    let dist2 = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
+                    let outer = radius.saturating_mul(radius);
+                    let inner = radius
+                        .saturating_sub(2)
+                        .saturating_mul(radius.saturating_sub(2));
+                    if dist2 > outer {
+                        rgba = [0, 0, 0, 0];
+                    } else if dist2 > inner {
+                        rgba[3] = 128;
+                    }
+                }
+            }
             put_pixel(canvas, width_i, x, y, rgba);
         }
     }
@@ -3085,8 +3161,17 @@ impl PointerHandler for TestClient {
                         self.request_spawn_activation(qh, serial, seat, event.surface.clone());
                     }
                 }
-                PointerEventKind::Press { serial, .. }
-                | PointerEventKind::Release { serial, .. } => {
+                PointerEventKind::Press { serial, button, .. } => {
+                    self.request_spawn_activation(qh, serial, seat.clone(), event.surface.clone());
+                    if self.move_on_header_press
+                        && button == 0x110
+                        && event.position.1 >= 0.0
+                        && event.position.1 <= f64::from((self.height / 7).max(24))
+                    {
+                        self.window.move_(&seat, serial);
+                    }
+                }
+                PointerEventKind::Release { serial, .. } => {
                     self.request_spawn_activation(qh, serial, seat, event.surface.clone());
                 }
                 _ => {}

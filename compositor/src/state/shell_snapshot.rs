@@ -520,7 +520,7 @@ impl CompositorState {
                 ));
             }
             let shell_decoration_disabled = record.kind != WindowKind::ShellHosted
-                && self.native_window_shell_decoration_disabled(info.window_id);
+                && !self.native_window_uses_shell_chrome(&info);
             if !info.minimized
                 && !info.fullscreen
                 && frame.size.h <= client.size.h
@@ -761,7 +761,12 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_native_drag_preview_begin(&mut self, window_id: u32) {
-        if self.windows.window_registry.is_shell_hosted(window_id) {
+        let preview_allowed = self
+            .windows
+            .window_registry
+            .window_info(window_id)
+            .is_some_and(|info| self.native_window_uses_shell_chrome(&info));
+        if self.windows.window_registry.is_shell_hosted(window_id) || !preview_allowed {
             if let Some(preview) = self.input_routing.shell_native_drag_preview.take() {
                 self.shell_send_native_drag_preview_detail(
                     preview.window_id,
@@ -1032,6 +1037,9 @@ impl CompositorState {
             .windows
             .window_registry
             .window_info(preview.window_id)?;
+        if !self.native_window_uses_shell_chrome(&info) {
+            return None;
+        }
         Some(self.shell_native_outer_global_rect(&info))
     }
 
@@ -1122,6 +1130,7 @@ impl CompositorState {
             interaction_visual(self.input_routing.shell_move_window_id),
             interaction_visual(self.input_routing.shell_resize_window_id),
             self.shell_window_switcher_effective_selected_window_id(),
+            self.input_routing.shell_super_held,
         )
     }
 

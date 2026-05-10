@@ -1281,6 +1281,7 @@ pub fn encode_compositor_interaction_state(
     move_visual: Option<CompositorInteractionVisual>,
     resize_visual: Option<CompositorInteractionVisual>,
     window_switcher_selected_window_id: u32,
+    super_held: bool,
 ) -> Vec<u8> {
     let body_len = COMPOSITOR_INTERACTION_STATE_BYTES as u32;
     let mut v = Vec::with_capacity(4 + body_len as usize);
@@ -1321,6 +1322,7 @@ pub fn encode_compositor_interaction_state(
     encode_visual(&mut v, resize_visual);
     v.extend_from_slice(&window_switcher_selected_window_id.to_le_bytes());
     v.extend_from_slice(&interaction_serial.to_le_bytes());
+    v.extend_from_slice(&(super_held as u32).to_le_bytes());
     v
 }
 
@@ -2366,6 +2368,7 @@ fn decode_compositor_to_shell_body(
         }
         MSG_COMPOSITOR_INTERACTION_STATE => {
             if body.len() != COMPOSITOR_INTERACTION_STATE_BYTES_V1
+                && body.len() != COMPOSITOR_INTERACTION_STATE_BYTES_V2
                 && body.len() != COMPOSITOR_INTERACTION_STATE_BYTES
             {
                 return Err(DecodeError::BadCompositorToShellPayload);
@@ -2410,7 +2413,7 @@ fn decode_compositor_to_shell_body(
             )
             .read_u32()
             .ok_or(DecodeError::BadCompositorToShellPayload)?;
-            let interaction_serial = if body.len() == COMPOSITOR_INTERACTION_STATE_BYTES {
+            let interaction_serial = if body.len() >= COMPOSITOR_INTERACTION_STATE_BYTES_V2 {
                 WireCursor::new(
                     body.get(80..88)
                         .ok_or(DecodeError::BadCompositorToShellPayload)?,
@@ -2419,6 +2422,17 @@ fn decode_compositor_to_shell_body(
                 .ok_or(DecodeError::BadCompositorToShellPayload)?
             } else {
                 0
+            };
+            let super_held = if body.len() == COMPOSITOR_INTERACTION_STATE_BYTES {
+                WireCursor::new(
+                    body.get(88..92)
+                        .ok_or(DecodeError::BadCompositorToShellPayload)?,
+                )
+                .read_u32()
+                .ok_or(DecodeError::BadCompositorToShellPayload)?
+                    != 0
+            } else {
+                false
             };
             Ok(DecodedCompositorToShellMessage::InteractionState {
                 revision,
@@ -2432,6 +2446,7 @@ fn decode_compositor_to_shell_body(
                 move_visual,
                 resize_visual,
                 window_switcher_selected_window_id,
+                super_held,
             })
         }
         MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW => {
@@ -3448,7 +3463,7 @@ mod tests {
             encode_compositor_workspace_state(1, "{}").unwrap(),
             encode_compositor_shell_hosted_app_state(1, "{}").unwrap(),
             encode_compositor_command_palette_state(1, "{}").unwrap(),
-            encode_compositor_interaction_state(1, 2, 0, 0, 0, 0, 0, 0, None, None, 0),
+            encode_compositor_interaction_state(1, 2, 0, 0, 0, 0, 0, 0, None, None, 0, false),
             encode_compositor_native_drag_preview(1, 1, "C:\\tmp\\preview.png").unwrap(),
             encode_compositor_tray_hints(1, 24, 24),
             encode_compositor_tray_sni(&[TraySniItemWire {

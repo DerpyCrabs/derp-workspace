@@ -56,14 +56,20 @@ impl CompositorState {
         ))
     }
 
-    pub(super) fn workspace_auto_layout_client_rect_from_frame_rect(
+    pub(super) fn workspace_auto_layout_client_rect_from_frame_rect_for_window(
         &self,
+        window_id: u32,
         rect: Rectangle<i32, Logical>,
     ) -> Rectangle<i32, Logical> {
         WorkspaceLayoutState::workspace_auto_layout_client_rect_from_frame_rect(
             rect,
-            self.shell_osr.shell_chrome_titlebar_h,
+            self.native_window_shell_chrome_titlebar_h(window_id),
         )
+    }
+
+    pub(super) fn workspace_window_has_group_chrome(&self, window_id: u32) -> bool {
+        self.workspace_layout
+            .workspace_window_has_group_chrome(window_id)
     }
 
     pub(super) fn workspace_monitor_layout_state_for_output(
@@ -210,10 +216,9 @@ impl CompositorState {
             self.workspace_auto_layout_window_ids_for_output(output_name, Some(window_id));
         let frame_rects =
             self.workspace_compute_auto_layout_frame_rects(layout_state, &window_ids, work_area);
-        frame_rects
-            .get(&window_id)
-            .copied()
-            .map(|rect| self.workspace_auto_layout_client_rect_from_frame_rect(rect))
+        frame_rects.get(&window_id).copied().map(|rect| {
+            self.workspace_auto_layout_client_rect_from_frame_rect_for_window(window_id, rect)
+        })
     }
 
     pub(super) fn workspace_set_pre_tile_geometry(
@@ -499,7 +504,9 @@ impl CompositorState {
                     height: info.height.max(1),
                 },
             );
-            let client_rect = self.workspace_auto_layout_client_rect_from_frame_rect(frame_rect);
+            let client_rect = self.workspace_auto_layout_client_rect_from_frame_rect_for_window(
+                window_id, frame_rect,
+            );
             let target_x = client_rect.loc.x;
             let target_y = client_rect.loc.y;
             let target_w = client_rect.size.w.max(1);
@@ -620,7 +627,9 @@ impl CompositorState {
             let Some(frame_rect) = frame_rects.get(&window_id).copied() else {
                 continue;
             };
-            let client_rect = self.workspace_auto_layout_client_rect_from_frame_rect(frame_rect);
+            let client_rect = self.workspace_auto_layout_client_rect_from_frame_rect_for_window(
+                window_id, frame_rect,
+            );
             let target_x = client_rect.loc.x;
             let target_y = client_rect.loc.y;
             let target_w = client_rect.size.w.max(1);
@@ -751,8 +760,11 @@ impl CompositorState {
                         height: frame_rect.size.h.max(1),
                     },
                 );
-                let client_rect =
-                    self.workspace_auto_layout_client_rect_from_frame_rect(frame_rect);
+                let client_rect = self
+                    .workspace_auto_layout_client_rect_from_frame_rect_for_window(
+                        entry.window_id,
+                        frame_rect,
+                    );
                 self.shell_apply_global_client_rect(entry.window_id, client_rect, 0);
                 applied = true;
             }

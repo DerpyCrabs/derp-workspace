@@ -225,6 +225,58 @@ function mergeTargetFromTabAtPoint(
   return null
 }
 
+function mergeTargetFromGroupDropStripAtPoint(
+  state: WorkspaceSnapshot,
+  draggedWindowId: number,
+  clientX: number,
+  clientY: number,
+  ignoreDraggedWindowFrame: boolean,
+): TabMergeTarget | null {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return null
+  const strips = document.querySelectorAll('[data-workspace-group-drop-strip]')
+  for (const strip of strips) {
+    if (!(strip instanceof Element)) continue
+    if (
+      ignoreDraggedWindowFrame &&
+      strip.closest(`[data-shell-window-frame="${draggedWindowId}"]`)
+    ) {
+      continue
+    }
+    const rect = strip.getBoundingClientRect()
+    if (
+      clientX < rect.left - TAB_DROP_HIT_SLOP_PX ||
+      clientX > rect.right + TAB_DROP_HIT_SLOP_PX ||
+      clientY < rect.top - TAB_DROP_HIT_SLOP_PX ||
+      clientY > rect.bottom + TAB_DROP_HIT_SLOP_PX
+    ) {
+      continue
+    }
+    const groupId = strip.getAttribute('data-workspace-group-drop-strip')
+    if (!groupId) continue
+    const group = state.groups.find((entry) => entry.id === groupId)
+    if (!group || group.windowIds.length === 0) continue
+    const rawTargetWindowId = Number(strip.getAttribute('data-workspace-group-drop-target-window'))
+    const targetWindowId =
+      Number.isFinite(rawTargetWindowId) && group.windowIds.includes(Math.trunc(rawTargetWindowId))
+        ? Math.trunc(rawTargetWindowId)
+        : targetWindowIdForGroup(state, groupId)
+    if (targetWindowId === null) continue
+    const sourceGroupId = state.groups.find((entry) => entry.windowIds.includes(draggedWindowId))?.id
+    return {
+      groupId,
+      targetWindowId,
+      insertIndex: clampTabInsertIndex(
+        state,
+        groupId,
+        group.windowIds.length,
+        isTabPinned(state, draggedWindowId),
+        sourceGroupId === groupId ? draggedWindowId : undefined,
+      ),
+    }
+  }
+  return null
+}
+
 export function mergeTargetFromElement(
   element: Element | null,
   state: WorkspaceSnapshot,
@@ -304,6 +356,14 @@ export function findMergeTarget(
     ignoreDraggedWindowFrame,
   )
   if (stripTarget) return stripTarget
+  const groupStripTarget = mergeTargetFromGroupDropStripAtPoint(
+    state,
+    draggedWindowId,
+    clientX,
+    clientY,
+    ignoreDraggedWindowFrame,
+  )
+  if (groupStripTarget) return groupStripTarget
   return mergeTargetFromTabAtPoint(
     state,
     draggedWindowId,

@@ -624,6 +624,7 @@ impl ShellOsrState {
         move_visual: Option<shell_wire::CompositorInteractionVisual>,
         resize_visual: Option<shell_wire::CompositorInteractionVisual>,
         window_switcher_selected_window_id: Option<u32>,
+        super_held: bool,
     ) -> shell_wire::DecodedCompositorToShellMessage {
         shell_wire::DecodedCompositorToShellMessage::InteractionState {
             revision,
@@ -637,6 +638,7 @@ impl ShellOsrState {
             move_visual,
             resize_visual,
             window_switcher_selected_window_id: window_switcher_selected_window_id.unwrap_or(0),
+            super_held,
         }
     }
 

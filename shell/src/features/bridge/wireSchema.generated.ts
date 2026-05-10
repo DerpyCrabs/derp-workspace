@@ -102,7 +102,8 @@ export const WINDOW_LIST_ROW_BYTES = 92 as const
 export const WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION = 1146242818 as const
 export const WINDOW_GEOMETRY_RECTS_BYTES = 36 as const
 export const COMPOSITOR_INTERACTION_STATE_BYTES_V1 = 80 as const
-export const COMPOSITOR_INTERACTION_STATE_BYTES = 88 as const
+export const COMPOSITOR_INTERACTION_STATE_BYTES_V2 = 88 as const
+export const COMPOSITOR_INTERACTION_STATE_BYTES = 92 as const
 export const MAX_OUTPUT_LAYOUT_SCREENS = 16 as const
 export const MAX_OUTPUT_LAYOUT_NAME_BYTES = 128 as const
 export const MAX_SHELL_OUTPUT_LAYOUT_JSON_BYTES = 4096 as const
@@ -122,7 +123,7 @@ export const HOT_DETAIL_FOCUS_CHANGED = 4 as const
 export const HOT_DETAIL_WINDOW_ORDER = 5 as const
 export const HOT_DETAIL_INTERACTION_STATE = 6 as const
 export const HOT_DETAIL_WINDOW_GEOMETRY_BYTES = 57 as const
-export const HOT_DETAIL_INTERACTION_STATE_BYTES = 84 as const
+export const HOT_DETAIL_INTERACTION_STATE_BYTES = 88 as const
 export const SHELL_SHARED_STATE_MAGIC = 1146245204 as const
 export const SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES = 1 as const
 export const SHELL_SHARED_STATE_KIND_UI_WINDOWS = 2 as const
@@ -257,6 +258,7 @@ export const WIRE_BYTE_SIZES = {
   WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION: WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION,
   WINDOW_GEOMETRY_RECTS_BYTES: WINDOW_GEOMETRY_RECTS_BYTES,
   COMPOSITOR_INTERACTION_STATE_BYTES_V1: COMPOSITOR_INTERACTION_STATE_BYTES_V1,
+  COMPOSITOR_INTERACTION_STATE_BYTES_V2: COMPOSITOR_INTERACTION_STATE_BYTES_V2,
   COMPOSITOR_INTERACTION_STATE_BYTES: COMPOSITOR_INTERACTION_STATE_BYTES,
   MAX_OUTPUT_LAYOUT_SCREENS: MAX_OUTPUT_LAYOUT_SCREENS,
   MAX_OUTPUT_LAYOUT_NAME_BYTES: MAX_OUTPUT_LAYOUT_NAME_BYTES,
@@ -341,7 +343,7 @@ export type DerpShellDetail = { snapshot_epoch?: number } & (
   | { type: 'workspace_state'; revision?: number; state: WorkspaceSnapshot }
   | { type: 'shell_hosted_app_state'; revision?: number; state: { byWindowId?: Record<string, unknown> } }
   | { type: 'command_palette_state'; revision?: number; state: ExternalCommandPaletteState }
-  | { type: 'interaction_state'; revision?: number; interaction_serial?: number; pointer_x: number; pointer_y: number; move_window_id: number | null; resize_window_id: number | null; move_proxy_window_id: number | null; move_capture_window_id: number | null; move_rect: CompositorInteractionVisual | null; resize_rect: CompositorInteractionVisual | null; window_switcher_selected_window_id?: number | null }
+  | { type: 'interaction_state'; revision?: number; interaction_serial?: number; pointer_x: number; pointer_y: number; move_window_id: number | null; resize_window_id: number | null; move_proxy_window_id: number | null; move_capture_window_id: number | null; move_rect: CompositorInteractionVisual | null; resize_rect: CompositorInteractionVisual | null; window_switcher_selected_window_id?: number | null; super_held?: boolean }
   | { type: 'native_drag_preview'; window_id: number; generation: number; image_path: string }
   | { type: 'context_menu_dismiss' }
   | { type: 'programs_menu_toggle'; output_name?: string }

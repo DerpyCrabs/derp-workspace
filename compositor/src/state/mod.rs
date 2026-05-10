@@ -82,9 +82,7 @@ use smithay::{
         shell::{
             kde::decoration::{KdeDecorationHandler, KdeDecorationState},
             wlr_layer::{Layer, WlrLayerShellState},
-            xdg::{
-                SurfaceCachedState, ToplevelSurface, XdgShellState, XdgToplevelSurfaceData,
-            },
+            xdg::{SurfaceCachedState, ToplevelSurface, XdgShellState, XdgToplevelSurfaceData},
         },
         shm::ShmState,
         viewporter::ViewporterState,
@@ -2298,6 +2296,22 @@ impl CompositorState {
         read_toplevel_shell_decoration_disabled(&wl)
     }
 
+    pub(crate) fn native_window_uses_shell_chrome(&self, info: &WindowInfo) -> bool {
+        if self.native_window_shell_decoration_disabled(info.window_id) {
+            return self.workspace_window_has_group_chrome(info.window_id);
+        }
+        !info.client_side_decoration || self.workspace_window_has_group_chrome(info.window_id)
+    }
+
+    pub(crate) fn native_window_shell_chrome_titlebar_h(&self, window_id: u32) -> i32 {
+        self.windows
+            .window_registry
+            .window_info(window_id)
+            .filter(|info| self.native_window_uses_shell_chrome(info))
+            .map(|_| self.shell_osr.shell_chrome_titlebar_h.max(0))
+            .unwrap_or(0)
+    }
+
     pub(crate) fn notify_geometry_for_window(&mut self, window: &Window, force_shell_emit: bool) {
         let Some(toplevel) = window.toplevel() else {
             return;
@@ -2501,10 +2515,32 @@ impl CompositorState {
         &self,
         output: &Output,
     ) -> Option<Rectangle<i32, Logical>> {
+        self.shell_maximize_work_area_global_for_output_with_titlebar(
+            output,
+            self.shell_osr.shell_chrome_titlebar_h.max(0),
+        )
+    }
+
+    pub(crate) fn shell_maximize_work_area_global_for_window(
+        &self,
+        output: &Output,
+        window_id: u32,
+    ) -> Option<Rectangle<i32, Logical>> {
+        self.shell_maximize_work_area_global_for_output_with_titlebar(
+            output,
+            self.native_window_shell_chrome_titlebar_h(window_id),
+        )
+    }
+
+    pub(crate) fn shell_maximize_work_area_global_for_output_with_titlebar(
+        &self,
+        output: &Output,
+        titlebar_h: i32,
+    ) -> Option<Rectangle<i32, Logical>> {
         let g = self
             .output_topology
             .layer_usable_area_global_for_output(output)?;
-        let th = self.shell_osr.shell_chrome_titlebar_h.max(0);
+        let th = titlebar_h.max(0);
         if self.output_topology.taskbar_auto_hide {
             return Some(Rectangle::new(
                 Point::from((g.loc.x, g.loc.y.saturating_add(th))),
@@ -2527,6 +2563,10 @@ impl CompositorState {
         let Some(tl) = window.toplevel() else {
             return false;
         };
+        let wl = tl.wl_surface();
+        let Some(window_id) = self.windows.window_registry.window_id_for_wl_surface(wl) else {
+            return false;
+        };
         let (geo, output_name) = {
             let o = self
                 .toplevel_rect_snapshot(window)
@@ -2535,14 +2575,10 @@ impl CompositorState {
             let Some(ref out) = o else {
                 return false;
             };
-            let Some(g) = self.shell_maximize_work_area_global_for_output(out) else {
+            let Some(g) = self.shell_maximize_work_area_global_for_window(out, window_id) else {
                 return false;
             };
             (g, out.name().to_string())
-        };
-        let wl = tl.wl_surface();
-        let Some(window_id) = self.windows.window_registry.window_id_for_wl_surface(wl) else {
-            return false;
         };
         self.windows
             .pending_gnome_initial_toplevels

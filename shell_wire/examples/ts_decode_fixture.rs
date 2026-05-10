@@ -93,6 +93,7 @@ fn main() {
         }),
         None,
         42,
+        false,
     ));
     let header_len = shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize;
     let mut snapshot = vec![0u8; header_len + payload.len()];

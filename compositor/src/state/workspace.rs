@@ -158,6 +158,17 @@ impl WorkspaceLayoutState {
         )
     }
 
+    pub(crate) fn workspace_window_has_group_chrome(&self, window_id: u32) -> bool {
+        let Some(group_id) = group_id_for_window(&self.workspace_state, window_id) else {
+            return false;
+        };
+        self.workspace_state
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .is_some_and(|group| group.window_ids.len() > 1)
+    }
+
     pub(crate) fn workspace_monitor_layout_state_for_output(
         &self,
         output_name: &str,

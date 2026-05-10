@@ -316,7 +316,9 @@ if [[ ${#pids[@]} -eq 0 ]]; then
   while (( SECONDS < deadline )); do
     if [[ -s "$url_file" ]]; then
       base="$(tr -d '\r\n' <"$url_file")"
-      if [[ "$base" == http://127.0.0.1:* ]] && curl -fsS --max-time 2 "$base/test/state/compositor" >/dev/null 2>&1; then
+      if [[ "$base" == http://127.0.0.1:* ]] \
+        && curl -fsS --max-time 2 "$base/test/state/compositor" >/dev/null 2>&1 \
+        && derpctl state --domains outputs >/dev/null 2>&1; then
         exit 0
       fi
     fi
@@ -360,7 +362,9 @@ url_file="${DERP_SHELL_HTTP_URL_FILE:-$runtime_dir/derp-shell-http-url}"
 while (( SECONDS < deadline )); do
   if [[ -s "$url_file" ]]; then
     base="$(tr -d '\r\n' <"$url_file")"
-    if [[ "$base" == http://127.0.0.1:* ]] && curl -fsS --max-time 2 "$base/test/state/compositor" >/dev/null 2>&1; then
+    if [[ "$base" == http://127.0.0.1:* ]] \
+      && curl -fsS --max-time 2 "$base/test/state/compositor" >/dev/null 2>&1 \
+      && derpctl state --domains outputs >/dev/null 2>&1; then
       exit 0
     fi
   fi

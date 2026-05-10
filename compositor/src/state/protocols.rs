@@ -36,11 +36,7 @@ fn configure_xdg_decoration(
     toplevel.send_configure();
 }
 
-fn set_xdg_decoration_mode(
-    state: &mut CompositorState,
-    toplevel: &ToplevelSurface,
-    mode: u32,
-) {
+fn set_xdg_decoration_mode(state: &mut CompositorState, toplevel: &ToplevelSurface, mode: u32) {
     let wl = toplevel.wl_surface().clone();
     let decoration = smithay::wayland::compositor::with_states(&wl, |states| {
         states
@@ -50,7 +46,10 @@ fn set_xdg_decoration_mode(
                 if let Ok(mut current) = data.mode.lock() {
                     *current = Some(mode);
                 }
-                data.resource.lock().ok().and_then(|resource| resource.clone())
+                data.resource
+                    .lock()
+                    .ok()
+                    .and_then(|resource| resource.clone())
             })
     });
     if let Some(decoration) = decoration {
@@ -65,12 +64,8 @@ fn set_xdg_decoration_mode(
     }
 }
 
-impl
-    smithay::reexports::wayland_server::GlobalDispatch<
-        XdgDecorationManager,
-        (),
-        CompositorState,
-    > for CompositorState
+impl smithay::reexports::wayland_server::GlobalDispatch<XdgDecorationManager, (), CompositorState>
+    for CompositorState
 {
     fn bind(
         _state: &mut CompositorState,
@@ -106,16 +101,19 @@ impl smithay::reexports::wayland_server::Dispatch<XdgDecorationManager, (), Comp
                     return;
                 };
                 let wl = toplevel.wl_surface().clone();
-                let already_constructed = smithay::wayland::compositor::with_states(&wl, |states| {
-                    states
-                        .data_map
-                        .insert_if_missing_threadsafe(XdgDecorationSurfaceData::default);
-                    states
-                        .data_map
-                        .get::<XdgDecorationSurfaceData>()
-                        .and_then(|data| data.resource.lock().ok().map(|resource| resource.is_some()))
-                        .unwrap_or(false)
-                });
+                let already_constructed =
+                    smithay::wayland::compositor::with_states(&wl, |states| {
+                        states
+                            .data_map
+                            .insert_if_missing_threadsafe(XdgDecorationSurfaceData::default);
+                        states
+                            .data_map
+                            .get::<XdgDecorationSurfaceData>()
+                            .and_then(|data| {
+                                data.resource.lock().ok().map(|resource| resource.is_some())
+                            })
+                            .unwrap_or(false)
+                    });
                 if already_constructed {
                     resource.post_error(
                         smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Error::AlreadyConstructed,

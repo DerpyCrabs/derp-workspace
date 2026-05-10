@@ -53,19 +53,42 @@ function sameWindowIdList(left: readonly number[], right: readonly number[]): bo
 function windowModelWithClientRect(
   window: DerpWindow,
   rect: { x: number; y: number; width: number; height: number; maximized?: boolean; fullscreen?: boolean },
+  forceShellChrome?: boolean,
 ): ShellWindowModel {
   const maximized = rect.maximized ?? window.maximized
   const fullscreen = rect.fullscreen ?? window.fullscreen
-  const frame = shellOuterFrameFromClient({
-    x: rect.x,
-    y: rect.y,
-    width: rect.width,
-    height: rect.height,
-    maximized,
-    fullscreen,
-    minimized: false,
-    snap_tiled: false,
-  })
+  const noShellChrome =
+    forceShellChrome !== true &&
+    !isShellHostedWorkspaceWindow(window) &&
+    Number.isFinite(window.client_x) &&
+    Number.isFinite(window.client_y) &&
+    Number.isFinite(window.client_width) &&
+    Number.isFinite(window.client_height) &&
+    Number.isFinite(window.frame_x) &&
+    Number.isFinite(window.frame_y) &&
+    Number.isFinite(window.frame_width) &&
+    Number.isFinite(window.frame_height) &&
+    window.client_x === window.frame_x &&
+    window.client_y === window.frame_y &&
+    window.client_width === window.frame_width &&
+    window.client_height === window.frame_height
+  const frame = noShellChrome
+    ? {
+        x: rect.x,
+        y: rect.y,
+        w: rect.width,
+        h: rect.height,
+      }
+    : shellOuterFrameFromClient({
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        maximized,
+        fullscreen,
+        minimized: false,
+        snap_tiled: false,
+      })
   return {
     ...window,
     x: rect.x,
@@ -174,6 +197,7 @@ type SplitGroupGestureState = {
 const WORKSPACE_SPLIT_DIVIDER_PX = 4
 const WORKSPACE_SPLIT_MIN_PANE_PX = 160
 const WORKSPACE_SPLIT_MIN_HEIGHT_PX = 140
+const CSD_GROUP_DROP_STRIP_PX = 34
 
 type WorkspaceChromeOptions = {
   workspaceSnapshot: Accessor<WorkspaceSnapshot>
@@ -223,7 +247,7 @@ type WorkspaceChromeOptions = {
     clientX: number,
     clientY: number,
     moved?: boolean,
-    options?: { snapAssist?: boolean },
+    options?: { snapAssist?: boolean; superHeld?: boolean },
   ) => boolean
   beginShellWindowResize: (windowId: number, edges: number, clientX: number, clientY: number) => void
   toggleShellMaximizeForWindow: (windowId: number) => void
@@ -588,7 +612,9 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     if (!sourceGroupId) return null
     const sourceGroup = options.workspaceGroupsById().get(sourceGroupId) ?? null
     if (!sourceGroup || sourceGroup.splitLeftWindowId !== null) return null
-    const target = measuredTabMergeTargetFromPointer(windowId, clientX, clientY)
+    const target =
+      measuredTabMergeTargetFromPointer(windowId, clientX, clientY) ??
+      findMergeTarget(options.workspaceSnapshot(), windowId, clientX, clientY, true)
     if (!target || target.groupId === sourceGroupId) return null
     return target
   }
@@ -1033,12 +1059,8 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       if (!window) return 'var(--shell-surface-inset)'
       const shellHosted = isShellHostedWorkspaceWindow(window)
       if (shellHosted) return 'transparent'
-      if (window.client_side_decoration) {
-        return options.activeWorkspaceGroupId() === props.groupId
-          ? 'var(--shell-window-chrome-focused)'
-          : 'var(--shell-window-chrome-unfocused)'
-      }
-      return nativeDragPreviewLoaded() ? 'var(--shell-surface-inset)' : 'transparent'
+      if (window.client_side_decoration) return 'transparent'
+      return 'transparent'
     })
     const frameModel = createMemo((): ShellWindowModel | undefined => {
       const window = visibleWindow()
@@ -1070,7 +1092,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           height: split.group.height,
           maximized: false,
           fullscreen: false,
-        }),
+        }, true),
         snap_tiled: false,
       }
     })
@@ -1086,6 +1108,40 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
         activeMoveProxyWindowId() !== currentVisibleWindowId
         ? base + 1_000_000
         : base
+    })
+    const standaloneCsdNoShellChrome = createMemo(() => {
+      const currentGroup = group()
+      const window = visibleWindow()
+      return !!currentGroup &&
+        currentGroup.members.length <= 1 &&
+        !!window?.client_side_decoration &&
+        !splitLayout()
+    })
+    const showShellFrame = createMemo(() => showFrame() && !standaloneCsdNoShellChrome())
+    const csdGroupDropStripVisible = createMemo(() => {
+      const currentGroup = group()
+      const window = visibleWindow()
+      return !!currentGroup &&
+        currentGroup.members.length <= 1 &&
+        !!window?.client_side_decoration &&
+        !splitLayout() &&
+        frameVisible() &&
+        !frameHidden() &&
+        !!frameModel()
+    })
+    const csdGroupDropStripStyle = createMemo((): JSX.CSSProperties => {
+      const model = frameModel()
+      if (!model) return {}
+      return {
+        position: 'absolute',
+        left: '0',
+        top: '0',
+        width: `${Math.max(1, model.width)}px`,
+        height: `${Math.min(CSD_GROUP_DROP_STRIP_PX, Math.max(1, model.height))}px`,
+        transform: `translate3d(${model.x}px, ${model.y}px, 0)`,
+        'z-index': 1008 + stackZ(),
+        contain: 'layout paint',
+      }
     })
     const rowFocused = createMemo(() => options.activeWorkspaceGroupId() === props.groupId)
     const tabStripLayoutKey = createMemo(() => {
@@ -1137,6 +1193,8 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     }
     return (
       <Show when={showFrame()} fallback={null}>
+        <>
+        <Show when={showShellFrame()}>
         <ShellWindowFrame
           win={frameModel}
           repaintKey={options.snapChromeRev}
@@ -1150,7 +1208,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           contentVisible={() =>
             visibleShellHostedMemberWindowIds().length > 0 ||
             nativeDragPreviewVisible() !== null ||
-            !!visibleWindow()?.client_side_decoration
+            (!!visibleWindow()?.client_side_decoration && !standaloneCsdNoShellChrome())
           }
           hidden={() => frameHidden() || proxyHidden()}
           tabStrip={
@@ -1282,7 +1340,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
                     nativeDragPreviewMetrics()?.backingHeight ?? ''
                   }
                   style={{
-                    background: nativeDragPreviewLoaded() ? 'var(--shell-surface-inset)' : 'transparent',
+                    background: 'transparent',
                   }}
                 >
                   <NativeDragPreviewCanvas
@@ -1294,6 +1352,15 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
             </Show>
           </Show>
         </ShellWindowFrame>
+        </Show>
+        <Show when={csdGroupDropStripVisible()}>
+          <div
+            data-workspace-group-drop-strip={props.groupId}
+            data-workspace-group-drop-target-window={visibleWindowId() ?? ''}
+            class="pointer-events-none absolute box-border bg-transparent"
+            style={csdGroupDropStripStyle()}
+          />
+        </Show>
         <Show when={splitLayout()} keyed>
           {(layout) => (
             <>
@@ -1326,6 +1393,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
             </>
           )}
         </Show>
+        </>
       </Show>
     )
   }
@@ -1471,12 +1539,10 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           contentPointerEvents={() => 'none'}
           contentBackground={() => {
             const window = windowModel()
-            if (window?.client_side_decoration) {
-              return focused() ? 'var(--shell-window-chrome-focused)' : 'var(--shell-window-chrome-unfocused)'
-            }
+            if (window?.client_side_decoration) return 'transparent'
             return 'transparent'
           }}
-          contentVisible={() => (shellHosted() || !!windowModel()?.client_side_decoration) && frameVisible()}
+          contentVisible={() => shellHosted() && frameVisible()}
           onFocusRequest={() => {
             if (shellHosted()) options.focusShellUiWindow(props.windowId)
             else options.focusWindowViaShell(props.windowId)
@@ -1521,15 +1587,36 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     const strip = document.querySelector(
       `[data-workspace-tab-strip="${target.groupId}"]`,
     ) as HTMLElement | null
-    if (!slot) return null
-    const slotRect = slot.getBoundingClientRect()
-    const stripRect = strip?.getBoundingClientRect() ?? slotRect
+    if (slot) {
+      const slotRect = slot.getBoundingClientRect()
+      const stripRect = strip?.getBoundingClientRect() ?? slotRect
+      return {
+        line: {
+          left: `${Math.round(slotRect.left - 2)}px`,
+          top: `${Math.round(stripRect.top + 2)}px`,
+          width: '4px',
+          height: `${Math.max(10, Math.round(stripRect.height - 4))}px`,
+        },
+        highlight: {
+          left: `${Math.round(stripRect.left)}px`,
+          top: `${Math.round(stripRect.top)}px`,
+          width: `${Math.round(stripRect.width)}px`,
+          height: `${Math.round(stripRect.height)}px`,
+        },
+        key: `${target.groupId}:${target.insertIndex}`,
+      }
+    }
+    const groupStrip = document.querySelector(
+      `[data-workspace-group-drop-strip="${target.groupId}"]`,
+    ) as HTMLElement | null
+    if (!groupStrip) return null
+    const stripRect = groupStrip.getBoundingClientRect()
     return {
       line: {
-        left: `${Math.round(slotRect.left - 2)}px`,
-        top: `${Math.round(stripRect.top + 2)}px`,
-        width: '4px',
-        height: `${Math.max(10, Math.round(stripRect.height - 4))}px`,
+        left: `${Math.round(stripRect.left + 4)}px`,
+        top: `${Math.round(stripRect.bottom - 4)}px`,
+        width: `${Math.max(8, Math.round(stripRect.width - 8))}px`,
+        height: '4px',
       },
       highlight: {
         left: `${Math.round(stripRect.left)}px`,
@@ -1537,7 +1624,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
         width: `${Math.round(stripRect.width)}px`,
         height: `${Math.round(stripRect.height)}px`,
       },
-      key: `${target.groupId}:${target.insertIndex}`,
+      key: `${target.groupId}:strip`,
     }
   }
 

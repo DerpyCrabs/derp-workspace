@@ -38,6 +38,7 @@ import {
   pointerWheel,
   pointInRect,
   rectCenter,
+  readPngRgba,
   assertRectMinSize,
   resetPerfCounters,
   shellWindowById,
@@ -2843,6 +2844,196 @@ export default defineGroup(import.meta.url, ({ test }) => {
         await cleanupNativeWindows(base, new Set([nativeId]));
       }
     }
+  });
+
+  test("CSD native windows do not punch holes through shell-hosted window content", async ({
+    base,
+    state,
+  }) => {
+    const opened = await openShellTestWindow(base, state);
+    const shellId = opened.window.window_id;
+    await waitForShellUiFocus(base, shellId);
+
+    const shellReady = await waitFor(
+      "wait for shell test window content capture rect",
+      async () => {
+        const snapshots = await getSnapshots(base);
+        const window = shellWindowById(snapshots.shell, shellId);
+        const controls = windowControls(snapshots.shell, shellId);
+        const titlebar = controls?.titlebar ?? null;
+        const output =
+          snapshots.compositor.outputs.find(
+            (entry) => entry.name === window?.output_name,
+          ) ?? null;
+        return window && titlebar && output
+          ? { shell: snapshots.shell, window, titlebar, output }
+          : null;
+      },
+      5000,
+      50,
+    );
+
+    const targetLeft = shellReady.output.x + 220;
+    const targetTop = shellReady.output.y + 180;
+    const shellDragStart = rectCenter(shellReady.titlebar);
+    await dragBetweenPoints(
+      base,
+      shellDragStart.x,
+      shellDragStart.y,
+      Math.round(shellDragStart.x + (targetLeft - shellReady.window.x)),
+      Math.round(shellDragStart.y + (targetTop - shellReady.window.y)),
+      18,
+    );
+
+    const settledShell = await waitFor(
+      "wait for shell test window settled for CSD overlap",
+      async () => {
+        const snapshots = await getSnapshots(base);
+        const window = shellWindowById(snapshots.shell, shellId);
+        const titlebar = windowControls(snapshots.shell, shellId)?.titlebar;
+        return window && titlebar ? { window, titlebar } : null;
+      },
+      5000,
+      50,
+    );
+
+    await movePoint(
+      base,
+      settledShell.window.x + settledShell.window.width + 32,
+      settledShell.window.y + settledShell.window.height + 32,
+    );
+    const before = await captureNativeInteriorScreenshot(
+      base,
+      shellId,
+      "shell-csd-hole-before",
+    );
+
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp CSD Under Shell ${Date.now()}`,
+      token: `csd-under-shell-${Date.now()}`,
+      strip: "green",
+      width: 620,
+      height: 420,
+      xdgDecorationClientSide: true,
+      moveOnHeaderPress: true,
+      solidClient: true,
+    });
+    const nativeId = spawned.window.window_id;
+    state.spawnedNativeWindowIds.add(nativeId);
+    await waitForNativeFocus(base, nativeId);
+
+    const nativeReady = await waitFor(
+      "wait for CSD native overlap drag start",
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(
+          base,
+          "/test/state/compositor",
+        );
+        const window = compositorWindowById(compositor, nativeId);
+        return window?.client_side_decoration ? window : null;
+      },
+      5000,
+      50,
+    );
+    const nativeStart = {
+      x: Math.round(nativeReady.x + nativeReady.width / 2),
+      y: Math.round(nativeReady.y + 18),
+    };
+    const nativeTarget = {
+      x: Math.round(settledShell.window.x + settledShell.window.width * 0.45),
+      y: Math.round(settledShell.window.y + settledShell.window.height * 0.42),
+    };
+    await dragBetweenPoints(
+      base,
+      nativeStart.x,
+      nativeStart.y,
+      nativeTarget.x,
+      nativeTarget.y,
+      18,
+    );
+
+    await waitFor(
+      "wait for CSD native under shell content rect",
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(
+          base,
+          "/test/state/compositor",
+        );
+        const window = compositorWindowById(compositor, nativeId);
+        if (!window) return null;
+        const overlapLeft = Math.max(window.x, before.rect.x);
+        const overlapTop = Math.max(window.y, before.rect.y);
+        const overlapRight = Math.min(
+          window.x + window.width,
+          before.rect.x + before.rect.width,
+        );
+        const overlapBottom = Math.min(
+          window.y + window.height,
+          before.rect.y + before.rect.height,
+        );
+        return overlapRight - overlapLeft > 180 &&
+          overlapBottom - overlapTop > 140
+          ? window
+          : null;
+      },
+      5000,
+      50,
+    );
+
+    const shellAfterNative = await getJson<ShellSnapshot>(
+      base,
+      "/test/state/shell",
+    );
+    await activateTaskbarWindow(base, shellAfterNative, shellId);
+    await waitForShellUiFocus(base, shellId);
+    await waitFor(
+      "wait for shell test window raised above CSD native",
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+        return shell.window_stack_order?.[0] === shellId ? shell : null;
+      },
+      5000,
+      50,
+    );
+
+    await movePoint(
+      base,
+      settledShell.window.x + settledShell.window.width + 48,
+      settledShell.window.y + settledShell.window.height + 48,
+    );
+    const after = await captureNativeInteriorScreenshot(
+      base,
+      shellId,
+      "shell-csd-hole-after",
+    );
+    const png = await readPngRgba(after.path);
+    let greenLeakPixels = 0;
+    let checkedPixels = 0;
+    const startY = Math.floor(png.height * 0.42);
+    for (let y = startY; y < png.height; y += 1) {
+      for (let x = 0; x < png.width; x += 1) {
+        const index = (y * png.width + x) * 4;
+        const r = png.data[index];
+        const g = png.data[index + 1];
+        const b = png.data[index + 2];
+        if (g > 115 && g > r + 45 && g > b + 35) greenLeakPixels += 1;
+        checkedPixels += 1;
+      }
+    }
+    const maxGreenLeakPixels = Math.max(600, Math.floor(checkedPixels * 0.01));
+    assert(
+      greenLeakPixels <= maxGreenLeakPixels,
+      `shell content should not expose the green CSD native below it: ${greenLeakPixels}/${checkedPixels}`,
+    );
+    await writeJsonArtifact("shell-csd-hole-coverage.json", {
+      shellId,
+      nativeId,
+      before,
+      after,
+      greenLeakPixels,
+      checkedPixels,
+      maxGreenLeakPixels,
+    });
   });
 
   test("shell drag stays live when a taskbar-clipped frame becomes fully visible again", async ({

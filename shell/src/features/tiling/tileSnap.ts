@@ -96,12 +96,13 @@ export function tiledFrameRectToClientRect(rect: {
   y: number
   width: number
   height: number
-}): { x: number; y: number; width: number; height: number } {
+}, titlebarPx: number = CHROME_TITLEBAR_PX): { x: number; y: number; width: number; height: number } {
+  const titlebar = Math.max(0, titlebarPx)
   return {
     x: rect.x,
-    y: rect.y + CHROME_TITLEBAR_PX,
+    y: rect.y + titlebar,
     width: rect.width,
-    height: Math.max(1, rect.height - CHROME_TITLEBAR_PX),
+    height: Math.max(1, rect.height - titlebar),
   }
 }
 

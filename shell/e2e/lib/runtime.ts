@@ -565,6 +565,7 @@ export interface ShellSnapshot {
   snap_picker_z?: number | null
   snap_preview_visible?: boolean
   snap_preview_rect?: Rect | null
+  snap_drag_super_held?: boolean
   snap_hover_span?: AssistSpanSnapshot | null
   window_stack_order?: number[]
   focused_window_id?: number | null
@@ -608,6 +609,7 @@ export interface ShellSnapshot {
     resize_window_id: number | null
     move_proxy_window_id: number | null
     move_capture_window_id: number | null
+    super_held?: boolean
     window_switcher_selected_window_id?: number | null
   } | null
   window_interaction_capture?: Rect | null
@@ -1295,7 +1297,7 @@ export async function discoverBase(): Promise<string> {
 export async function discoverReadyBase(timeoutMs = 15000): Promise<string> {
   const started = Date.now()
   const timeout = abortAfter(timeoutMs)
-  const compositor = startCompositorEventStream()
+  let compositor = startCompositorEventStream()
   let lastError: unknown = null
   const evaluate = async () => {
     try {
@@ -1315,7 +1317,17 @@ export async function discoverReadyBase(timeoutMs = 15000): Promise<string> {
     const initial = await evaluate()
     if (initial) return initial
     while (!timeout.signal.aborted) {
-      await compositor.lines.next(timeout.signal)
+      try {
+        await compositor.lines.next(timeout.signal)
+      } catch (error) {
+        if (timeout.signal.aborted) break
+        lastError = error
+        compositor.child.kill('SIGTERM')
+        const ready = await evaluate()
+        if (ready) return ready
+        compositor = startCompositorEventStream()
+        continue
+      }
       const ready = await evaluate()
       if (ready) return ready
     }
@@ -3101,6 +3113,11 @@ export function buildNativeSpawnCommand({
   xdgIconShm = false,
   kdeDecorationNone = false,
   xdgDecorationRawNone = false,
+  xdgDecorationClientSide = false,
+  moveOnHeaderPress = false,
+  roundedCorners = false,
+  noBorder = false,
+  solidClient = false,
   gestureStatusJson,
 }: {
   title: string
@@ -3124,6 +3141,11 @@ export function buildNativeSpawnCommand({
   xdgIconShm?: boolean
   kdeDecorationNone?: boolean
   xdgDecorationRawNone?: boolean
+  xdgDecorationClientSide?: boolean
+  moveOnHeaderPress?: boolean
+  roundedCorners?: boolean
+  noBorder?: boolean
+  solidClient?: boolean
   gestureStatusJson?: string
 }): string {
   const parts = [
@@ -3153,6 +3175,11 @@ export function buildNativeSpawnCommand({
   if (xdgIconShm) parts.push('--xdg-icon-shm')
   if (kdeDecorationNone) parts.push('--kde-decoration-none')
   if (xdgDecorationRawNone) parts.push('--xdg-decoration-raw-none')
+  if (xdgDecorationClientSide) parts.push('--xdg-decoration-client-side')
+  if (moveOnHeaderPress) parts.push('--move-on-header-press')
+  if (roundedCorners) parts.push('--rounded-corners')
+  if (noBorder) parts.push('--no-border')
+  if (solidClient) parts.push('--solid-client')
   if (gestureStatusJson) parts.push('--gesture-status-json', shellQuote(gestureStatusJson))
   if (spawnOnPressCommand) {
     parts.push('--spawn-on-press-command', shellQuote(spawnOnPressCommand))
@@ -3192,6 +3219,11 @@ export async function spawnNativeWindow(
     xdgIconShm,
     kdeDecorationNone,
     xdgDecorationRawNone,
+    xdgDecorationClientSide,
+    moveOnHeaderPress,
+    roundedCorners,
+    noBorder,
+    solidClient,
     gestureStatusJson,
   }: {
     title: string
@@ -3215,6 +3247,11 @@ export async function spawnNativeWindow(
     xdgIconShm?: boolean
     kdeDecorationNone?: boolean
     xdgDecorationRawNone?: boolean
+    xdgDecorationClientSide?: boolean
+    moveOnHeaderPress?: boolean
+    roundedCorners?: boolean
+    noBorder?: boolean
+    solidClient?: boolean
     gestureStatusJson?: string
   },
 ): Promise<NativeSpawnResult> {
@@ -3240,6 +3277,11 @@ export async function spawnNativeWindow(
     xdgIconShm,
     kdeDecorationNone,
     xdgDecorationRawNone,
+    xdgDecorationClientSide,
+    moveOnHeaderPress,
+    roundedCorners,
+    noBorder,
+    solidClient,
     gestureStatusJson,
   })
   await spawnCommand(base, command)

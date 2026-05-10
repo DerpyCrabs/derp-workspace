@@ -261,6 +261,7 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       const resize_rect = decodeHotVisual(view, cursor.offset + 52, resizeWindowId)
       const windowSwitcherSelectedWindowId = view.getUint32(cursor.offset + 72, true)
       const interaction_serial = Number(view.getBigUint64(cursor.offset + 76, true))
+      const super_held = view.getUint32(cursor.offset + 84, true) !== 0
       cursor.offset += HOT_DETAIL_INTERACTION_STATE_BYTES
       details.push({
         type: 'interaction_state',
@@ -276,6 +277,7 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
         resize_rect,
         window_switcher_selected_window_id:
           windowSwitcherSelectedWindowId > 0 ? windowSwitcherSelectedWindowId : null,
+        ...(super_held ? { super_held: true } : {}),
         ...(snapshot_epoch > 0 ? { snapshot_epoch } : {}),
       })
       continue

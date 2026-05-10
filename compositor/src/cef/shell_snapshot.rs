@@ -1072,6 +1072,7 @@ fn append_snapshot_message(
             move_visual,
             resize_visual,
             window_switcher_selected_window_id,
+            super_held,
         } => {
             payload.extend_from_slice(&shell_wire::encode_compositor_interaction_state(
                 *revision,
@@ -1085,6 +1086,7 @@ fn append_snapshot_message(
                 *move_visual,
                 *resize_visual,
                 *window_switcher_selected_window_id,
+                *super_held,
             ));
         }
         shell_wire::DecodedCompositorToShellMessage::NativeDragPreview {

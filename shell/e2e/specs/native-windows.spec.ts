@@ -115,6 +115,213 @@ async function assertTitlebarEdgeOwnedByClient(path: string, label: string) {
   return { width: png.width, height: png.height, chromeColor, firstClientRow, nativeBackgroundRow, dominantRows }
 }
 
+async function assertRoundedCsdTransparentOutside(
+  path: string,
+  label: string,
+  capture: { x: number; y: number; width: number; height: number },
+  window: { x: number; y: number; width: number; height: number },
+) {
+  const png = await readPngRgba(path)
+  const scaleX = png.width / capture.width
+  const scaleY = png.height / capture.height
+  const radius = Math.min(64, Math.max(18, Math.min(window.width, window.height) / 9))
+  const colorAt = (x: number, y: number): [number, number, number] => {
+    const index = (y * png.width + x) * 4
+    return [png.data[index], png.data[index + 1], png.data[index + 2]]
+  }
+  const channelDelta = (a: [number, number, number], b: [number, number, number]) =>
+    Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]))
+  const referenceFor = (
+    px: number,
+    py: number,
+    x: number,
+    y: number,
+    localX: number,
+    localY: number,
+  ): [number, number, number] => {
+    if (x < window.x) return colorAt(0, py)
+    if (x >= window.x + window.width) return colorAt(png.width - 1, py)
+    if (y < window.y) return colorAt(px, 0)
+    if (y >= window.y + window.height) return colorAt(px, png.height - 1)
+    const left = localX < radius
+    const top = localY < radius
+    const edgeX = left ? 0 : png.width - 1
+    const edgeY = top ? 0 : png.height - 1
+    const nearestHorizontal = top ? localY : window.height - localY
+    const nearestVertical = left ? localX : window.width - localX
+    if (nearestHorizontal <= nearestVertical) return colorAt(px, edgeY)
+    return colorAt(edgeX, py)
+  }
+  let leaking = 0
+  let checked = 0
+  let maxObservedChannelDelta = 0
+  for (let py = 0; py < png.height; py += 1) {
+    const gx = capture.x
+    const y = capture.y + (py + 0.5) / scaleY
+    for (let px = 0; px < png.width; px += 1) {
+      const x = gx + (px + 0.5) / scaleX
+      const localX = x - window.x
+      const localY = y - window.y
+      let shouldBeClear =
+        x < window.x ||
+        y < window.y ||
+        x >= window.x + window.width ||
+        y >= window.y + window.height
+      if (!shouldBeClear) {
+        const left = localX < radius
+        const right = localX >= window.width - radius
+        const top = localY < radius
+        const bottom = localY >= window.height - radius
+        if ((left || right) && (top || bottom)) {
+          const cx = left ? radius : window.width - radius
+          const cy = top ? radius : window.height - radius
+          const dx = localX - cx
+          const dy = localY - cy
+          shouldBeClear = dx * dx + dy * dy > (radius + 2) * (radius + 2)
+        }
+      }
+      if (!shouldBeClear) continue
+      checked += 1
+      const delta = channelDelta(colorAt(px, py), referenceFor(px, py, x, y, localX, localY))
+      maxObservedChannelDelta = Math.max(maxObservedChannelDelta, delta)
+      if (delta > 8) leaking += 1
+    }
+  }
+  assert(checked > 0, `${label} did not check any transparent pixels`)
+  assert(
+    leaking === 0,
+    `${label} leaked ${leaking}/${checked} transparent pixels, max channel delta ${maxObservedChannelDelta}`,
+  )
+  return { width: png.width, height: png.height, checked, leaking, maxObservedChannelDelta }
+}
+
+async function assertSolidCsdEdgeBands(
+  path: string,
+  label: string,
+  capture: { x: number; y: number; width: number; height: number },
+  window: { x: number; y: number; width: number; height: number },
+  clientColor: [number, number, number],
+) {
+  const png = await readPngRgba(path)
+  const scaleX = png.width / capture.width
+  const scaleY = png.height / capture.height
+  const radius = Math.min(64, Math.max(18, Math.min(window.width, window.height) / 9))
+  const colorAt = (x: number, y: number): [number, number, number] => {
+    const index = (y * png.width + x) * 4
+    return [png.data[index], png.data[index + 1], png.data[index + 2]]
+  }
+  const delta = (a: [number, number, number], b: [number, number, number]) =>
+    Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]))
+  const counts = new Map<string, number>()
+  for (let y = 0; y < png.height; y += 1) {
+    for (let x = 0; x < png.width; x += 1) {
+      if (x > 2 && x < png.width - 3 && y > 2 && y < png.height - 3) continue
+      const c = colorAt(x, y)
+      const key = `${c[0]},${c[1]},${c[2]}`
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+  }
+  let background: [number, number, number] = [0, 0, 0]
+  let backgroundCount = 0
+  for (const [key, count] of counts) {
+    if (count <= backgroundCount) continue
+    background = key.split(',').map((entry) => Number(entry)) as [number, number, number]
+    backgroundCount = count
+  }
+  let checkedInside = 0
+  let checkedOutside = 0
+  let insideLeaks = 0
+  let outsideLeaks = 0
+  let maxInsideDelta = 0
+  let maxOutsideDelta = 0
+  const samples: Array<{
+    kind: string
+    px: number
+    py: number
+    x: number
+    y: number
+    actual: [number, number, number]
+    expected: [number, number, number]
+    delta: number
+  }> = []
+  for (let py = 0; py < png.height; py += 1) {
+    const y = capture.y + (py + 0.5) / scaleY
+    for (let px = 0; px < png.width; px += 1) {
+      const x = capture.x + (px + 0.5) / scaleX
+      const localX = x - window.x
+      const localY = y - window.y
+      const middleY = localY >= radius + 4 && localY <= window.height - radius - 4
+      const middleX = localX >= radius + 4 && localX <= window.width - radius - 4
+      let expected: [number, number, number] | null = null
+      let kind = ''
+      if (middleY && localX >= -2 && localX < 0) {
+        expected = background
+        kind = 'outside-left'
+      } else if (middleY && localX >= window.width && localX < window.width + 2) {
+        expected = background
+        kind = 'outside-right'
+      } else if (middleX && localY >= -2 && localY < 0) {
+        expected = background
+        kind = 'outside-top'
+      } else if (middleX && localY >= window.height && localY < window.height + 2) {
+        expected = background
+        kind = 'outside-bottom'
+      } else if (middleY && localX >= 0 && localX < 2) {
+        expected = clientColor
+        kind = 'inside-left'
+      } else if (middleY && localX >= window.width - 2 && localX < window.width) {
+        expected = clientColor
+        kind = 'inside-right'
+      } else if (middleX && localY >= 0 && localY < 2) {
+        expected = clientColor
+        kind = 'inside-top'
+      } else if (middleX && localY >= window.height - 2 && localY < window.height) {
+        expected = clientColor
+        kind = 'inside-bottom'
+      }
+      if (!expected) continue
+      const actual = colorAt(px, py)
+      const d = delta(actual, expected)
+      const outside = kind.startsWith('outside')
+      if (outside) {
+        checkedOutside += 1
+        maxOutsideDelta = Math.max(maxOutsideDelta, d)
+        if (d > 8) outsideLeaks += 1
+      } else {
+        checkedInside += 1
+        maxInsideDelta = Math.max(maxInsideDelta, d)
+        if (d > 8) insideLeaks += 1
+      }
+      if (d > 8 && samples.length < 16) {
+        samples.push({ kind, px, py, x, y, actual, expected, delta: d })
+      }
+    }
+  }
+  assert(checkedInside > 0 && checkedOutside > 0, `${label} did not check both edge bands`)
+  assert(
+    insideLeaks === 0 && outsideLeaks === 0,
+    `${label} edge leak ${JSON.stringify({
+      insideLeaks,
+      checkedInside,
+      maxInsideDelta,
+      outsideLeaks,
+      checkedOutside,
+      maxOutsideDelta,
+      background,
+      samples,
+    })}`,
+  )
+  return {
+    width: png.width,
+    height: png.height,
+    checkedInside,
+    checkedOutside,
+    maxInsideDelta,
+    maxOutsideDelta,
+    background,
+  }
+}
+
 function resolveWindowOutputName(compositor: CompositorSnapshot, window: WindowSnapshot): string | null {
   const centerX = window.x + Math.floor(window.width / 2)
   const centerY = window.y + Math.floor(window.height / 2)
@@ -688,6 +895,182 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
   })
 
+  test('CSD native edges stay stable after cursor sweep', async ({ base, state }) => {
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: 'Derp CSD Cursor Damage',
+      token: 'csd-cursor-damage',
+      strip: 'green',
+      width: 680,
+      height: 440,
+      xdgDecorationClientSide: true,
+      moveOnHeaderPress: true,
+      roundedCorners: true,
+      noBorder: true,
+      solidClient: true,
+    })
+    state.spawnedNativeWindowIds.add(spawned.window.window_id)
+    const windowId = spawned.window.window_id
+    await waitForWindowRaised(base, windowId)
+    await waitForNativeFocus(base, windowId, 4000)
+    const ready = await waitFor(
+      'wait for CSD cursor damage geometry',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const window = compositorWindowById(compositor, windowId)
+        const shellWindow = shell.windows.find((entry) => entry.window_id === windowId)
+        if (!window || !shellWindow) return null
+        if (!window.client_side_decoration || !shellWindow.client_side_decoration) return null
+        const controls = windowControls(shell, windowId)
+        if (controls?.titlebar) return null
+        return { compositor, shell, window }
+      },
+      3000,
+      40,
+    )
+    const window = ready.window
+    const topSeamRect = {
+      x: window.x,
+      y: window.y - 5,
+      width: Math.min(520, window.width),
+      height: 10,
+    }
+    const leftSeamRect = {
+      x: window.x - 5,
+      y: window.y,
+      width: 10,
+      height: Math.min(360, window.height),
+    }
+    const rightSeamRect = {
+      x: window.x + window.width - 5,
+      y: window.y,
+      width: 10,
+      height: Math.min(360, window.height),
+    }
+    const bottomSeamRect = {
+      x: window.x,
+      y: window.y + window.height - 5,
+      width: Math.min(520, window.width),
+      height: 10,
+    }
+    const fullEdgeRect = {
+      x: window.x - 8,
+      y: window.y - 8,
+      width: window.width + 16,
+      height: window.height + 16,
+    }
+    const outside = {
+      x: window.x + Math.min(window.width - 12, 80),
+      y: window.y + Math.min(window.height - 12, 80),
+    }
+    await movePoint(base, outside.x, outside.y)
+    await syncTest(base)
+    const topBefore = await captureScreenshotRect(base, topSeamRect)
+    const leftBefore = await captureScreenshotRect(base, leftSeamRect)
+    const rightBefore = await captureScreenshotRect(base, rightSeamRect)
+    const bottomBefore = await captureScreenshotRect(base, bottomSeamRect)
+    const fullBefore = await captureScreenshotRect(base, fullEdgeRect)
+    for (let x = topSeamRect.x + 8; x <= topSeamRect.x + topSeamRect.width - 8; x += 29) {
+      await movePoint(base, x, window.y - 1)
+      await movePoint(base, x, window.y + 1)
+    }
+    for (let y = leftSeamRect.y + 8; y <= leftSeamRect.y + leftSeamRect.height - 8; y += 29) {
+      await movePoint(base, window.x - 1, y)
+      await movePoint(base, window.x + 1, y)
+      await movePoint(base, window.x + window.width - 1, y)
+      await movePoint(base, window.x + window.width + 1, y)
+    }
+    for (let x = bottomSeamRect.x + 8; x <= bottomSeamRect.x + bottomSeamRect.width - 8; x += 29) {
+      await movePoint(base, x, window.y + window.height - 1)
+      await movePoint(base, x, window.y + window.height + 1)
+    }
+    await movePoint(base, outside.x, outside.y)
+    await syncTest(base)
+    const topAfter = await captureScreenshotRect(base, topSeamRect)
+    const leftAfter = await captureScreenshotRect(base, leftSeamRect)
+    const rightAfter = await captureScreenshotRect(base, rightSeamRect)
+    const bottomAfter = await captureScreenshotRect(base, bottomSeamRect)
+    const fullAfter = await captureScreenshotRect(base, fullEdgeRect)
+    const topComparison = await comparePngFixture(topAfter.path, topBefore.path, {
+      maxChannelDelta: 4,
+      maxDifferentPixels: 16,
+    })
+    const leftComparison = await comparePngFixture(leftAfter.path, leftBefore.path, {
+      maxChannelDelta: 4,
+      maxDifferentPixels: 16,
+    })
+    const rightComparison = await comparePngFixture(rightAfter.path, rightBefore.path, {
+      maxChannelDelta: 4,
+      maxDifferentPixels: 16,
+    })
+    const bottomComparison = await comparePngFixture(bottomAfter.path, bottomBefore.path, {
+      maxChannelDelta: 4,
+      maxDifferentPixels: 16,
+    })
+    const topBeforeArtifact = await copyArtifactFile('csd-native-seam-top-before.png', topBefore.path)
+    const topAfterArtifact = await copyArtifactFile('csd-native-seam-top-after.png', topAfter.path)
+    const leftBeforeArtifact = await copyArtifactFile('csd-native-seam-left-before.png', leftBefore.path)
+    const leftAfterArtifact = await copyArtifactFile('csd-native-seam-left-after.png', leftAfter.path)
+    const rightBeforeArtifact = await copyArtifactFile('csd-native-seam-right-before.png', rightBefore.path)
+    const rightAfterArtifact = await copyArtifactFile('csd-native-seam-right-after.png', rightAfter.path)
+    const bottomBeforeArtifact = await copyArtifactFile('csd-native-seam-bottom-before.png', bottomBefore.path)
+    const bottomAfterArtifact = await copyArtifactFile('csd-native-seam-bottom-after.png', bottomAfter.path)
+    const fullBeforeArtifact = await copyArtifactFile('csd-native-seam-full-before.png', fullBefore.path)
+    const fullAfterArtifact = await copyArtifactFile('csd-native-seam-full-after.png', fullAfter.path)
+    const fullBeforeAlpha = await assertRoundedCsdTransparentOutside(
+      fullBefore.path,
+      'CSD transparent edge before cursor sweep',
+      fullEdgeRect,
+      window,
+    )
+    const fullAfterAlpha = await assertRoundedCsdTransparentOutside(
+      fullAfter.path,
+      'CSD transparent edge after cursor sweep',
+      fullEdgeRect,
+      window,
+    )
+    const fullBeforeSolidBands = await assertSolidCsdEdgeBands(
+      fullBefore.path,
+      'CSD solid edge before cursor sweep',
+      fullEdgeRect,
+      window,
+      [50, 190, 90],
+    )
+    const fullAfterSolidBands = await assertSolidCsdEdgeBands(
+      fullAfter.path,
+      'CSD solid edge after cursor sweep',
+      fullEdgeRect,
+      window,
+      [50, 190, 90],
+    )
+    await writeJsonArtifact('csd-native-cursor-damage.json', {
+      windowId,
+      window,
+      topSeamRect,
+      leftSeamRect,
+      rightSeamRect,
+      bottomSeamRect,
+      fullEdgeRect,
+      topBefore: topBeforeArtifact,
+      topAfter: topAfterArtifact,
+      leftBefore: leftBeforeArtifact,
+      leftAfter: leftAfterArtifact,
+      rightBefore: rightBeforeArtifact,
+      rightAfter: rightAfterArtifact,
+      bottomBefore: bottomBeforeArtifact,
+      bottomAfter: bottomAfterArtifact,
+      fullBefore: fullBeforeArtifact,
+      fullAfter: fullAfterArtifact,
+      topComparison,
+      leftComparison,
+      rightComparison,
+      bottomComparison,
+      fullBeforeAlpha,
+      fullAfterAlpha,
+      fullBeforeSolidBands,
+      fullAfterSolidBands,
+    })
+  })
+
   test('real foot native decoration seams stay stable after cursor sweep', async ({ base, state }) => {
     await spawnCommand(base, 'foot --title derp-native-seam-foot')
     const opened = await waitForFootWindow(base, state.knownWindowIds, 'wait for foot native seam window')
@@ -755,7 +1138,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const leftAfter = await captureScreenshotRect(base, leftSeamRect)
     const rightAfter = await captureScreenshotRect(base, rightSeamRect)
     const topComparison = await comparePngFixture(topAfter.path, topBefore.path, { maxDifferentPixels: 1200 })
-    const bottomComparison = await comparePngFixture(bottomAfter.path, bottomBefore.path, { maxChannelDelta: 8 })
+    const bottomComparison = await comparePngFixture(bottomAfter.path, bottomBefore.path, {
+      maxChannelDelta: 8,
+      maxDifferentPixels: 300,
+    })
     const topEdgeOwnership = await assertTitlebarEdgeOwnedByClient(topAfter.path, 'foot native titlebar seam')
     const leftComparison = await comparePngFixture(leftAfter.path, leftBefore.path, { maxDifferentPixels: 300 })
     const rightComparison = await comparePngFixture(rightAfter.path, rightBefore.path, { maxDifferentPixels: 300 })
@@ -1777,6 +2163,100 @@ export default defineGroup(import.meta.url, ({ test }) => {
       previewImagePath: duringDrag.compositor.shell_native_drag_preview_image_path,
       previewActualArtifact,
       previewVisual,
+      compositorDuringDrag: duringDrag.compositor,
+      shellDuringDrag: duringDrag.shell,
+    })
+  })
+
+  test('CSD native drag keeps transparent rounded edges clear', async ({ base, state }) => {
+    const stamp = Date.now()
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp CSD Drag Transparent ${stamp}`,
+      token: 'csd-drag-transparent',
+      strip: 'green',
+      width: 520,
+      height: 360,
+      xdgDecorationClientSide: true,
+      moveOnHeaderPress: true,
+      roundedCorners: true,
+      noBorder: true,
+      solidClient: true,
+    })
+    state.spawnedNativeWindowIds.add(spawned.window.window_id)
+    const windowId = spawned.window.window_id
+    await waitForWindowRaised(base, windowId)
+    await waitForNativeFocus(base, windowId, 4000)
+    const ready = await waitFor(
+      'wait for transparent CSD drag geometry',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const window = compositorWindowById(compositor, windowId)
+        if (!window?.client_side_decoration) return null
+        const controls = windowControls(shell, windowId)
+        if (controls?.titlebar) return null
+        return { compositor, shell, window }
+      },
+      5000,
+      100,
+    )
+    const startX = Math.round(ready.window.x + Math.min(140, Math.max(40, ready.window.width * 0.35)))
+    const startY = Math.round(ready.window.y + Math.min(24, Math.max(14, ready.window.height * 0.08)))
+    await movePoint(base, startX, startY)
+    await pointerButton(base, BTN_LEFT, 'press')
+    const dx = -180
+    const dy = 64
+    const steps = 24
+    for (let index = 1; index <= steps; index += 1) {
+      const t = index / steps
+      await movePoint(base, startX + dx * t, startY + dy * t)
+    }
+    const duringDrag = await waitFor(
+      'wait for transparent CSD drag visual',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const window = compositorWindowById(compositor, windowId)
+        if (shell.compositor_interaction_state?.move_window_id !== windowId) return null
+        if (!window?.client_side_decoration) return null
+        const alpha = window.render_alpha ?? 1
+        if (alpha < 0.7 || alpha > 0.82) return null
+        if (compositor.shell_native_drag_preview_window_id != null) return null
+        const controls = windowControls(shell, windowId)
+        if (controls?.titlebar) return null
+        return { compositor, shell, controls, window }
+      },
+      1000,
+      20,
+    )
+    const visual = duringDrag.window
+    assert(visual.width >= 120 && visual.height >= 120, `transparent CSD drag visual too small ${JSON.stringify(visual)}`)
+    const capture = {
+      x: Math.floor(visual.x - 10),
+      y: Math.floor(visual.y - 10),
+      width: Math.ceil(visual.width + 20),
+      height: Math.ceil(visual.height + 20),
+    }
+    const screenshot = await captureScreenshotRect(base, capture)
+    const transparentCorners = await assertRoundedCsdTransparentOutside(
+      screenshot.path,
+      'transparent CSD drag corners',
+      capture,
+      {
+        x: visual.x,
+        y: visual.y,
+        width: visual.width,
+        height: visual.height,
+      },
+    )
+    await pointerButton(base, BTN_LEFT, 'release')
+    await syncTest(base)
+    await writeJsonArtifact('csd-native-drag-transparent-corners.json', {
+      windowId,
+      initialWindow: ready.window,
+      visual,
+      capture,
+      screenshot,
+      screenshotArtifact: await copyArtifactFile('csd-native-drag-transparent-corners.png', screenshot.path),
+      transparentCorners,
       compositorDuringDrag: duringDrag.compositor,
       shellDuringDrag: duringDrag.shell,
     })

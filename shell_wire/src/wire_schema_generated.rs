@@ -414,6 +414,7 @@ pub enum DecodedCompositorToShellMessage {
         move_visual: Option<CompositorInteractionVisual>,
         resize_visual: Option<CompositorInteractionVisual>,
         window_switcher_selected_window_id: u32,
+        super_held: bool,
     },
     NativeDragPreview {
         window_id: u32,
@@ -615,7 +616,7 @@ pub const HOT_DETAIL_FOCUS_CHANGED: u8 = 4;
 pub const HOT_DETAIL_WINDOW_ORDER: u8 = 5;
 pub const HOT_DETAIL_INTERACTION_STATE: u8 = 6;
 pub const HOT_DETAIL_WINDOW_GEOMETRY_BYTES: usize = 57;
-pub const HOT_DETAIL_INTERACTION_STATE_BYTES: usize = 84;
+pub const HOT_DETAIL_INTERACTION_STATE_BYTES: usize = 88;
 
 pub const SHELL_SHARED_STATE_MAGIC: u32 = 1146245204;
 pub const SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES: u32 = 1;
@@ -664,7 +665,8 @@ pub const WINDOW_LIST_ROW_BYTES: usize = 92;
 pub const WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION: u32 = 1146242818;
 pub const WINDOW_GEOMETRY_RECTS_BYTES: usize = 36;
 pub const COMPOSITOR_INTERACTION_STATE_BYTES_V1: usize = 80;
-pub const COMPOSITOR_INTERACTION_STATE_BYTES: usize = 88;
+pub const COMPOSITOR_INTERACTION_STATE_BYTES_V2: usize = 88;
+pub const COMPOSITOR_INTERACTION_STATE_BYTES: usize = 92;
 pub const MAX_OUTPUT_LAYOUT_SCREENS: u32 = 16;
 pub const MAX_OUTPUT_LAYOUT_NAME_BYTES: u32 = 128;
 pub const MAX_SHELL_OUTPUT_LAYOUT_JSON_BYTES: u32 = 4096;

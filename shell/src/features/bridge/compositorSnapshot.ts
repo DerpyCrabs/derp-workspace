@@ -668,7 +668,7 @@ function decodeCommandPaletteState(bytes: Uint8Array, view: DataView, offset: nu
 }
 
 function decodeInteractionState(view: DataView, offset: number): DerpShellDetail | null {
-  if (offset + 80 !== view.byteLength && offset + 88 !== view.byteLength) return null
+  if (offset + 80 !== view.byteLength && offset + 88 !== view.byteLength && offset + 92 !== view.byteLength) return null
   const decodeVisual = (windowId: number, base: number) => {
     if (windowId <= 0) return null
     const flags = view.getUint32(base + 16, true)
@@ -687,7 +687,8 @@ function decodeInteractionState(view: DataView, offset: number): DerpShellDetail
   const moveProxyWindowId = view.getUint32(offset + 28, true)
   const moveCaptureWindowId = view.getUint32(offset + 32, true)
   const windowSwitcherSelectedWindowId = view.getUint32(offset + 76, true)
-  const interactionSerial = offset + 88 === view.byteLength ? Number(view.getBigUint64(offset + 80, true)) : 0
+  const interactionSerial = offset + 88 <= view.byteLength ? Number(view.getBigUint64(offset + 80, true)) : 0
+  const superHeld = offset + 92 === view.byteLength && view.getUint32(offset + 88, true) !== 0
   return {
     type: 'interaction_state',
     revision,
@@ -702,6 +703,7 @@ function decodeInteractionState(view: DataView, offset: number): DerpShellDetail
     resize_rect: decodeVisual(resizeWindowId, offset + 56),
     window_switcher_selected_window_id:
       windowSwitcherSelectedWindowId > 0 ? windowSwitcherSelectedWindowId : null,
+    ...(superHeld ? { super_held: true } : {}),
   }
 }
 

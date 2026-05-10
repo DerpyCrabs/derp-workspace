@@ -201,6 +201,13 @@ impl CompositorState {
             }
             return;
         }
+        if !self.native_window_uses_shell_chrome(&info) {
+            let had_proxy = self.input_routing.shell_move_proxy.take().is_some();
+            if had_proxy {
+                self.shell_send_interaction_state();
+            }
+            return;
+        }
         let visible_placement = self
             .shell_visible_placements()
             .into_iter()
@@ -236,7 +243,7 @@ impl CompositorState {
             None
         } else {
             native_source_global_rect.map(|outer| {
-                let titlebar_h = info.y.saturating_sub(outer.loc.y).max(1);
+                let titlebar_h = info.y.saturating_sub(outer.loc.y).max(0);
                 Rectangle::new(outer.loc, Size::from((outer.size.w.max(1), titlebar_h)))
             })
         };
@@ -447,6 +454,43 @@ impl CompositorState {
         }
     }
 
+    pub(crate) fn shell_restore_tiled_drag_window_if_needed(&mut self, window_id: u32) {
+        let Some(info) = self.windows.window_registry.window_info(window_id) else {
+            return;
+        };
+        if info.minimized || info.fullscreen || info.maximized {
+            return;
+        }
+        if !self.workspace_window_is_tiled(window_id) {
+            return;
+        }
+        let pre_tile = self.workspace_pre_tile_geometry(window_id);
+        if let Some(bounds) = pre_tile {
+            let rect = if let Some(pointer) = self.input_routing.seat.get_pointer() {
+                Self::shell_drag_restore_rect_from_client_frame(
+                    pointer.current_location(),
+                    info.x,
+                    info.y,
+                    info.width,
+                    info.height,
+                    bounds.width.max(1),
+                    bounds.height.max(1),
+                )
+            } else {
+                Rectangle::new(
+                    Point::from((bounds.x, bounds.y)),
+                    Size::from((bounds.width.max(1), bounds.height.max(1))),
+                )
+            };
+            self.shell_apply_global_client_rect(window_id, rect, 0);
+        }
+        let removed = self.workspace_remove_monitor_tile(window_id);
+        let cleared = self.workspace_clear_pre_tile_geometry(window_id);
+        if removed || cleared {
+            self.workspace_send_state();
+        }
+    }
+
     pub fn shell_move_begin(&mut self, window_id: u32) {
         self.shell_move_begin_inner(window_id, true);
     }
@@ -503,6 +547,7 @@ impl CompositorState {
                 self.shell_move_end(prev);
             }
         }
+        self.shell_restore_tiled_drag_window_if_needed(window_id);
         if let Some(window) = self.find_window_by_surface_id(sid) {
             self.output_topology
                 .space

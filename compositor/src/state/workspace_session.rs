@@ -73,7 +73,38 @@ impl CompositorState {
         );
     }
 
-    pub(super) fn workspace_begin_detached_window_drag(&mut self, window_id: u32) {
+    fn workspace_detached_window_shell_chrome_titlebar_h(
+        &self,
+        window_id: u32,
+        state: &WorkspaceState,
+    ) -> i32 {
+        let Some(info) = self.windows.window_registry.window_info(window_id) else {
+            return self.shell_osr.shell_chrome_titlebar_h.max(0);
+        };
+        let group_has_chrome = group_id_for_window(state, window_id).is_some_and(|group_id| {
+            state
+                .groups
+                .iter()
+                .find(|group| group.id == group_id)
+                .is_some_and(|group| group.window_ids.len() > 1)
+        });
+        let uses_shell_chrome = if self.native_window_shell_decoration_disabled(window_id) {
+            group_has_chrome
+        } else {
+            !info.client_side_decoration || group_has_chrome
+        };
+        if uses_shell_chrome {
+            self.shell_osr.shell_chrome_titlebar_h.max(0)
+        } else {
+            0
+        }
+    }
+
+    pub(super) fn workspace_begin_detached_window_drag(
+        &mut self,
+        window_id: u32,
+        shell_chrome_titlebar_h: i32,
+    ) {
         let Some(pointer) = self.input_routing.seat.get_pointer() else {
             self.shell_activate_window(window_id);
             return;
@@ -85,8 +116,10 @@ impl CompositorState {
         let width = info.width.max(1);
         let height = info.height.max(1);
         let x = (pos.x.round() as i32).saturating_sub(width / 2);
+        let drag_handle_h = self.shell_osr.shell_chrome_titlebar_h.max(0);
         let y = (pos.y.round() as i32)
-            .saturating_add(self.shell_osr.shell_chrome_titlebar_h.max(0) / 2);
+            .saturating_sub(drag_handle_h / 2)
+            .saturating_add(shell_chrome_titlebar_h.max(0));
         let (ox, oy) = self.output_topology.shell_canvas_logical_origin;
         self.shell_set_window_geometry(
             window_id,
@@ -130,6 +163,7 @@ impl CompositorState {
         let next_state = reconcile_workspace_state(&next_state, &self.workspace_live_window_ids());
         let mut activation_window_id = None;
         let mut detached_window_drag = None;
+        let mut detached_window_drag_titlebar_h = 0;
         let mut activate_before_workspace_state = false;
         let mut detached_drag_before_workspace_state = false;
         let mut copy_geometry_after_activation = None;
@@ -313,6 +347,8 @@ impl CompositorState {
             WorkspaceMutation::SplitWindowToOwnGroup { window_id } => {
                 if self.shell_ui_pointer_grab_active() {
                     detached_window_drag = Some(*window_id);
+                    detached_window_drag_titlebar_h = self
+                        .workspace_detached_window_shell_chrome_titlebar_h(*window_id, &next_state);
                     detached_drag_before_workspace_state =
                         !self.windows.window_registry.is_shell_hosted(*window_id);
                 } else {
@@ -350,7 +386,10 @@ impl CompositorState {
         self.workspace_warn_invariants("apply_mutation");
         if detached_drag_before_workspace_state {
             if let Some(window_id) = detached_window_drag.take() {
-                self.workspace_begin_detached_window_drag(window_id);
+                self.workspace_begin_detached_window_drag(
+                    window_id,
+                    detached_window_drag_titlebar_h,
+                );
             }
         } else if activate_before_workspace_state {
             if let Some(window_id) = activation_window_id.take() {
@@ -368,7 +407,7 @@ impl CompositorState {
             self.workspace_send_state();
         }
         if let Some(window_id) = detached_window_drag {
-            self.workspace_begin_detached_window_drag(window_id);
+            self.workspace_begin_detached_window_drag(window_id, detached_window_drag_titlebar_h);
         } else if let Some(window_id) = activation_window_id {
             self.shell_activate_window(window_id);
             if let Some((target_window_id, source_window_id)) = copy_geometry_after_activation {

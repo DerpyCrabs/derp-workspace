@@ -450,6 +450,17 @@ impl CompositorState {
                 let raw_sym = keysym.modified_sym().raw();
                 let is_super = crate::input::keysym_is_super(&keysym);
                 let is_alt = crate::input::keysym_is_alt(&keysym);
+                if is_super {
+                    let next = key_state == KeyState::Pressed;
+                    if state.input_routing.shell_super_held != next {
+                        state.input_routing.shell_super_held = next;
+                        if state.input_routing.shell_move_window_id.is_some()
+                            || state.input_routing.shell_resize_window_id.is_some()
+                        {
+                            state.shell_send_interaction_state();
+                        }
+                    }
+                }
                 if state.screenshot_selection_active() {
                     if key_state == KeyState::Pressed
                         && matches!(raw_sym, smithay::input::keyboard::keysyms::KEY_Escape)
@@ -460,6 +471,11 @@ impl CompositorState {
                 }
                 if key_state == KeyState::Pressed {
                     if is_super && !state.input_routing.seat.keyboard_shortcuts_inhibited() {
+                        if state.input_routing.shell_move_window_id.is_some()
+                            || state.input_routing.shell_resize_window_id.is_some()
+                        {
+                            return FilterResult::Intercept(());
+                        }
                         state.programs_menu_prepare_super_press();
                         return FilterResult::Intercept(());
                     }

@@ -287,6 +287,7 @@ impl DrmHead {
                     1.0,
                 );
                 let ordered_window_ids_on_output = state.ordered_window_ids_on_output(output);
+                let empty_clip_ctx = state.shell_empty_clip_ctx_for_draw(output);
                 for (el, wid, include_self_decor) in tagged {
                     let excl_ctx = state.shell_exclusion_clip_ctx_for_draw(
                         output,
@@ -294,16 +295,44 @@ impl DrmHead {
                         include_self_decor,
                         Some(&ordered_window_ids_on_output),
                     );
-                    match excl_ctx {
-                        None => render_elements.push(DesktopStack::Space(
+                    let clip_bounds = wid.and_then(|id| state.native_window_space_clip_bounds(id));
+                    match (excl_ctx, clip_bounds) {
+                        (None, None) => render_elements.push(DesktopStack::Space(
                             crate::desktop::desktop_stack::FractionalDamageSpaceElements::new(
                                 el,
                                 output_scale,
                             ),
                         )),
-                        Some(ctx) => render_elements.push(DesktopStack::SpaceClip(
+                        (Some(ctx), None) => render_elements.push(DesktopStack::SpaceClip(
                             SpaceExclusionClip::new(el, output_scale, ctx),
                         )),
+                        (Some(ctx), Some(bounds)) => render_elements.push(DesktopStack::SpaceClip(
+                            SpaceExclusionClip::new_with_bounds(
+                                el,
+                                output_scale,
+                                ctx,
+                                Some(bounds),
+                            ),
+                        )),
+                        (None, Some(bounds)) => {
+                            if let Some(ctx) = empty_clip_ctx.clone() {
+                                render_elements.push(DesktopStack::SpaceClip(
+                                    SpaceExclusionClip::new_with_bounds(
+                                        el,
+                                        output_scale,
+                                        ctx,
+                                        Some(bounds),
+                                    ),
+                                ));
+                            } else {
+                                render_elements.push(DesktopStack::Space(
+                                    crate::desktop::desktop_stack::FractionalDamageSpaceElements::new(
+                                        el,
+                                        output_scale,
+                                    ),
+                                ));
+                            }
+                        }
                     }
                 }
                 let bypass_shell = state.output_has_fullscreen_native_direct_path(output);

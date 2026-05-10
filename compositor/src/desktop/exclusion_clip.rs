@@ -49,13 +49,45 @@ impl ShellExclusionClipCtx {
         let br_log = ol.loc + ol.size;
         let p1f = br_log.to_f64().to_physical(scale);
         let p0: Point<i32, Physical> = Point::from((p0f.x.floor() as i32, p0f.y.floor() as i32));
-        let p1: Point<i32, Physical> = Point::from((p1f.x.ceil() as i32, p1f.y.ceil() as i32));
+        let p1: Point<i32, Physical> =
+            Point::from((p1f.x.ceil() as i32 + 1, p1f.y.ceil() as i32 + 1));
         let pw = (p1.x - p0.x).max(1);
         let ph = (p1.y - p0.y).max(1);
         let phys_out = Rectangle::new(p0, Size::from((pw, ph)));
         Some(Rectangle::new(
             Point::from((phys_out.loc.x - dst.loc.x, phys_out.loc.y - dst.loc.y)),
             phys_out.size,
+        ))
+    }
+
+    pub(crate) fn global_log_rect_to_inside_local_phys(
+        &self,
+        g: Rectangle<i32, Logical>,
+        dst: Rectangle<i32, Physical>,
+    ) -> Option<Rectangle<i32, Physical>> {
+        let scale = Scale::<f64>::from(self.scale_f);
+        let on_out = g.intersection(self.output_logical)?;
+        if on_out.size.w <= 0 || on_out.size.h <= 0 {
+            return None;
+        }
+        let oloc = Point::from((
+            on_out.loc.x - self.output_logical.loc.x,
+            on_out.loc.y - self.output_logical.loc.y,
+        ));
+        let ol = Rectangle::new(oloc, on_out.size);
+        let p0f = ol.loc.to_f64().to_physical(scale);
+        let br_log = ol.loc + ol.size;
+        let p1f = br_log.to_f64().to_physical(scale);
+        let p0: Point<i32, Physical> = Point::from((p0f.x.ceil() as i32, p0f.y.ceil() as i32));
+        let p1: Point<i32, Physical> = Point::from((p1f.x.ceil() as i32, p1f.y.ceil() as i32));
+        let pw = p1.x - p0.x;
+        let ph = p1.y - p0.y;
+        if pw <= 0 || ph <= 0 {
+            return None;
+        }
+        Some(Rectangle::new(
+            Point::from((p0.x - dst.loc.x, p0.y - dst.loc.y)),
+            Size::from((pw, ph)),
         ))
     }
 }

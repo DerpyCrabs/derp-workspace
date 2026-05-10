@@ -143,6 +143,7 @@ where
 {
     inner: FractionalDamageSpaceElements<E>,
     exclusion: Arc<exclusion_clip::ShellExclusionClipCtx>,
+    clip_bounds: Option<Rectangle<i32, Logical>>,
 }
 
 impl<E> SpaceExclusionClip<E>
@@ -157,7 +158,26 @@ where
         Self {
             inner: FractionalDamageSpaceElements::new(inner, output_scale),
             exclusion,
+            clip_bounds: None,
         }
+    }
+
+    pub fn new_with_bounds(
+        inner: SpaceRenderElements<GlesRenderer, E>,
+        output_scale: f64,
+        exclusion: Arc<exclusion_clip::ShellExclusionClipCtx>,
+        clip_bounds: Option<Rectangle<i32, Logical>>,
+    ) -> Self {
+        Self {
+            inner: FractionalDamageSpaceElements::new(inner, output_scale),
+            exclusion,
+            clip_bounds,
+        }
+    }
+
+    fn clip_bounds_local(&self, dst: Rectangle<i32, Physical>) -> Option<Rectangle<i32, Physical>> {
+        self.clip_bounds
+            .and_then(|b| self.exclusion.global_log_rect_to_inside_local_phys(b, dst))
     }
 }
 
@@ -186,7 +206,12 @@ where
     }
 
     fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
-        self.inner.geometry(scale)
+        let mut geom = self.inner.geometry(scale);
+        if self.clip_bounds.is_some() {
+            geom.size.w += 1;
+            geom.size.h += 1;
+        }
+        geom
     }
 
     fn damage_since(
@@ -194,33 +219,56 @@ where
         scale: Scale<f64>,
         commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
-        self.inner.damage_since(scale, commit)
+        let d = self.inner.damage_since(scale, commit);
+        if self.clip_bounds.is_some() {
+            inflate_damage_set_phys(d)
+        } else {
+            d
+        }
     }
 
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
-        if self.exclusion.zones.is_empty() {
+        if self.exclusion.zones.is_empty() && self.clip_bounds.is_none() {
             return self.inner.opaque_regions(scale);
         }
         let geom = self.inner.geometry(scale);
+        let bounds = self.clip_bounds_local(geom);
         let mut out: Vec<Rectangle<i32, Physical>> = Vec::new();
         for r in self.inner.opaque_regions(scale).iter() {
             if r.size.w <= 0 || r.size.h <= 0 {
                 continue;
             }
-            let mut r_out = *r;
-            r_out.loc.x += geom.loc.x;
-            r_out.loc.y += geom.loc.y;
-            let g = self.exclusion.damage_output_phys_to_global_log(r_out);
-            for piece in exclusion_clip::subtract_holes_from_rect_log(g, &self.exclusion.zones) {
-                if piece.size.w <= 0 || piece.size.h <= 0 {
-                    continue;
-                }
-                if let Some(local) = self
-                    .exclusion
-                    .global_log_rect_to_damage_local_phys(piece, geom)
+            let mut locals = Vec::new();
+            if self.exclusion.zones.is_empty() {
+                locals.push(*r);
+            } else {
+                let mut r_out = *r;
+                r_out.loc.x += geom.loc.x;
+                r_out.loc.y += geom.loc.y;
+                let g = self.exclusion.damage_output_phys_to_global_log(r_out);
+                for piece in exclusion_clip::subtract_holes_from_rect_log(g, &self.exclusion.zones)
                 {
-                    if local.size.w > 0 && local.size.h > 0 {
-                        out.push(local);
+                    if piece.size.w <= 0 || piece.size.h <= 0 {
+                        continue;
+                    }
+                    if let Some(local) = self
+                        .exclusion
+                        .global_log_rect_to_damage_local_phys(piece, geom)
+                    {
+                        if local.size.w > 0 && local.size.h > 0 {
+                            locals.push(local);
+                        }
+                    }
+                }
+            }
+            for local in locals {
+                let clipped = match bounds {
+                    Some(b) => local.intersection(b),
+                    None => Some(local),
+                };
+                if let Some(c) = clipped {
+                    if c.size.w > 0 && c.size.h > 0 {
+                        out.push(c);
                     }
                 }
             }
@@ -250,30 +298,48 @@ where
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        if self.exclusion.zones.is_empty() {
+        if self.exclusion.zones.is_empty() && self.clip_bounds.is_none() {
             return self
                 .inner
                 .draw(frame, src, dst, damage, opaque_regions, cache);
         }
+        let bounds = self.clip_bounds_local(dst);
         let mut clipped: Vec<Rectangle<i32, Physical>> = Vec::new();
         for d in damage {
             if d.size.w <= 0 || d.size.h <= 0 {
                 continue;
             }
-            let mut d_out = *d;
-            d_out.loc.x += dst.loc.x;
-            d_out.loc.y += dst.loc.y;
-            let g = self.exclusion.damage_output_phys_to_global_log(d_out);
-            for piece in exclusion_clip::subtract_holes_from_rect_log(g, &self.exclusion.zones) {
-                if piece.size.w <= 0 || piece.size.h <= 0 {
-                    continue;
-                }
-                if let Some(pl) = self
-                    .exclusion
-                    .global_log_rect_to_damage_local_phys(piece, dst)
+            let mut locals = Vec::new();
+            if self.exclusion.zones.is_empty() {
+                locals.push(*d);
+            } else {
+                let mut d_out = *d;
+                d_out.loc.x += dst.loc.x;
+                d_out.loc.y += dst.loc.y;
+                let g = self.exclusion.damage_output_phys_to_global_log(d_out);
+                for piece in exclusion_clip::subtract_holes_from_rect_log(g, &self.exclusion.zones)
                 {
-                    if pl.size.w > 0 && pl.size.h > 0 {
-                        clipped.push(pl);
+                    if piece.size.w <= 0 || piece.size.h <= 0 {
+                        continue;
+                    }
+                    if let Some(pl) = self
+                        .exclusion
+                        .global_log_rect_to_damage_local_phys(piece, dst)
+                    {
+                        if pl.size.w > 0 && pl.size.h > 0 {
+                            locals.push(pl);
+                        }
+                    }
+                }
+            }
+            for local in locals {
+                let clipped_local = match bounds {
+                    Some(b) => local.intersection(b),
+                    None => Some(local),
+                };
+                if let Some(c) = clipped_local {
+                    if c.size.w > 0 && c.size.h > 0 {
+                        clipped.push(c);
                     }
                 }
             }

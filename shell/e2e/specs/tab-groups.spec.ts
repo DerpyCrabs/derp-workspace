@@ -54,6 +54,7 @@ import {
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 import { fileBrowserSnapshot, openFileBrowserFromLauncher } from '../lib/fileBrowserFixtureNav.ts'
+import { spawnNativeWindow } from '../lib/setup.ts'
 
 const execFileAsync = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -405,6 +406,65 @@ function nativeContentPoint(shell: ShellSnapshot, windowId: number) {
         Math.max(32, Math.min(Math.max(48, window.height - 32), 120)),
     ),
   }
+}
+
+function csdGroupDropStripPoint(shell: ShellSnapshot, windowId: number) {
+  const window = shellWindowById(shell, windowId)
+  assert(window, `missing shell window ${windowId}`)
+  assert(window.client_side_decoration === true, `window ${windowId} is not client-side decorated`)
+  return {
+    x: Math.round(window.x + window.width / 2),
+    y: Math.round(window.y + Math.min(17, Math.max(6, window.height / 4))),
+  }
+}
+
+function csdContentDropPoint(shell: ShellSnapshot, windowId: number) {
+  const window = shellWindowById(shell, windowId)
+  assert(window, `missing shell window ${windowId}`)
+  assert(window.client_side_decoration === true, `window ${windowId} is not client-side decorated`)
+  const y = window.y + Math.max(56, Math.min(window.height - 12, 118))
+  return {
+    x: Math.round(window.x + window.width / 2),
+    y: Math.round(y),
+  }
+}
+
+async function dragWindowHandleToPoint(
+  base: string,
+  sourceWindowId: number,
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+) {
+  const before = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  if (before.shell_context_menu_visible) {
+    await tapKey(base, KEY.escape)
+    await waitFor(
+      'wait for shell context menu dismissed before window drag',
+      async () => {
+        const next = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        return next.shell_context_menu_visible ? null : next
+      },
+      1000,
+      40,
+    )
+  }
+  await movePoint(base, start.x, start.y)
+  await pointerButton(base, BTN_LEFT, 'press')
+  await movePoint(base, start.x + 28, start.y)
+  for (let step = 1; step <= 24; step += 1) {
+    const t = step / 24
+    await movePoint(base, start.x + 28 + (end.x - (start.x + 28)) * t, start.y + (end.y - start.y) * t)
+  }
+  return waitFor(
+    `wait for window drag ${sourceWindowId}`,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      if (compositor.shell_move_window_id !== sourceWindowId) return null
+      return { compositor, shell }
+    },
+    2000,
+    40,
+  )
 }
 
 async function dragWindowHandleOntoTab(
@@ -1042,6 +1102,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
                 2000,
                 125,
               ),
+            budget: { sharedStateExclusionWrites: 16 },
           },
         ),
       )
@@ -1472,6 +1533,367 @@ export default defineGroup(import.meta.url, ({ test }) => {
         try {
           await closeWindow(base, jsWindowId)
           await waitForWindowGone(base, jsWindowId)
+        } catch {}
+      }
+    }
+  })
+
+  test('window drag creates a tab group from a standalone CSD top strip only', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-csd-drop-strip')
+    let jsWindowId: number | null = null
+    let csdWindowId: number | null = null
+    let released = false
+    try {
+      const jsWindow = await timing.step('open js source window', () => openShellTestWindow(base, state))
+      jsWindowId = jsWindow.window.window_id
+      const sourceMoved = await timing.step('move js source window to other monitor', () =>
+        moveShellWindowToOtherMonitor(base, jsWindowId!),
+      )
+      await timing.step('move pointer to target monitor before csd spawn', () => {
+        const sourceOutput = sourceMoved.movedShellWindow.output_name
+        const targetOutput = sourceMoved.compositor.outputs.find((output) => output.name !== sourceOutput)
+        assert(targetOutput, `missing target output away from ${sourceOutput}`)
+        return movePoint(
+          base,
+          Math.round(targetOutput.x + targetOutput.width / 2),
+          Math.round(targetOutput.y + targetOutput.height / 2),
+        )
+      })
+      const csd = await timing.step('spawn standalone csd target', () =>
+        spawnNativeWindow(base, state.knownWindowIds, {
+          title: `Derp CSD Tab Target ${Date.now()}`,
+          token: `tab-csd-target-${Date.now()}`,
+          strip: 'blue',
+          width: 520,
+          height: 360,
+          xdgDecorationClientSide: true,
+        }),
+      )
+      csdWindowId = csd.window.window_id
+      state.spawnedNativeWindowIds.add(csdWindowId)
+      const standalone = await timing.step('wait for standalone csd chrome hidden', () =>
+        waitFor(
+          `wait for csd standalone ${csdWindowId}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const compositorWindow = compositorWindowById(compositor, csdWindowId!)
+            const shellWindow = shellWindowById(shell, csdWindowId!)
+            const controls = windowControls(shell, csdWindowId!)
+            const group = tabGroupByWindow(shell, csdWindowId!)
+            if (!compositorWindow || !shellWindow || !group) return null
+            if (shellWindow.client_side_decoration !== true || compositorWindow.client_side_decoration !== true) return null
+            if (group.member_window_ids.length !== 1) return null
+            if (controls?.titlebar) return null
+            return { compositor, shell, compositorWindow, shellWindow, controls, group }
+          },
+          3000,
+          40,
+        ),
+      )
+      const shellBefore = await timing.step('read source and csd snapshot', () =>
+        getJson<ShellSnapshot>(base, '/test/state/shell'),
+      )
+      const sourceTab = tabRect(shellBefore, jsWindowId)
+      const contentPoint = csdContentDropPoint(shellBefore, csdWindowId)
+      const interiorHover = await timing.step('drag source over csd content body', () =>
+        dragWindowHandleToPoint(base, jsWindowId!, rectCenter(sourceTab.tab.rect!), contentPoint),
+      )
+      const noWholeWindowTarget = await timing.step('assert csd body is not a drop target', () =>
+        waitFor(
+          `wait for no csd body target ${csdWindowId}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            if (compositor.shell_move_window_id !== jsWindowId) return null
+            if (shell.tab_drag_target) return null
+            return { compositor, shell }
+          },
+          1500,
+          40,
+        ),
+      )
+      const stripPoint = await timing.step('resolve csd top strip point', async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return csdGroupDropStripPoint(shell, csdWindowId!)
+      })
+      await timing.step('move source over csd top strip', () => movePoint(base, stripPoint.x, stripPoint.y))
+      const stripHover = await timing.step('wait for csd strip drop target', () =>
+        waitFor(
+          `wait for csd strip target ${csdWindowId}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const targetGroup = tabGroupByWindow(shell, csdWindowId!)
+            const dragTarget = shell.tab_drag_target
+            if (compositor.shell_move_window_id !== jsWindowId) return null
+            if (!targetGroup || !dragTarget || dragTarget.group_id !== targetGroup.group_id) return null
+            return { compositor, shell, targetGroup, dragTarget }
+          },
+          2000,
+          40,
+        ),
+      )
+      await timing.step('release csd strip drop', () => finishDrag(base))
+      released = true
+      const merged = await timing.step('wait for csd tab group', () =>
+        waitForGroupedMembers(base, [csdWindowId!, jsWindowId!], jsWindowId!),
+      )
+      await timing.step('assert compositor owns csd merged group', () =>
+        assertShellTabGroupMatchesCompositorWorkspace(merged.group, [csdWindowId!, jsWindowId!]),
+      )
+      const csdTab = merged.group.tabs.find((tab) => tab.window_id === csdWindowId)
+      assert(csdTab?.rect, `missing grouped csd tab rect ${csdWindowId}`)
+      await timing.step('write csd strip artifact', () =>
+        writeJsonArtifact('tab-groups-csd-drop-strip.json', {
+          sourceMoved,
+          standalone,
+          contentPoint,
+          interiorHover,
+          noWholeWindowTarget,
+          stripPoint,
+          stripHover,
+          merged,
+        }),
+      )
+    } finally {
+      if (!released) {
+        try {
+          await finishDrag(base)
+        } catch {}
+      }
+      if (jsWindowId !== null) {
+        try {
+          await closeWindow(base, jsWindowId)
+          await waitForWindowGone(base, jsWindowId)
+        } catch {}
+      }
+      if (csdWindowId !== null) {
+        try {
+          await cleanupNativeWindows(base, new Set([csdWindowId]))
+        } catch {}
+      }
+    }
+  })
+
+  test('CSD window drag drops into another tab bar on compositor release', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-csd-source-drop')
+    let jsWindowId: number | null = null
+    let csdWindowId: number | null = null
+    let released = false
+    try {
+      const jsWindow = await timing.step('open js target window', () => openShellTestWindow(base, state))
+      jsWindowId = jsWindow.window.window_id
+      const targetMoved = await timing.step('move js target window to other monitor', () =>
+        moveShellWindowToOtherMonitor(base, jsWindowId!),
+      )
+      await timing.step('move pointer to source monitor before csd spawn', () => {
+        const targetOutput = targetMoved.movedShellWindow.output_name
+        const sourceOutput = targetMoved.compositor.outputs.find((output) => output.name !== targetOutput)
+        assert(sourceOutput, `missing source output away from ${targetOutput}`)
+        return movePoint(
+          base,
+          Math.round(sourceOutput.x + sourceOutput.width / 2),
+          Math.round(sourceOutput.y + sourceOutput.height / 2),
+        )
+      })
+      const csd = await timing.step('spawn movable csd source', () =>
+        spawnNativeWindow(base, state.knownWindowIds, {
+          title: `Derp CSD Tab Source ${Date.now()}`,
+          token: `tab-csd-source-${Date.now()}`,
+          strip: 'green',
+          width: 520,
+          height: 360,
+          xdgDecorationClientSide: true,
+          moveOnHeaderPress: true,
+        }),
+      )
+      csdWindowId = csd.window.window_id
+      state.spawnedNativeWindowIds.add(csdWindowId)
+      const standalone = await timing.step('wait for movable csd standalone chrome hidden', () =>
+        waitFor(
+          `wait for movable csd standalone ${csdWindowId}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const compositorWindow = compositorWindowById(compositor, csdWindowId!)
+            const shellWindow = shellWindowById(shell, csdWindowId!)
+            const controls = windowControls(shell, csdWindowId!)
+            const group = tabGroupByWindow(shell, csdWindowId!)
+            if (!compositorWindow || !shellWindow || !group) return null
+            if (shellWindow.client_side_decoration !== true || compositorWindow.client_side_decoration !== true) return null
+            if (group.member_window_ids.length !== 1) return null
+            if (controls?.titlebar) return null
+            return { compositor, shell, compositorWindow, shellWindow, controls, group }
+          },
+          3000,
+          40,
+        ),
+      )
+      const start = await timing.step('resolve csd source header point', async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return csdGroupDropStripPoint(shell, csdWindowId!)
+      })
+      const dropIndicator = await timing.step('drag csd source onto js tab bar', () =>
+        dragWindowHandleOntoTab(base, csdWindowId!, start, jsWindowId!),
+      )
+      assert(dropIndicator, 'missing csd source drop indicator')
+      assert(
+        dropIndicator.compositor.shell_move_proxy_window_id === null,
+        'standalone CSD move should not synthesize a shell move proxy',
+      )
+      await timing.step('release csd source over js tab bar', () => finishDrag(base))
+      released = true
+      const merged = await timing.step('wait for csd source grouped with js target', () =>
+        waitForGroupedMembers(base, [csdWindowId!, jsWindowId!], csdWindowId!),
+      )
+      await timing.step('assert compositor owns csd source merged group', () =>
+        assertShellTabGroupMatchesCompositorWorkspace(merged.group, [csdWindowId!, jsWindowId!]),
+      )
+      await timing.step('write csd source drop artifact', () =>
+        writeJsonArtifact('tab-groups-csd-source-drop.json', {
+          targetMoved,
+          standalone,
+          start,
+          dropIndicator,
+          merged,
+        }),
+      )
+    } finally {
+      if (!released) {
+        try {
+          await finishDrag(base)
+        } catch {}
+      }
+      if (jsWindowId !== null) {
+        try {
+          await closeWindow(base, jsWindowId)
+          await waitForWindowGone(base, jsWindowId)
+        } catch {}
+      }
+      if (csdWindowId !== null) {
+        try {
+          await cleanupNativeWindows(base, new Set([csdWindowId]))
+        } catch {}
+      }
+    }
+  })
+
+  test('tearing out a grouped CSD tab keeps the cursor inside the CSD header', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-csd-tear-out-position')
+    let jsWindowId: number | null = null
+    let csdWindowId: number | null = null
+    let released = false
+    try {
+      const jsWindow = await timing.step('open js target window', () => openShellTestWindow(base, state))
+      jsWindowId = jsWindow.window.window_id
+      await timing.step('move js target window to other monitor', () =>
+        moveShellWindowToOtherMonitor(base, jsWindowId!),
+      )
+      const csd = await timing.step('spawn csd tear-out source', () =>
+        spawnNativeWindow(base, state.knownWindowIds, {
+          title: `Derp CSD Tear Out ${Date.now()}`,
+          token: `tab-csd-tear-out-${Date.now()}`,
+          strip: 'green',
+          width: 520,
+          height: 360,
+          xdgDecorationClientSide: true,
+          moveOnHeaderPress: true,
+        }),
+      )
+      csdWindowId = csd.window.window_id
+      state.spawnedNativeWindowIds.add(csdWindowId)
+      const standalone = await timing.step('wait for csd tear-out source standalone', () =>
+        waitFor(
+          `wait for csd tear-out source ${csdWindowId}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const compositorWindow = compositorWindowById(compositor, csdWindowId!)
+            const shellWindow = shellWindowById(shell, csdWindowId!)
+            const controls = windowControls(shell, csdWindowId!)
+            const group = tabGroupByWindow(shell, csdWindowId!)
+            if (!compositorWindow || !shellWindow || !group) return null
+            if (shellWindow.client_side_decoration !== true || compositorWindow.client_side_decoration !== true) return null
+            if (group.member_window_ids.length !== 1) return null
+            if (controls?.titlebar) return null
+            return { compositor, shell, compositorWindow, shellWindow, controls, group }
+          },
+          3000,
+          40,
+        ),
+      )
+      const start = await timing.step('resolve csd source header point', async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return csdGroupDropStripPoint(shell, csdWindowId!)
+      })
+      await timing.step('drag csd source onto js tab bar', () =>
+        dragWindowHandleOntoTab(base, csdWindowId!, start, jsWindowId!),
+      )
+      await timing.step('release csd merge', () => finishDrag(base))
+      const merged = await timing.step('wait for csd grouped with js target', () =>
+        waitForGroupedMembers(base, [csdWindowId!, jsWindowId!], csdWindowId!),
+      )
+      const draggedTab = await timing.step('wait for grouped csd tab rect', () => waitForTabRect(base, csdWindowId!))
+      const dragStart = rectCenter(draggedTab.tab.rect!)
+      const previewPoint = {
+        x: Math.min(dragStart.x + 48, draggedTab.tab.rect!.global_x + draggedTab.tab.rect!.width - 6),
+        y: dragStart.y,
+      }
+      await timing.step('start grouped csd tab drag', () => dragTabStep(base, csdWindowId!, previewPoint))
+      const tearOutPoint = {
+        x: previewPoint.x + 24,
+        y: draggedTab.tab.rect!.global_y - 96,
+      }
+      await timing.step('move grouped csd tab out of strip', () => movePoint(base, tearOutPoint.x, tearOutPoint.y))
+      const detached = await timing.step('wait for grouped csd tear-out during drag', () =>
+        waitFor(
+          `wait for grouped csd tab ${csdWindowId} detached`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const draggedGroup = tabGroupByWindow(shell, csdWindowId!)
+            const remainingGroup = tabGroupByWindow(shell, jsWindowId!)
+            const draggedWindow = compositorWindowById(compositor, csdWindowId!)
+            const shellWindow = shellWindowById(shell, csdWindowId!)
+            if (!draggedGroup || !remainingGroup || draggedGroup.group_id === remainingGroup.group_id) return null
+            if (!draggedWindow || !shellWindow || shellWindow.client_side_decoration !== true) return null
+            if (compositor.shell_move_window_id !== csdWindowId) return null
+            return { compositor, shell, draggedGroup, remainingGroup, draggedWindow, shellWindow }
+          },
+          5000,
+          100,
+        ),
+      )
+      assert(
+        detached.draggedWindow.y <= tearOutPoint.y,
+        `torn-out CSD top ${detached.draggedWindow.y} should not be below cursor ${tearOutPoint.y}`,
+      )
+      assert(
+        tearOutPoint.y - detached.draggedWindow.y <= 60,
+        `torn-out CSD cursor offset ${tearOutPoint.y - detached.draggedWindow.y} is too large`,
+      )
+      await timing.step('release grouped csd tear-out drag', () => finishDrag(base))
+      released = true
+      await timing.step('write grouped csd tear-out position artifact', () =>
+        writeJsonArtifact('tab-groups-csd-tear-out-position.json', {
+          standalone,
+          merged,
+          draggedTab,
+          previewPoint,
+          tearOutPoint,
+          detached,
+        }),
+      )
+    } finally {
+      if (!released) {
+        try {
+          await finishDrag(base)
+        } catch {}
+      }
+      if (jsWindowId !== null) {
+        try {
+          await closeWindow(base, jsWindowId)
+          await waitForWindowGone(base, jsWindowId)
+        } catch {}
+      }
+      if (csdWindowId !== null) {
+        try {
+          await cleanupNativeWindows(base, new Set([csdWindowId]))
         } catch {}
       }
     }

@@ -108,10 +108,12 @@ impl CompositorState {
         else {
             return Err("tgt output".into());
         };
-        let Some(src_work) = self.shell_maximize_work_area_global_for_output(&src_out) else {
+        let Some(src_work) = self.shell_maximize_work_area_global_for_window(&src_out, window_id)
+        else {
             return Err("src work".into());
         };
-        let Some(tgt_work) = self.shell_maximize_work_area_global_for_output(&tgt_out) else {
+        let Some(tgt_work) = self.shell_maximize_work_area_global_for_window(&tgt_out, window_id)
+        else {
             return Err("tgt work".into());
         };
         let (ox, oy) = self.output_topology.shell_canvas_logical_origin;
@@ -130,7 +132,9 @@ impl CompositorState {
                     height: frame_rect.size.h.max(1),
                 },
             );
-            let client_rect = self.workspace_auto_layout_client_rect_from_frame_rect(frame_rect);
+            let client_rect = self.workspace_auto_layout_client_rect_from_frame_rect_for_window(
+                window_id, frame_rect,
+            );
             self.shell_apply_global_client_rect(window_id, client_rect, 0);
             self.workspace_send_state();
             return Ok(());
@@ -292,7 +296,8 @@ impl CompositorState {
                 height: frame_rect.size.h.max(1),
             },
         );
-        let client_rect = self.workspace_auto_layout_client_rect_from_frame_rect(frame_rect);
+        let client_rect = self
+            .workspace_auto_layout_client_rect_from_frame_rect_for_window(window_id, frame_rect);
         self.shell_apply_global_client_rect(window_id, client_rect, 0);
         self.workspace_send_state();
         Ok(())

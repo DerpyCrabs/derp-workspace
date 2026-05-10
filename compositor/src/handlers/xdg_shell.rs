@@ -3,10 +3,7 @@ use smithay::{
     desktop::{
         find_popup_root_surface, get_popup_toplevel_coords, PopupKind, PopupManager, Space, Window,
     },
-    input::{
-        pointer::{Focus, GrabStartData as PointerGrabStartData},
-        Seat,
-    },
+    input::{pointer::GrabStartData as PointerGrabStartData, Seat},
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
@@ -14,7 +11,7 @@ use smithay::{
             Client, Resource,
         },
     },
-    utils::{Rectangle, Serial},
+    utils::Serial,
     wayland::{
         compositor::with_states,
         shell::xdg::{
@@ -25,12 +22,7 @@ use smithay::{
 };
 
 use crate::state::read_toplevel_tiling;
-use crate::{
-    chrome_bridge::ChromeEvent,
-    derp_space::DerpSpaceElem,
-    grabs::{MoveSurfaceGrab, ResizeSurfaceGrab},
-    CompositorState,
-};
+use crate::{chrome_bridge::ChromeEvent, derp_space::DerpSpaceElem, CompositorState};
 
 fn toplevel_title_app_id(surface: &ToplevelSurface) -> (String, String) {
     with_states(surface.wl_surface(), |states| {
@@ -405,30 +397,14 @@ impl XdgShellHandler for CompositorState {
 
         let seat = Seat::from_resource(&seat).unwrap();
 
-        if let Some(start_data) = check_grab(&seat, wl_surface, serial) {
-            let pointer = seat.get_pointer().unwrap();
-
-            let window = self
-                .output_topology
-                .space
-                .elements()
-                .find_map(|e| {
-                    if let DerpSpaceElem::Wayland(w) = e {
-                        (w.toplevel().unwrap().wl_surface() == wl_surface).then_some(w.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap();
-            let initial_window_location = self
-                .output_topology
-                .space
-                .element_location(&DerpSpaceElem::Wayland(window.clone()))
-                .unwrap();
-
-            let grab = MoveSurfaceGrab::new(start_data, window, initial_window_location);
-
-            pointer.set_grab(self, grab, serial, Focus::Clear);
+        if check_grab(&seat, wl_surface, serial).is_some() {
+            if let Some(window_id) = self
+                .windows
+                .window_registry
+                .window_id_for_wl_surface(wl_surface)
+            {
+                self.shell_move_begin(window_id);
+            }
         }
     }
 
@@ -443,42 +419,14 @@ impl XdgShellHandler for CompositorState {
 
         let wl_surface = surface.wl_surface();
 
-        if let Some(start_data) = check_grab(&seat, wl_surface, serial) {
-            let pointer = seat.get_pointer().unwrap();
-
-            let window = self
-                .output_topology
-                .space
-                .elements()
-                .find_map(|e| {
-                    if let DerpSpaceElem::Wayland(w) = e {
-                        (w.toplevel().unwrap().wl_surface() == wl_surface).then_some(w.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap();
-            let initial_window_location = self
-                .output_topology
-                .space
-                .element_location(&DerpSpaceElem::Wayland(window.clone()))
-                .unwrap();
-            let initial_window_size = window.geometry().size;
-
-            surface.with_pending_state(|state| {
-                state.states.set(xdg_toplevel::State::Resizing);
-            });
-
-            surface.send_pending_configure();
-
-            let grab = ResizeSurfaceGrab::start(
-                start_data,
-                window,
-                edges.into(),
-                Rectangle::new(initial_window_location, initial_window_size),
-            );
-
-            pointer.set_grab(self, grab, serial, Focus::Clear);
+        if check_grab(&seat, wl_surface, serial).is_some() {
+            if let Some(window_id) = self
+                .windows
+                .window_registry
+                .window_id_for_wl_surface(wl_surface)
+            {
+                self.shell_resize_begin(window_id, xdg_resize_edges_to_wire(edges));
+            }
         }
     }
 
@@ -635,6 +583,28 @@ fn check_grab(
     }
 
     Some(start_data)
+}
+
+fn xdg_resize_edges_to_wire(edges: xdg_toplevel::ResizeEdge) -> u32 {
+    match edges {
+        xdg_toplevel::ResizeEdge::Top => shell_wire::RESIZE_EDGE_TOP,
+        xdg_toplevel::ResizeEdge::Bottom => shell_wire::RESIZE_EDGE_BOTTOM,
+        xdg_toplevel::ResizeEdge::Left => shell_wire::RESIZE_EDGE_LEFT,
+        xdg_toplevel::ResizeEdge::Right => shell_wire::RESIZE_EDGE_RIGHT,
+        xdg_toplevel::ResizeEdge::TopLeft => {
+            shell_wire::RESIZE_EDGE_TOP | shell_wire::RESIZE_EDGE_LEFT
+        }
+        xdg_toplevel::ResizeEdge::BottomLeft => {
+            shell_wire::RESIZE_EDGE_BOTTOM | shell_wire::RESIZE_EDGE_LEFT
+        }
+        xdg_toplevel::ResizeEdge::TopRight => {
+            shell_wire::RESIZE_EDGE_TOP | shell_wire::RESIZE_EDGE_RIGHT
+        }
+        xdg_toplevel::ResizeEdge::BottomRight => {
+            shell_wire::RESIZE_EDGE_BOTTOM | shell_wire::RESIZE_EDGE_RIGHT
+        }
+        _ => 0,
+    }
 }
 
 pub fn handle_commit(popups: &mut PopupManager, space: &Space<DerpSpaceElem>, surface: &WlSurface) {

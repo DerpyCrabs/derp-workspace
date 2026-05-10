@@ -9,10 +9,12 @@ import {
   assertRectMinSize,
   assertTaskbarRowOnMonitor,
   assertTopWindow,
+  captureScreenshotRect,
   clickRect,
   clickPoint,
   closeTaskbarWindow,
   compositorWindowById,
+  copyArtifactFile,
   createTimingMarks,
   defineGroup,
   discoverReadyBase,
@@ -28,6 +30,7 @@ import {
   pointerButton,
   pointerWheel,
   postJson,
+  readPngRgba,
   runKeybind,
   spawnNativeWindow,
   tapKey,
@@ -576,6 +579,193 @@ function rectGlobalCenter(rect: {
     x: rect.global_x + rect.width / 2,
     y: rect.global_y + rect.height / 2,
   };
+}
+
+async function assertVisiblePixelsInRect(
+  base: string,
+  rect: { x: number; y: number; width: number; height: number },
+  label: string,
+) {
+  const shot = await captureScreenshotRect(base, rect)
+  const png = await readPngRgba(shot.path)
+  let visible = 0
+  let greenClient = 0
+  let blendedGreenClient = 0
+  let opaqueGreenClient = 0
+  let greenSum = 0
+  for (let i = 3; i < png.data.length; i += 4) {
+    if (png.data[i] > 16) visible += 1
+    const r = png.data[i - 3]
+    const g = png.data[i - 2]
+    const b = png.data[i - 1]
+    if (png.data[i] > 180 && g > 120 && g > r + 35 && g > b + 20) {
+      greenClient += 1
+      greenSum += g
+      if (g >= 180) opaqueGreenClient += 1
+      if (g >= 130 && g <= 175) blendedGreenClient += 1
+    }
+  }
+  const total = png.width * png.height
+  assert(
+    visible >= Math.floor(total * 0.2),
+    `${label} expected visible pixels in screenshot, got ${visible}/${total}`,
+  )
+  assert(
+    greenClient >= Math.floor(total * 0.05),
+    `${label} expected visible CSD client pixels in screenshot, got ${greenClient}/${total}`,
+  )
+  return {
+    path: await copyArtifactFile(`${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.png`, shot.path),
+    width: png.width,
+    height: png.height,
+    visible,
+    greenClient,
+    blendedGreenClient,
+    opaqueGreenClient,
+    greenAverage: greenClient > 0 ? greenSum / greenClient : 0,
+    total,
+  }
+}
+
+function isTranslucentDragWindow(
+  window: WindowSnapshot | null | undefined,
+): window is WindowSnapshot {
+  if (!window) return false
+  const alpha = window.render_alpha ?? 1
+  return alpha >= 0.7 && alpha <= 0.82
+}
+
+function assertTranslucentDragWindow(
+  window: WindowSnapshot | null | undefined,
+  label: string,
+) {
+  assert(window, `${label} missing window`)
+  const alpha = window.render_alpha ?? 1
+  assert(
+    isTranslucentDragWindow(window),
+    `${label} expected drag alpha around 0.76, got ${alpha}`,
+  )
+}
+
+async function assertTranslucentCsdDragPixels(
+  base: string,
+  rect: { x: number; y: number; width: number; height: number },
+  label: string,
+) {
+  const pixels = await assertVisiblePixelsInRect(base, rect, label)
+  assert(
+    pixels.blendedGreenClient >= Math.floor(pixels.greenClient * 0.35),
+    `${label} expected blended translucent CSD client pixels, got ${pixels.blendedGreenClient}/${pixels.greenClient} with avg green ${pixels.greenAverage}`,
+  )
+  assert(
+    pixels.opaqueGreenClient <= Math.ceil(pixels.greenClient * 0.65),
+    `${label} expected CSD drag pixels not to be mostly opaque, got ${pixels.opaqueGreenClient}/${pixels.greenClient} with avg green ${pixels.greenAverage}`,
+  )
+  return pixels
+}
+
+function shellSessionWindowHasMonitorTile(shell: ShellSnapshot, windowId: number) {
+  const session = shell.session_snapshot as {
+    monitorTiles?: Array<{
+      entries?: Array<{ windowId?: number; window_id?: number }>
+    }>
+  } | null
+  return (
+    session?.monitorTiles?.some((monitor) =>
+      monitor.entries?.some(
+        (entry) => (entry.windowId ?? entry.window_id) === windowId,
+      ),
+    ) ?? false
+  )
+}
+
+type ScreenshotArtifact = {
+  path: string
+  rect: { x: number; y: number; width: number; height: number }
+  width: number
+  height: number
+}
+
+async function captureOutputArtifact(
+  base: string,
+  output: { x: number; y: number; width: number; height: number },
+  label: string,
+): Promise<ScreenshotArtifact> {
+  const rect = {
+    x: output.x,
+    y: output.y,
+    width: output.width,
+    height: output.height,
+  }
+  const shot = await captureScreenshotRect(base, rect)
+  const png = await readPngRgba(shot.path)
+  return {
+    path: await copyArtifactFile(`${label.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`, shot.path),
+    rect,
+    width: png.width,
+    height: png.height,
+  }
+}
+
+async function assertScreenshotRectChanged(
+  beforeShot: ScreenshotArtifact,
+  afterShot: ScreenshotArtifact,
+  targetRect: { global_x: number; global_y: number; width: number; height: number },
+  label: string,
+) {
+  const before = await readPngRgba(beforeShot.path)
+  const after = await readPngRgba(afterShot.path)
+  const x0 = Math.max(targetRect.global_x, beforeShot.rect.x, afterShot.rect.x)
+  const y0 = Math.max(targetRect.global_y, beforeShot.rect.y, afterShot.rect.y)
+  const x1 = Math.min(
+    targetRect.global_x + targetRect.width,
+    beforeShot.rect.x + beforeShot.rect.width,
+    afterShot.rect.x + afterShot.rect.width,
+  )
+  const y1 = Math.min(
+    targetRect.global_y + targetRect.height,
+    beforeShot.rect.y + beforeShot.rect.height,
+    afterShot.rect.y + afterShot.rect.height,
+  )
+  assert(x1 > x0 && y1 > y0, `${label} rect is outside screenshot bounds`)
+  const beforeScaleX = before.width / beforeShot.rect.width
+  const beforeScaleY = before.height / beforeShot.rect.height
+  const afterScaleX = after.width / afterShot.rect.width
+  const afterScaleY = after.height / afterShot.rect.height
+  const beforeX0 = Math.max(0, Math.floor((x0 - beforeShot.rect.x) * beforeScaleX))
+  const beforeY0 = Math.max(0, Math.floor((y0 - beforeShot.rect.y) * beforeScaleY))
+  const beforeX1 = Math.min(before.width, Math.ceil((x1 - beforeShot.rect.x) * beforeScaleX))
+  const beforeY1 = Math.min(before.height, Math.ceil((y1 - beforeShot.rect.y) * beforeScaleY))
+  const afterX0 = Math.max(0, Math.floor((x0 - afterShot.rect.x) * afterScaleX))
+  const afterY0 = Math.max(0, Math.floor((y0 - afterShot.rect.y) * afterScaleY))
+  const afterX1 = Math.min(after.width, Math.ceil((x1 - afterShot.rect.x) * afterScaleX))
+  const afterY1 = Math.min(after.height, Math.ceil((y1 - afterShot.rect.y) * afterScaleY))
+  const compareWidth = Math.min(beforeX1 - beforeX0, afterX1 - afterX0)
+  const compareHeight = Math.min(beforeY1 - beforeY0, afterY1 - afterY0)
+  assert(compareWidth > 0 && compareHeight > 0, `${label} rect has no physical pixels`)
+  let changed = 0
+  let compared = 0
+  for (let py = 0; py < compareHeight; py += 1) {
+    const by = beforeY0 + py
+    const ay = afterY0 + py
+    for (let px = 0; px < compareWidth; px += 1) {
+      const bi = (by * before.width + beforeX0 + px) * 4
+      const ai = (ay * after.width + afterX0 + px) * 4
+      const delta =
+        Math.abs(before.data[bi] - after.data[ai]) +
+        Math.abs(before.data[bi + 1] - after.data[ai + 1]) +
+        Math.abs(before.data[bi + 2] - after.data[ai + 2]) +
+        Math.abs(before.data[bi + 3] - after.data[ai + 3])
+      if (delta > 24) changed += 1
+      compared += 1
+    }
+  }
+  const minChanged = Math.max(800, Math.floor(compared * 0.035))
+  assert(
+    changed >= minChanged,
+    `${label} expected visible screenshot change, got ${changed}/${compared}`,
+  )
+  return { changed, compared, before: beforeShot.path, after: afterShot.path }
 }
 
 function usableSettingsSnapOption(rect: Rect | null | undefined): rect is Rect {
@@ -1389,6 +1579,929 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await waitForPickerClosed(base, redId);
     } finally {
       await pointerButton(base, 0x110, "release");
+      await keyAction(base, SUPER_KEYCODE, "release");
+    }
+  });
+
+  test("super-dragging a CSD client header drives grid snap", async ({
+    base,
+    state,
+  }) => {
+    await selectSettingsSnapLayout(base, "3x2");
+    const csd = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp CSD Snap ${Date.now()}`,
+      token: `snap-csd-${Date.now()}`,
+      strip: "green",
+      width: 520,
+      height: 360,
+      xdgDecorationClientSide: true,
+      moveOnHeaderPress: true,
+      solidClient: true,
+    });
+    const csdId = csd.window.window_id;
+    state.spawnedNativeWindowIds.add(csdId);
+    let pointerReleased = false;
+    try {
+      const ready = await waitFor(
+        `wait for CSD snap source ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          const shellWindow = shell.windows.find(
+            (entry) => entry.window_id === csdId,
+          );
+          const controls = windowControls(shell, csdId);
+          if (!window || !shellWindow) return null;
+          if (!window.client_side_decoration || !shellWindow.client_side_decoration) return null;
+          if (controls?.titlebar) return null;
+          const output =
+            compositor.outputs.find((entry) => entry.name === window.output_name) ??
+            compositor.outputs[0];
+          if (!output) return null;
+          return { compositor, shell, window, output };
+        },
+        3000,
+        40,
+      );
+      const start = {
+        x: Math.round(ready.window.x + ready.window.width / 2),
+        y: Math.round(
+          ready.window.y + Math.min(24, Math.max(8, ready.window.height / 7)),
+        ),
+      };
+      await movePoint(base, start.x, start.y);
+      await pointerButton(base, BTN_LEFT, "press");
+      const armed = await waitFor(
+        `wait for CSD compositor move ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (shell.compositor_interaction_state?.move_window_id !== csdId) return null;
+          if (!isTranslucentDragWindow(window)) return null;
+          return { compositor, shell, window };
+        },
+        2000,
+        16,
+      );
+      assertTranslucentDragWindow(armed.window, "CSD armed drag");
+      assert(
+        armed.shell.compositor_interaction_state?.move_proxy_window_id === null,
+        "CSD grid drag should not synthesize shell move proxy",
+      );
+      const dragTarget = {
+        x: ready.output.x + Math.round(ready.output.width * 0.82),
+        y: ready.output.y + Math.round(ready.output.height * 0.28),
+      };
+      await dragPointerToPoint(
+        base,
+        dragTarget.x,
+        dragTarget.y,
+        10,
+      );
+      const visibleDrag = await waitFor(
+        `wait for visible CSD drag pixels ${csdId}`,
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(base, "/test/state/compositor");
+          const window = compositorWindowById(compositor, csdId);
+          if (!isTranslucentDragWindow(window)) return null;
+          if (Math.abs(window.x - ready.window.x) < 20 && Math.abs(window.y - ready.window.y) < 20) return null;
+          return assertTranslucentCsdDragPixels(
+            base,
+            {
+              x: window.x + 12,
+              y: window.y + 12,
+              width: Math.min(180, window.width - 24),
+              height: Math.min(120, window.height - 24),
+            },
+            `csd-drag-preview-${csdId}`,
+          );
+        },
+        3000,
+        16,
+      );
+      const beforeSuperOutput = await captureOutputArtifact(
+        base,
+        ready.output,
+        `csd-drag-before-super-output-${csdId}`,
+      );
+      await keyAction(base, SUPER_KEYCODE, "press");
+      const previewShell = await waitFor(
+        `wait for CSD super snap preview ${csdId}`,
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          if (shell.compositor_interaction_state?.move_window_id !== csdId) return null;
+          if (shell.compositor_interaction_state?.super_held !== true) return null;
+          if (shell.snap_drag_super_held !== true) return null;
+          if (!shell.snap_preview_visible || !shell.snap_preview_rect) return null;
+          return shell;
+        },
+        3000,
+        16,
+      ).catch(async (error) => {
+        const snapshots = await getSnapshots(base);
+        await writeJsonArtifact("snap-assist-csd-super-drag-timeout.json", {
+          error: error instanceof Error ? error.message : String(error),
+          start,
+          pointerTarget: dragTarget,
+          snapshots,
+        });
+        throw error;
+      });
+      const expected = assertRectMinSize(
+        "CSD super snap preview",
+        previewShell.snap_preview_rect,
+        40,
+      );
+      const afterSuperOutput = await captureOutputArtifact(
+        base,
+        ready.output,
+        `csd-drag-after-super-output-${csdId}`,
+      );
+      const visiblePreview = await assertScreenshotRectChanged(
+        beforeSuperOutput,
+        afterSuperOutput,
+        expected,
+        "CSD super snap preview output",
+      );
+      await pointerButton(base, BTN_LEFT, "release");
+      pointerReleased = true;
+      const snapped = await waitFor(
+        `wait for CSD super snap commit ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (!window) return null;
+          try {
+            assertWindowMatchesRect(
+              window,
+              {
+                x: expected.global_x,
+                y: expected.global_y,
+                width: expected.width,
+                height: expected.height,
+              },
+              "CSD super snap",
+            );
+          } catch {
+            return null;
+          }
+          return { compositor, shell, window, expected };
+        },
+        2000,
+        40,
+      );
+      await writeJsonArtifact("snap-assist-csd-super-drag.json", {
+        ...snapped,
+        visibleDrag,
+        visiblePreview,
+      });
+    } finally {
+      if (!pointerReleased) {
+        try {
+          await pointerButton(base, BTN_LEFT, "release");
+        } catch {}
+      }
+      await keyAction(base, SUPER_KEYCODE, "release");
+    }
+  });
+
+  test("dragging a snapped CSD client header restores its floating size", async ({
+    base,
+    state,
+  }) => {
+    await selectSettingsSnapLayout(base, "3x2");
+    const csd = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp CSD Untile ${Date.now()}`,
+      token: `untile-csd-${Date.now()}`,
+      strip: "green",
+      width: 520,
+      height: 360,
+      xdgDecorationClientSide: true,
+      moveOnHeaderPress: true,
+      solidClient: true,
+    });
+    const csdId = csd.window.window_id;
+    state.spawnedNativeWindowIds.add(csdId);
+    let pointerReleased = true;
+    try {
+      const ready = await waitFor(
+        `wait for CSD untile source ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          const shellWindow = shell.windows.find(
+            (entry) => entry.window_id === csdId,
+          );
+          if (!window || !shellWindow) return null;
+          if (!window.client_side_decoration || !shellWindow.client_side_decoration) return null;
+          const output =
+            compositor.outputs.find((entry) => entry.name === window.output_name) ??
+            compositor.outputs[0];
+          if (!output) return null;
+          return { compositor, shell, window, output };
+        },
+        3000,
+        40,
+      );
+      const floating = {
+        x: ready.window.x,
+        y: ready.window.y,
+        width: ready.window.width,
+        height: ready.window.height,
+      };
+      await movePoint(
+        base,
+        Math.round(ready.window.x + ready.window.width / 2),
+        Math.round(ready.window.y + 18),
+      );
+      pointerReleased = false;
+      await pointerButton(base, BTN_LEFT, "press");
+      await waitFor(
+        `wait for CSD snap compositor move ${csdId}`,
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          return shell.compositor_interaction_state?.move_window_id === csdId
+            ? shell
+            : null;
+        },
+        2000,
+        16,
+      );
+      const initialSnapTarget = {
+        x: ready.output.x + Math.round(ready.output.width * 0.82),
+        y: ready.output.y + Math.round(ready.output.height * 0.28),
+      };
+      await dragPointerToPoint(
+        base,
+        initialSnapTarget.x,
+        initialSnapTarget.y,
+        10,
+      );
+      const beforeInitialSuperOutput = await captureOutputArtifact(
+        base,
+        ready.output,
+        `csd-untile-initial-before-super-output-${csdId}`,
+      );
+      await keyAction(base, SUPER_KEYCODE, "press");
+      const previewShell = await waitFor(
+        `wait for CSD untile snap preview ${csdId}`,
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          if (!shell.snap_preview_visible || !shell.snap_preview_rect) return null;
+          return shell;
+        },
+        3000,
+        16,
+      );
+      const expected = assertRectMinSize(
+        "CSD untile snap preview",
+        previewShell.snap_preview_rect,
+        40,
+      );
+      const afterInitialSuperOutput = await captureOutputArtifact(
+        base,
+        ready.output,
+        `csd-untile-initial-after-super-output-${csdId}`,
+      );
+      const initialVisiblePreview = await assertScreenshotRectChanged(
+        beforeInitialSuperOutput,
+        afterInitialSuperOutput,
+        expected,
+        "CSD initial snap preview output",
+      );
+      const work = monitorFrameRect(
+        ready.output.name,
+        ready.compositor,
+        ready.shell,
+      );
+      const twoThirdWidth = Math.round((work.width * 2) / 3);
+      const halfHeight = Math.round(work.height / 2);
+      const expectedSnap = {
+        x: work.x + twoThirdWidth,
+        y: work.y,
+        width: work.width - twoThirdWidth,
+        height: halfHeight,
+      };
+      await pointerButton(base, BTN_LEFT, "release");
+      pointerReleased = true;
+      await keyAction(base, SUPER_KEYCODE, "release");
+      const snapped = await waitFor(
+        `wait for CSD untile snap commit ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (!window) return null;
+          try {
+            assertWindowMatchesRect(
+              window,
+              expectedSnap,
+              "CSD untile snapped",
+            );
+          } catch {
+            return null;
+          }
+          return { compositor, shell, window };
+        },
+        2000,
+        40,
+      );
+      const start = {
+        x: Math.round(snapped.window.x + snapped.window.width / 2),
+        y: Math.round(snapped.window.y + 18),
+      };
+      const end = {
+        x: Math.round(snapped.window.x + snapped.window.width / 2 + 90),
+        y: Math.round(snapped.window.y + 90),
+      };
+      await movePoint(base, start.x, start.y);
+      pointerReleased = false;
+      await pointerButton(base, BTN_LEFT, "press");
+      await waitFor(
+        `wait for CSD untile compositor move ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (shell.compositor_interaction_state?.move_window_id !== csdId) return null;
+          if (!isTranslucentDragWindow(window)) return null;
+          return { compositor, shell, window };
+        },
+        2000,
+        16,
+      );
+      await dragPointerToPoint(base, end.x, end.y, 8);
+      const liveUntile = await waitFor(
+        `wait for CSD live untile restore ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (shell.compositor_interaction_state?.move_window_id !== csdId) return null;
+          if (!isTranslucentDragWindow(window)) return null;
+          if (Math.abs(window.width - floating.width) > 2) return null;
+          if (Math.abs(window.height - floating.height) > 2) return null;
+          if (
+            Math.abs(window.x - expectedSnap.x) <= 4 &&
+            Math.abs(window.y - expectedSnap.y) <= 4
+          )
+            return null;
+          return { compositor, shell, window };
+        },
+        3000,
+        16,
+      );
+      const visibleUntileDrag = await assertTranslucentCsdDragPixels(
+        base,
+        {
+          x: liveUntile.window.x + 12,
+          y: liveUntile.window.y + 12,
+          width: Math.min(180, liveUntile.window.width - 24),
+          height: Math.min(120, liveUntile.window.height - 24),
+        },
+        `csd-live-untile-preview-${csdId}`,
+      );
+      await pointerButton(base, BTN_LEFT, "release");
+      pointerReleased = true;
+      const firstUntiled = await waitFor(
+        `wait for CSD first untile release restore ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if ((shell.compositor_interaction_state?.move_window_id ?? null) !== null) return null;
+          if (shell.snap_preview_visible) return null;
+          if (shellSessionWindowHasMonitorTile(shell, csdId)) return null;
+          if (!window) return null;
+          if (Math.abs(window.width - floating.width) > 2) return null;
+          if (Math.abs(window.height - floating.height) > 2) return null;
+          if (
+            Math.abs(window.x - expectedSnap.x) <= 4 &&
+            Math.abs(window.y - expectedSnap.y) <= 4
+          )
+            return null;
+          return { compositor, shell, window };
+        },
+        3000,
+        40,
+      );
+      const secondDragStart = {
+        x: Math.round(firstUntiled.window.x + firstUntiled.window.width / 2),
+        y: Math.round(firstUntiled.window.y + 18),
+      };
+      await movePoint(base, secondDragStart.x, secondDragStart.y);
+      pointerReleased = false;
+      await pointerButton(base, BTN_LEFT, "press");
+      const secondDragArmed = await waitFor(
+        `wait for CSD second drag compositor move ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (shell.compositor_interaction_state?.move_window_id !== csdId) return null;
+          if (!isTranslucentDragWindow(window)) return null;
+          return { compositor, shell, window };
+        },
+        2000,
+        16,
+      );
+      const secondDragSnapTarget = {
+        x: ready.output.x + Math.round(ready.output.width * 0.18),
+        y: ready.output.y + Math.round(ready.output.height * 0.28),
+      };
+      await dragPointerToPoint(
+        base,
+        secondDragSnapTarget.x,
+        secondDragSnapTarget.y,
+        10,
+      );
+      const beforeSecondDragSuperOutput = await captureOutputArtifact(
+        base,
+        ready.output,
+        `csd-second-drag-before-super-output-${csdId}`,
+      );
+      await keyAction(base, SUPER_KEYCODE, "press");
+      const secondDragPreview = await waitFor(
+        `wait for CSD second-drag snap preview ${csdId}`,
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          if (shell.compositor_interaction_state?.move_window_id !== csdId) return null;
+          if (shell.compositor_interaction_state?.super_held !== true) return null;
+          if (shell.snap_drag_super_held !== true) return null;
+          if (!shell.snap_preview_visible || !shell.snap_preview_rect) return null;
+          return shell;
+        },
+        3000,
+        16,
+      );
+      const expectedSecondDragSnap = assertRectMinSize(
+        "CSD second-drag snap preview",
+        secondDragPreview.snap_preview_rect,
+        40,
+      );
+      const afterSecondDragSuperOutput = await captureOutputArtifact(
+        base,
+        ready.output,
+        `csd-second-drag-after-super-output-${csdId}`,
+      );
+      const secondDragVisiblePreview = await assertScreenshotRectChanged(
+        beforeSecondDragSuperOutput,
+        afterSecondDragSuperOutput,
+        expectedSecondDragSnap,
+        "CSD second-drag snap preview output",
+      );
+      await pointerButton(base, BTN_LEFT, "release");
+      pointerReleased = true;
+      await keyAction(base, SUPER_KEYCODE, "release");
+      const secondDragSnapped = await waitFor(
+        `wait for CSD second-drag snap commit ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if ((shell.compositor_interaction_state?.move_window_id ?? null) !== null) return null;
+          if (!window) return null;
+          try {
+            assertWindowMatchesRect(
+              window,
+              {
+                x: expectedSecondDragSnap.global_x,
+                y: expectedSecondDragSnap.global_y,
+                width: expectedSecondDragSnap.width,
+                height: expectedSecondDragSnap.height,
+              },
+              "CSD second-drag snap",
+            );
+          } catch {
+            return null;
+          }
+          return { compositor, shell, window };
+        },
+        2000,
+        40,
+      );
+      const releaseRestoreStart = {
+        x: Math.round(secondDragSnapped.window.x + secondDragSnapped.window.width / 2),
+        y: Math.round(secondDragSnapped.window.y + 18),
+      };
+      const releaseRestoreEnd = {
+        x: Math.round(secondDragSnapped.window.x + secondDragSnapped.window.width / 2 + 90),
+        y: Math.round(secondDragSnapped.window.y + 90),
+      };
+      await movePoint(base, releaseRestoreStart.x, releaseRestoreStart.y);
+      pointerReleased = false;
+      await pointerButton(base, BTN_LEFT, "press");
+      await waitFor(
+        `wait for CSD release-restore compositor move ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (shell.compositor_interaction_state?.move_window_id !== csdId) return null;
+          if (!isTranslucentDragWindow(window)) return null;
+          return { compositor, shell, window };
+        },
+        2000,
+        16,
+      );
+      await dragPointerToPoint(base, releaseRestoreEnd.x, releaseRestoreEnd.y, 8);
+      await pointerButton(base, BTN_LEFT, "release");
+      pointerReleased = true;
+      const untiled = await waitFor(
+        `wait for CSD untile restore ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if ((shell.compositor_interaction_state?.move_window_id ?? null) !== null) return null;
+          if (shell.snap_preview_visible) return null;
+          if (shellSessionWindowHasMonitorTile(shell, csdId)) return null;
+          if (!window) return null;
+          if (Math.abs(window.width - floating.width) > 2) return null;
+          if (Math.abs(window.height - floating.height) > 2) return null;
+          if (
+            Math.abs(window.x - secondDragSnapped.window.x) <= 4 &&
+            Math.abs(window.y - secondDragSnapped.window.y) <= 4
+          )
+            return null;
+          return { compositor, shell, window, floating, expected, expectedSnap };
+        },
+        3000,
+        40,
+      );
+      const postUntileSnapStart = {
+        x: Math.round(untiled.window.x + untiled.window.width / 2),
+        y: Math.round(untiled.window.y + 18),
+      };
+      await movePoint(base, postUntileSnapStart.x, postUntileSnapStart.y);
+      pointerReleased = false;
+      await pointerButton(base, BTN_LEFT, "press");
+      await waitFor(
+        `wait for CSD post-untile compositor move ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (shell.compositor_interaction_state?.move_window_id !== csdId) return null;
+          if (!isTranslucentDragWindow(window)) return null;
+          return { compositor, shell, window };
+        },
+        2000,
+        16,
+      );
+      await dragPointerToPoint(base, postUntileSnapStart.x + 72, postUntileSnapStart.y + 72, 6);
+      const postUntileVisibleDrag = await waitFor(
+        `wait for CSD post-untile visible drag ${csdId}`,
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(base, "/test/state/compositor");
+          const window = compositorWindowById(compositor, csdId);
+          if (!isTranslucentDragWindow(window)) return null;
+          if (Math.abs(window.x - untiled.window.x) < 12 && Math.abs(window.y - untiled.window.y) < 12) return null;
+          return assertTranslucentCsdDragPixels(
+            base,
+            {
+              x: window.x + 12,
+              y: window.y + 12,
+              width: Math.min(180, window.width - 24),
+              height: Math.min(120, window.height - 24),
+            },
+            `csd-post-untile-live-preview-${csdId}`,
+          );
+        },
+        3000,
+        16,
+      );
+      const postUntileSnapTarget = {
+        x: ready.output.x + Math.round(ready.output.width * 0.82),
+        y: ready.output.y + Math.round(ready.output.height * 0.28),
+      };
+      await dragPointerToPoint(
+        base,
+        postUntileSnapTarget.x,
+        postUntileSnapTarget.y,
+        10,
+      );
+      const beforePostUntileSuperOutput = await captureOutputArtifact(
+        base,
+        ready.output,
+        `csd-post-untile-before-super-output-${csdId}`,
+      );
+      await keyAction(base, SUPER_KEYCODE, "press");
+      const postUntilePreview = await waitFor(
+        `wait for CSD post-untile snap preview ${csdId}`,
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          if (shell.compositor_interaction_state?.move_window_id !== csdId) return null;
+          if (shell.compositor_interaction_state?.super_held !== true) return null;
+          if (shell.snap_drag_super_held !== true) return null;
+          if (!shell.snap_preview_visible || !shell.snap_preview_rect) return null;
+          return shell;
+        },
+        3000,
+        16,
+      );
+      const postUntileExpectedSnap = assertRectMinSize(
+        "CSD post-untile snap preview",
+        postUntilePreview.snap_preview_rect,
+        40,
+      );
+      const afterPostUntileSuperOutput = await captureOutputArtifact(
+        base,
+        ready.output,
+        `csd-post-untile-after-super-output-${csdId}`,
+      );
+      const postUntileVisiblePreview = await assertScreenshotRectChanged(
+        beforePostUntileSuperOutput,
+        afterPostUntileSuperOutput,
+        postUntileExpectedSnap,
+        "CSD post-untile snap preview output",
+      );
+      await pointerButton(base, BTN_LEFT, "release");
+      pointerReleased = true;
+      await keyAction(base, SUPER_KEYCODE, "release");
+      const postUntileSnapped = await waitFor(
+        `wait for CSD post-untile snap commit ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (!window) return null;
+          try {
+            assertWindowMatchesRect(
+              window,
+              {
+                x: postUntileExpectedSnap.global_x,
+                y: postUntileExpectedSnap.global_y,
+                width: postUntileExpectedSnap.width,
+                height: postUntileExpectedSnap.height,
+              },
+              "CSD post-untile snap",
+            );
+          } catch {
+            return null;
+          }
+          return { compositor, shell, window };
+        },
+        2000,
+        40,
+      );
+      await writeJsonArtifact("snap-assist-csd-drag-untile-restore.json", {
+        initialVisiblePreview,
+        liveUntile,
+        visibleUntileDrag,
+        firstUntiled,
+        secondDragArmed,
+        secondDragPreview,
+        secondDragVisiblePreview,
+        expectedSecondDragSnap,
+        secondDragSnapped,
+        untiled,
+        postUntileVisibleDrag,
+        postUntilePreview,
+        postUntileVisiblePreview,
+        postUntileExpectedSnap,
+        postUntileSnapped,
+      });
+    } finally {
+      if (!pointerReleased) {
+        try {
+          await pointerButton(base, BTN_LEFT, "release");
+        } catch {}
+      }
+      await keyAction(base, SUPER_KEYCODE, "release");
+    }
+  });
+
+  test("CSD tiled from snap picker untiles on first drag and keeps the next grid drag alive", async ({
+    base,
+    state,
+  }) => {
+    await selectSettingsSnapLayout(base, "3x2");
+    const csd = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp CSD Picker Untile ${Date.now()}`,
+      token: `picker-untile-csd-${Date.now()}`,
+      strip: "green",
+      width: 520,
+      height: 360,
+      xdgDecorationClientSide: true,
+      moveOnHeaderPress: true,
+      solidClient: true,
+    });
+    const csdId = csd.window.window_id;
+    state.spawnedNativeWindowIds.add(csdId);
+    let pointerReleased = true;
+    try {
+      const ready = await waitFor(
+        `wait for picker CSD untile source ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          const shellWindow = shell.windows.find(
+            (entry) => entry.window_id === csdId,
+          );
+          const controls = windowControls(shell, csdId);
+          if (!window || !shellWindow) return null;
+          if (!window.client_side_decoration || !shellWindow.client_side_decoration) return null;
+          if (controls?.titlebar) return null;
+          const outputName = resolveWindowOutputName(compositor, window);
+          if (!outputName) return null;
+          const output =
+            compositor.outputs.find((entry) => entry.name === outputName) ??
+            compositor.outputs[0];
+          if (!output) return null;
+          return { compositor, shell, window, outputName, output };
+        },
+        3000,
+        40,
+      );
+      const floating = {
+        width: ready.window.width,
+        height: ready.window.height,
+      };
+      await movePoint(
+        base,
+        Math.round(ready.window.x + ready.window.width / 2),
+        Math.round(ready.window.y + 18),
+      );
+      pointerReleased = false;
+      await pointerButton(base, BTN_LEFT, "press");
+      await openPickerWhileDragging(base, csdId);
+      const { rect: firstCell } = await revealVisiblePickerControl(
+        base,
+        csdId,
+        "snap_picker_first_cell",
+        "CSD picker first cell",
+      );
+      await hoverPickerCellWhileDragging(
+        base,
+        "hover CSD picker first cell",
+        firstCell,
+      );
+      await pointerButton(base, BTN_LEFT, "release");
+      pointerReleased = true;
+      const snapped = await waitFor(
+        `wait for picker CSD snap commit ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (!window) return null;
+          try {
+            assertTopThirdWindow(
+              window,
+              ready.outputName,
+              compositor,
+              shell,
+              "left",
+            );
+          } catch {
+            return null;
+          }
+          return { compositor, shell, window };
+        },
+        2000,
+        40,
+      );
+      const untileStart = {
+        x: Math.round(snapped.window.x + snapped.window.width / 2),
+        y: Math.round(snapped.window.y + 18),
+      };
+      const untileEnd = {
+        x: untileStart.x + 96,
+        y: untileStart.y + 88,
+      };
+      await movePoint(base, untileStart.x, untileStart.y);
+      pointerReleased = false;
+      await pointerButton(base, BTN_LEFT, "press");
+      await waitFor(
+        `wait for picker CSD first untile move ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (
+            shell.compositor_interaction_state?.move_window_id !== csdId &&
+            compositor.shell_move_window_id !== csdId
+          )
+            return null;
+          if (!window) return null;
+          return { compositor, shell, window };
+        },
+        2000,
+        16,
+      );
+      await dragPointerToPoint(base, untileEnd.x, untileEnd.y, 8);
+      const firstLiveUntile = await waitFor(
+        `wait for picker CSD first drag live restore ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (
+            shell.compositor_interaction_state?.move_window_id !== csdId &&
+            compositor.shell_move_window_id !== csdId
+          )
+            return null;
+          if (!isTranslucentDragWindow(window)) return null;
+          if (Math.abs(window.width - floating.width) > 2) return null;
+          if (Math.abs(window.height - floating.height) > 2) return null;
+          if (
+            Math.abs(window.x - snapped.window.x) <= 4 &&
+            Math.abs(window.y - snapped.window.y) <= 4
+          )
+            return null;
+          return { compositor, shell, window };
+        },
+        3000,
+        16,
+      );
+      await pointerButton(base, BTN_LEFT, "release");
+      pointerReleased = true;
+      const firstUntiled = await waitFor(
+        `wait for picker CSD first untile release ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (!window) return null;
+          if (
+            shell.compositor_interaction_state?.move_window_id === csdId ||
+            compositor.shell_move_window_id === csdId
+          )
+            return null;
+          if (shellSessionWindowHasMonitorTile(shell, csdId)) return null;
+          if (Math.abs(window.width - floating.width) > 2) return null;
+          if (Math.abs(window.height - floating.height) > 2) return null;
+          return { compositor, shell, window };
+        },
+        2000,
+        16,
+      );
+      const secondStart = {
+        x: Math.round(firstUntiled.window.x + firstUntiled.window.width / 2),
+        y: Math.round(firstUntiled.window.y + 18),
+      };
+      await movePoint(base, secondStart.x, secondStart.y);
+      pointerReleased = false;
+      await pointerButton(base, BTN_LEFT, "press");
+      const secondMove = await waitFor(
+        `wait for picker CSD immediate second move ${csdId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const window = compositorWindowById(compositor, csdId);
+          if (
+            shell.compositor_interaction_state?.move_window_id !== csdId &&
+            compositor.shell_move_window_id !== csdId
+          )
+            return null;
+          if (!isTranslucentDragWindow(window)) return null;
+          if (Math.abs(window.width - floating.width) > 2) return null;
+          if (Math.abs(window.height - floating.height) > 2) return null;
+          return { compositor, shell, window };
+        },
+        2000,
+        16,
+      );
+      await dragPointerToPoint(base, secondStart.x + 96, secondStart.y + 88, 8);
+      const beforeSuperOutput = await captureOutputArtifact(
+        base,
+        ready.output,
+        `csd-picker-untile-second-before-super-output-${csdId}`,
+      );
+      await keyAction(base, SUPER_KEYCODE, "press");
+      const secondGrid = await waitFor(
+        `wait for picker CSD immediate second grid ${csdId}`,
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          if (shell.compositor_interaction_state?.move_window_id !== csdId) return null;
+          if (shell.compositor_interaction_state?.super_held !== true) return null;
+          if (shell.snap_drag_super_held !== true) return null;
+          if (!shell.snap_preview_visible || !shell.snap_preview_rect) return null;
+          return shell;
+        },
+        3000,
+        16,
+      );
+      const expectedSecondGrid = assertRectMinSize(
+        "picker CSD immediate second grid",
+        secondGrid.snap_preview_rect,
+        40,
+      );
+      const afterSuperOutput = await captureOutputArtifact(
+        base,
+        ready.output,
+        `csd-picker-untile-second-after-super-output-${csdId}`,
+      );
+      const secondGridVisible = await assertScreenshotRectChanged(
+        beforeSuperOutput,
+        afterSuperOutput,
+        expectedSecondGrid,
+        "picker CSD immediate second grid output",
+      );
+      await pointerButton(base, BTN_LEFT, "release");
+      pointerReleased = true;
+      await keyAction(base, SUPER_KEYCODE, "release");
+      await writeJsonArtifact("snap-assist-csd-picker-untile-race.json", {
+        snapped,
+        firstLiveUntile,
+        firstUntiled,
+        secondMove,
+        secondGrid,
+        expectedSecondGrid,
+        secondGridVisible,
+      });
+    } finally {
+      if (!pointerReleased) {
+        try {
+          await pointerButton(base, BTN_LEFT, "release");
+        } catch {}
+      }
       await keyAction(base, SUPER_KEYCODE, "release");
     }
   });

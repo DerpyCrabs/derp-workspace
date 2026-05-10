@@ -276,6 +276,10 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
                 .get("interaction_serial")
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
+            let super_held = detail
+                .get("super_held")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             push_u64(
                 bytes,
                 detail.get("revision").and_then(Value::as_u64).unwrap_or(0),
@@ -291,6 +295,7 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
                 && {
                     push_u32(bytes, window_switcher_selected_window_id);
                     push_u64(bytes, interaction_serial);
+                    push_u32(bytes, super_held as u32);
                     debug_assert_eq!(
                         bytes.len() - fixed_start,
                         HOT_DETAIL_INTERACTION_STATE_BYTES
@@ -992,6 +997,7 @@ fn apply_message(
             move_visual,
             resize_visual,
             window_switcher_selected_window_id,
+            super_held,
         } => {
             pending_details.push(detail_with_snapshot_epoch(
                 json!({
@@ -1005,6 +1011,7 @@ fn apply_message(
                     "move_proxy_window_id": move_proxy_window_id,
                     "move_capture_window_id": move_capture_window_id,
                     "window_switcher_selected_window_id": window_switcher_selected_window_id,
+                    "super_held": super_held,
                     "move_rect": move_visual.map(|visual| json!({
                         "x": visual.x,
                         "y": visual.y,

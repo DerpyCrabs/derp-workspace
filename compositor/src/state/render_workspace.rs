@@ -29,7 +29,7 @@ impl CompositorState {
         &self,
         info: &WindowInfo,
     ) -> Rectangle<i32, Logical> {
-        if self.native_window_shell_decoration_disabled(info.window_id) {
+        if !self.native_window_uses_shell_chrome(info) {
             return Rectangle::new(
                 Point::from((info.x, info.y)),
                 Size::from((info.width.max(1), info.height.max(1))),
@@ -167,7 +167,7 @@ impl CompositorState {
         let outer = if is_shell_hosted {
             self.shell_backed_outer_global_rect(&info)
         } else {
-            if self.native_window_shell_decoration_disabled(window_id) {
+            if !self.native_window_uses_shell_chrome(&info) {
                 return Vec::new();
             }
             self.shell_native_outer_global_rect(&info)
@@ -242,11 +242,18 @@ impl CompositorState {
                 .iter()
                 .filter_map(|z| z.intersection(visible)),
         );
-        if let Some(rect) = self
-            .shell_native_drag_preview_clip_rect()
-            .and_then(|rect| rect.intersection(visible))
-        {
-            out.push(rect);
+        let preview_source_window = self
+            .input_routing
+            .shell_native_drag_preview
+            .as_ref()
+            .map(|preview| preview.window_id);
+        if elem_window != preview_source_window {
+            if let Some(rect) = self
+                .shell_native_drag_preview_clip_rect()
+                .and_then(|rect| rect.intersection(visible))
+            {
+                out.push(rect);
+            }
         }
         let placements = self.shell_hosted_clip_placements(elem_window);
         match elem_window {
@@ -332,5 +339,40 @@ impl CompositorState {
             output_logical: Rectangle::new(out_geo.loc, out_geo.size),
             scale_f: output.current_scale().fractional_scale(),
         }))
+    }
+
+    pub(crate) fn shell_empty_clip_ctx_for_draw(
+        &self,
+        output: &Output,
+    ) -> Option<Arc<exclusion_clip::ShellExclusionClipCtx>> {
+        let out_geo = self.output_topology.space.output_geometry(output)?;
+        Some(Arc::new(exclusion_clip::ShellExclusionClipCtx {
+            zones: Arc::from(Vec::new().into_boxed_slice()),
+            output_logical: Rectangle::new(out_geo.loc, out_geo.size),
+            scale_f: output.current_scale().fractional_scale(),
+        }))
+    }
+
+    pub(crate) fn native_window_space_clip_bounds(
+        &self,
+        window_id: u32,
+    ) -> Option<Rectangle<i32, Logical>> {
+        if self.input_routing.shell_move_window_id == Some(window_id) {
+            return None;
+        }
+        if self.windows.window_registry.is_shell_hosted(window_id) {
+            return None;
+        }
+        if self.windows.window_registry.window_kind(window_id) != Some(WindowKind::Native) {
+            return None;
+        }
+        let info = self.windows.window_registry.window_info(window_id)?;
+        if info.minimized || self.native_window_uses_shell_chrome(&info) {
+            return None;
+        }
+        Some(Rectangle::new(
+            Point::from((info.x, info.y)),
+            Size::from((info.width.max(1), info.height.max(1))),
+        ))
     }
 }

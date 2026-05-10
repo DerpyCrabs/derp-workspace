@@ -62,6 +62,7 @@ type RegisterShellE2eBridgeOptions = {
     resize_window_id: number | null
     move_proxy_window_id: number | null
     move_capture_window_id: number | null
+    super_held: boolean
     window_switcher_selected_window_id: number | null
     move_rect?: {
       x: number

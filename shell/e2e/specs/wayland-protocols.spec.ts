@@ -253,22 +253,50 @@ function assertAvoidsTopReserve(
 }
 
 async function moveWindowToOutput(
+  base: string,
   windowId: number,
-  output: { x: number; y: number; width: number; height: number },
+  output: { name?: string; x: number; y: number; width: number; height: number },
 ) {
+  const target = {
+    x: output.x + 80,
+    y: output.y + 96,
+    width: Math.min(520, Math.max(260, output.width - 160)),
+    height: Math.min(360, Math.max(180, output.height - 192)),
+  };
   await derpctl([
     "window",
     "move",
     String(windowId),
     "--x",
-    String(output.x + 80),
+    String(target.x),
     "--y",
-    String(output.y + 96),
+    String(target.y),
     "--width",
-    String(Math.min(520, Math.max(260, output.width - 160))),
+    String(target.width),
     "--height",
-    String(Math.min(360, Math.max(180, output.height - 192))),
+    String(target.height),
   ]);
+  await waitFor(
+    `wait for window ${windowId} moved to output`,
+    async () => {
+      const compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      const window = compositor.windows.find(
+        (entry) => entry.window_id === windowId,
+      );
+      if (!window) return null;
+      if (output.name && window.output_name !== output.name) return null;
+      if (Math.abs(window.x - target.x) > 4) return null;
+      if (Math.abs(window.y - target.y) > 4) return null;
+      if (Math.abs(window.width - target.width) > 4) return null;
+      if (Math.abs(window.height - target.height) > 4) return null;
+      return { compositor, window };
+    },
+    5000,
+    100,
+  );
 }
 
 function assertFullDamage(
@@ -678,7 +706,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         strip: "red",
       });
       state.spawnedNativeWindowIds.add(native.window.window_id);
-      await moveWindowToOutput(native.window.window_id, panelOutput);
+      await moveWindowToOutput(base, native.window.window_id, panelOutput);
       await derpctl([
         "window",
         "maximize",
@@ -752,7 +780,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       );
 
       const shellHosted = await openShellTestWindow(base, state);
-      await moveWindowToOutput(shellHosted.window.window_id, panelOutput);
+      await moveWindowToOutput(base, shellHosted.window.window_id, panelOutput);
       await derpctl([
         "window",
         "maximize",

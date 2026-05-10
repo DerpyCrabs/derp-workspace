@@ -451,7 +451,7 @@ pub(crate) fn shell_move_proxy_layers(state: &CompositorState) -> Vec<ShellMoveP
         .loc
         .y
         .saturating_sub(source_global_rect.loc.y)
-        .max(1);
+        .max(0);
     let right_w = source_global_rect
         .loc
         .x

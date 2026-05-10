@@ -142,15 +142,31 @@ describe("createShellWindowGestureRuntime", () => {
     });
   });
 
-  it("ignores compositor move echoes after a shell-released titlebar click", async () => {
+  it("ignores only same-serial compositor move echoes after a shell-released titlebar click", async () => {
     const createRuntime = await createRuntimeFactory();
     createRoot((dispose) => {
       const runtime = createRuntime();
       runtime.beginShellWindowMove(1, 120, 120);
       runtime.endShellWindowMove("window-pointerup", true, true, 4);
 
-      expect(runtime.shouldIgnoreReleasedCompositorMove(1, 5)).toBe(true);
+      expect(runtime.shouldIgnoreReleasedCompositorMove(1, 4)).toBe(true);
+      expect(runtime.shouldIgnoreReleasedCompositorMove(1, 5)).toBe(false);
+      dispose();
+    });
+    createRoot((dispose) => {
+      const runtime = createRuntime();
+      runtime.beginShellWindowMove(1, 120, 120);
+      runtime.endShellWindowMove("window-pointerup", true, true, 4);
+
       expect(runtime.shouldIgnoreReleasedCompositorMoveEnd(1, 4, 5)).toBe(true);
+      dispose();
+    });
+    createRoot((dispose) => {
+      const runtime = createRuntime();
+      runtime.beginShellWindowMove(1, 120, 120);
+      runtime.endShellWindowMove("window-pointerup", true, true, 4);
+
+      expect(runtime.shouldIgnoreReleasedCompositorMoveEnd(1, 5, 6)).toBe(false);
       expect(runtime.shouldIgnoreReleasedCompositorMove(1, 6)).toBe(false);
       dispose();
     });

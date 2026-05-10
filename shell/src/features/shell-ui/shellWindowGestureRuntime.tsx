@@ -1,6 +1,4 @@
 import {
-  CHROME_BORDER_PX,
-  CHROME_BORDER_TOP_PX,
   SHELL_LAYOUT_FLOATING,
   SHELL_RESIZE_BOTTOM,
   SHELL_RESIZE_LEFT,
@@ -140,6 +138,7 @@ type ShellWindowDragSession = {
 
 type ShellWindowDragOptions = {
   snapAssist?: boolean;
+  superHeld?: boolean;
 };
 
 type ShellWindowGestureRuntimeOptions = {
@@ -470,6 +469,78 @@ export function createShellWindowGestureRuntime(
     return context;
   }
 
+  function tiledFrameRectToWindowClientRect(
+    windowId: number,
+    bounds: TileRect,
+  ) {
+    const window = readWindow(windowId);
+    const noShellChrome =
+      !!window?.client_side_decoration &&
+      window.client_x === window.frame_x &&
+      window.client_y === window.frame_y &&
+      window.client_width === window.frame_width &&
+      window.client_height === window.frame_height;
+    return tiledFrameRectToClientRect(bounds, noShellChrome ? 0 : undefined);
+  }
+
+  function prepareWindowMoveUntile(
+    windowId: number,
+    window: DerpWindow,
+    _pointerCanvas: { x: number; y: number } | null,
+  ) {
+    const tiled = !window.maximized && options.isWorkspaceWindowTiled(windowId);
+    const preTile = tiled ? options.workspacePreTileSnapshot(windowId) : null;
+    const shellHosted = (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0;
+    if (!tiled) {
+      if (!window.maximized) {
+        dragPreTileSnapshot.set(windowId, {
+          x: window.x,
+          y: window.y,
+          w: window.width,
+          h: window.height,
+        });
+      }
+      return false;
+    }
+    if (!shellHosted) {
+      dragPreTileSnapshot.set(
+        windowId,
+        preTile ?? {
+          x: window.x,
+          y: window.y,
+          w: window.width,
+          h: window.height,
+        },
+      );
+      return true;
+    }
+    if (preTile) {
+      options.shellWireSend(
+        "set_geometry",
+        windowId,
+        window.x,
+        window.y,
+        preTile.w,
+        preTile.h,
+        SHELL_LAYOUT_FLOATING,
+      );
+    }
+    if (!options.sendRemoveMonitorTile(windowId)) return true;
+    if (!options.sendClearPreTileGeometry(windowId)) return true;
+    dragPreTileSnapshot.set(
+      windowId,
+      preTile ?? {
+        x: window.x,
+        y: window.y,
+        w: window.width,
+        h: window.height,
+      },
+    );
+    options.requestSharedStateSync({ exclusion: "schedule" });
+    options.bumpSnapChrome();
+    return true;
+  }
+
   function applySnapAssistZonePreview(
     context: SnapAssistContext,
     zone: SnapZone,
@@ -749,7 +820,10 @@ export function createShellWindowGestureRuntime(
       )
     )
       return;
-    const clientBounds = tiledFrameRectToClientRect(globalBounds);
+    const clientBounds = tiledFrameRectToWindowClientRect(
+      snapWindowId,
+      globalBounds,
+    );
     const localBounds = rectGlobalToCanvasLocal(
       clientBounds.x,
       clientBounds.y,
@@ -996,6 +1070,7 @@ export function createShellWindowGestureRuntime(
     const main = options.getMainRef();
     const output = options.outputGeom();
     const window = readWindow(windowId);
+    let startedTiled = false;
     if (main && output && window) {
       const mainRect = main.getBoundingClientRect();
       const pointerCanvas = clientPointToCanvasLocal(
@@ -1005,44 +1080,9 @@ export function createShellWindowGestureRuntime(
         output.w,
         output.h,
       );
-      if (!window.maximized && options.isWorkspaceWindowTiled(windowId)) {
-        const preTile = options.workspacePreTileSnapshot(windowId);
-        if (preTile) {
-          const grabDx = pointerCanvas.x - window.x;
-          const grabDy = pointerCanvas.y - window.y;
-          const nextX = pointerCanvas.x - grabDx + CHROME_BORDER_PX;
-          const nextY = pointerCanvas.y - grabDy + CHROME_BORDER_TOP_PX;
-          options.shellWireSend(
-            "set_geometry",
-            windowId,
-            nextX,
-            nextY,
-            preTile.w,
-            preTile.h,
-            SHELL_LAYOUT_FLOATING,
-          );
-        }
-        if (!options.sendRemoveMonitorTile(windowId)) return;
-        if (!options.sendClearPreTileGeometry(windowId)) return;
-        dragPreTileSnapshot.set(
-          windowId,
-          preTile ?? {
-            x: window.x,
-            y: window.y,
-            w: window.width,
-            h: window.height,
-          },
-        );
-        options.requestSharedStateSync({ exclusion: "schedule" });
-        options.bumpSnapChrome();
-      } else if (!window.maximized) {
-        dragPreTileSnapshot.set(windowId, {
-          x: window.x,
-          y: window.y,
-          w: window.width,
-          h: window.height,
-        });
-      }
+      startedTiled = prepareWindowMoveUntile(windowId, window, pointerCanvas);
+    } else if (window) {
+      startedTiled = prepareWindowMoveUntile(windowId, window, null);
     }
     if (window && (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) === 0) {
       options.clearNativeDragPreview();
@@ -1054,11 +1094,6 @@ export function createShellWindowGestureRuntime(
       });
       return;
     }
-    const startedTiled =
-      !!window &&
-      !window.maximized &&
-      options.isWorkspaceWindowTiled(windowId) &&
-      options.workspacePreTileSnapshot(windowId) !== null;
     const stripEl = main?.querySelector(
       "[data-shell-snap-strip-trigger]",
     ) as HTMLElement | null;
@@ -1110,24 +1145,34 @@ export function createShellWindowGestureRuntime(
     closeSnapAssistPicker();
     clearTilePreviewWire();
     const window = readWindow(windowId);
+    let startedTiled = false;
+    const main = options.getMainRef();
+    const output = options.outputGeom();
+    if (window && main && output) {
+      const mainRect = main.getBoundingClientRect();
+      const pointerCanvas = clientPointToCanvasLocal(
+        clientX,
+        clientY,
+        mainRect,
+        output.w,
+        output.h,
+      );
+      startedTiled = prepareWindowMoveUntile(windowId, window, pointerCanvas);
+    } else if (window) {
+      startedTiled = prepareWindowMoveUntile(windowId, window, null);
+    }
     shellWindowDrag = {
       windowId,
       lastX: cx,
       lastY: cy,
       startX: cx,
-      superHeld: false,
+      superHeld: dragOptions.superHeld ?? false,
       snapAssist: dragOptions.snapAssist ?? true,
       stripArmed: true,
       edgeSnapArmed:
         !window?.maximized &&
-        !(
-          options.isWorkspaceWindowTiled(windowId) &&
-          options.workspacePreTileSnapshot(windowId) !== null
-        ),
-      startedTiled:
-        !!window &&
-        !window.maximized &&
-        options.isWorkspaceWindowTiled(windowId),
+        !startedTiled,
+      startedTiled,
       startedMaximized: !!window?.maximized,
       measure: null,
     };
@@ -1138,6 +1183,7 @@ export function createShellWindowGestureRuntime(
       clientX,
       clientY,
       moved,
+      superHeld: dragOptions.superHeld ?? false,
     });
     return true;
   }
@@ -1363,9 +1409,13 @@ export function createShellWindowGestureRuntime(
     updateShellWindowMovePointer(clientX, clientY, superHeld);
   }
 
-  function syncShellWindowMovePointer(clientX: number, clientY: number) {
+  function syncShellWindowMovePointer(
+    clientX: number,
+    clientY: number,
+    superHeld = shellWindowDrag?.superHeld ?? false,
+  ) {
     if (!shellWindowDrag) return;
-    updateShellWindowMovePointer(clientX, clientY, shellWindowDrag.superHeld);
+    updateShellWindowMovePointer(clientX, clientY, superHeld);
   }
 
   function endShellWindowMove(
@@ -1745,17 +1795,23 @@ export function createShellWindowGestureRuntime(
     getShellWindowResizeId: () => shellWindowResize?.windowId ?? null,
     shouldIgnoreReleasedCompositorMove: (
       windowId: number,
-      _interactionSerial: number,
+      interactionSerial: number,
     ) => {
       if (releasedCompositorMove?.windowId !== windowId) return false;
-      return true;
+      if (interactionSerial <= releasedCompositorMove.serial) return true;
+      releasedCompositorMove = null;
+      return false;
     },
     shouldIgnoreReleasedCompositorMoveEnd: (
       windowId: number,
-      _previousInteractionSerial: number,
+      previousInteractionSerial: number,
       _interactionSerial: number,
     ) => {
       if (releasedCompositorMove?.windowId !== windowId) return false;
+      if (previousInteractionSerial > releasedCompositorMove.serial) {
+        releasedCompositorMove = null;
+        return false;
+      }
       releasedCompositorMove = null;
       return true;
     },

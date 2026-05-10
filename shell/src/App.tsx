@@ -241,6 +241,7 @@ function App() {
       resize_window_id: number | null;
       move_proxy_window_id: number | null;
       move_capture_window_id: number | null;
+      super_held: boolean;
       window_switcher_selected_window_id: number | null;
       move_rect: {
         x: number;
@@ -1815,7 +1816,7 @@ function App() {
       shellWindowGestureRuntime.snapAssistPicker() !== null ||
       shellWindowGestureRuntime.getActiveSnapZone() !== null ||
       shellWindowGestureRuntime.getActiveSnapPreviewCanvas() !== null;
-    const dropAllowed = reason !== "compositor-move-ended" && !snapActive;
+    const dropAllowed = !snapActive;
     const dropped = dropAllowed
       ? workspaceChrome.finishWindowDragDrop(
           pointerClient() ?? compositorInteractionPointerClient(),
@@ -1872,11 +1873,25 @@ function App() {
             compositorMoveWindowId,
             compositorPointer.x,
             compositorPointer.y,
+            true,
+            { superHeld: interactionState?.super_held === true },
           );
         }
         shellWindowGestureRuntime.syncShellWindowMovePointer(
           compositorPointer.x,
           compositorPointer.y,
+          interactionState?.super_held === true,
+        );
+      }
+      if (
+        compositorMoveWindowId !== null &&
+        localDragOwnsCompositorMove &&
+        !ignoreReleasedCompositorMove
+      ) {
+        shellWindowGestureRuntime.syncShellWindowMovePointer(
+          compositorPointer.x,
+          compositorPointer.y,
+          interactionState?.super_held === true,
         );
       }
       if (compositorResizeWindowId !== null) {
@@ -2000,6 +2015,7 @@ function App() {
             resize_window_id: state.resize_window_id,
             move_proxy_window_id: state.move_proxy_window_id,
             move_capture_window_id: state.move_capture_window_id,
+            super_held: state.super_held,
             window_switcher_selected_window_id:
               state.window_switcher_selected_window_id,
             move_rect: state.move_rect,
