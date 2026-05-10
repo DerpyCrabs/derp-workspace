@@ -840,6 +840,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
         if (shellWindowById(snapshots.shell, indicator.window.window_id)) return null
         if (taskbarEntry(snapshots.shell, indicator.window.window_id)) return null
         if (tabGroupByWindow(snapshots.shell, indicator.window.window_id)) return null
+        if (compositorIndicator.width <= 0 || compositorIndicator.height <= 0) return null
+        const output = outputForWindow(snapshots.compositor, compositorIndicator)
+        if (!output) return null
+        const usableY = output.usable_y ?? output.y
+        const usableHeight = output.usable_height ?? output.height
+        if (compositorIndicator.y < usableY + Math.floor(usableHeight * 0.55)) return null
         return snapshots
       },
       5000,

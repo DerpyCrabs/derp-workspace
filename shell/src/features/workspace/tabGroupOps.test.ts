@@ -470,4 +470,95 @@ describe('tabGroupOps', () => {
       globalThis.Element = OrigElement
     }
   })
+
+  it('skips the dragged standalone CSD group drop strip when resolving underneath targets', () => {
+    function ElementShim() {}
+    ElementShim.prototype = Object.create(Object.getPrototypeOf(Object.prototype))
+    globalThis.Element = ElementShim as unknown as typeof globalThis.Element
+    const docHolder = globalThis as typeof globalThis & { document?: Document }
+    if (!docHolder.document) docHolder.document = {} as Document
+    const docAny = docHolder.document as Document & {
+      elementsFromPoint?: (x: number, y: number) => Element[]
+      querySelectorAll?: Document['querySelectorAll']
+    }
+    const origElementsFromPoint = docAny.elementsFromPoint
+    const origQuerySelectorAll = docAny.querySelectorAll
+    const overlay = asElem({
+      closest() {
+        return null
+      },
+    })
+    const sourceStrip = asElem({
+      closest(sel: string) {
+        if (sel === `[data-shell-window-frame="1"]`) return null
+        return null
+      },
+      getAttribute(name: string) {
+        if (name === 'data-workspace-group-drop-strip') return 'group-1'
+        if (name === 'data-workspace-group-drop-target-window') return '1'
+        return null
+      },
+      getBoundingClientRect() {
+        return {
+          left: 100,
+          top: 20,
+          right: 300,
+          bottom: 54,
+          width: 200,
+          height: 34,
+          x: 100,
+          y: 20,
+        } as DOMRect
+      },
+    })
+    const targetStrip = asElem({
+      closest(sel: string) {
+        if (sel === `[data-shell-window-frame="1"]`) return null
+        return null
+      },
+      getAttribute(name: string) {
+        if (name === 'data-workspace-group-drop-strip') return 'group-2'
+        if (name === 'data-workspace-group-drop-target-window') return '2'
+        return null
+      },
+      getBoundingClientRect() {
+        return {
+          left: 100,
+          top: 20,
+          right: 300,
+          bottom: 54,
+          width: 200,
+          height: 34,
+          x: 100,
+          y: 20,
+        } as DOMRect
+      },
+    })
+    docAny.elementsFromPoint = () => [overlay]
+    docAny.querySelectorAll = ((selector: string) => {
+      if (selector === '[data-workspace-group-drop-strip]') {
+        return [sourceStrip, targetStrip] as unknown as ReturnType<Document['querySelectorAll']>
+      }
+      return [] as unknown as ReturnType<Document['querySelectorAll']>
+    }) as Document['querySelectorAll']
+    try {
+      const state = workspaceState({
+        groups: [
+          { id: 'group-1', windowIds: [1] },
+          { id: 'group-2', windowIds: [2] },
+        ],
+        activeTabByGroupId: { 'group-1': 1, 'group-2': 2 },
+        nextGroupSeq: 3,
+      })
+      expect(findMergeTarget(state, 1, 160, 32, true)).toEqual({ groupId: 'group-2', targetWindowId: 2, insertIndex: 1 })
+    } finally {
+      if (origElementsFromPoint) docAny.elementsFromPoint = origElementsFromPoint
+      else docAny.elementsFromPoint = (() => []) as (x: number, y: number) => Element[]
+      if (origQuerySelectorAll) docAny.querySelectorAll = origQuerySelectorAll
+      else {
+        docAny.querySelectorAll = (() => [] as unknown as ReturnType<Document['querySelectorAll']>) as Document['querySelectorAll']
+      }
+      globalThis.Element = OrigElement
+    }
+  })
 })

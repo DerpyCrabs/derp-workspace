@@ -234,6 +234,7 @@ function mergeTargetFromGroupDropStripAtPoint(
 ): TabMergeTarget | null {
   if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return null
   const strips = document.querySelectorAll('[data-workspace-group-drop-strip]')
+  const sourceGroupId = state.groups.find((entry) => entry.windowIds.includes(draggedWindowId))?.id
   for (const strip of strips) {
     if (!(strip instanceof Element)) continue
     if (
@@ -253,6 +254,7 @@ function mergeTargetFromGroupDropStripAtPoint(
     }
     const groupId = strip.getAttribute('data-workspace-group-drop-strip')
     if (!groupId) continue
+    if (ignoreDraggedWindowFrame && groupId === sourceGroupId) continue
     const group = state.groups.find((entry) => entry.id === groupId)
     if (!group || group.windowIds.length === 0) continue
     const rawTargetWindowId = Number(strip.getAttribute('data-workspace-group-drop-target-window'))
@@ -261,7 +263,6 @@ function mergeTargetFromGroupDropStripAtPoint(
         ? Math.trunc(rawTargetWindowId)
         : targetWindowIdForGroup(state, groupId)
     if (targetWindowId === null) continue
-    const sourceGroupId = state.groups.find((entry) => entry.windowIds.includes(draggedWindowId))?.id
     return {
       groupId,
       targetWindowId,
