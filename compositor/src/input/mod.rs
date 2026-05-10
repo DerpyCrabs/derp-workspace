@@ -421,10 +421,22 @@ impl CompositorState {
 
         self.input_routing.shell_pointer_norm = self.shell_pointer_norm_from_global(pos);
         self.sync_shell_shared_state_for_input();
-        let under = if self.shell_move_is_active()
-            || self.shell_resize_is_active()
-            || self.shell_ui_pointer_grab_active()
-        {
+        let shell_toplevel_drag_window_id = self
+            .input_routing
+            .shell_toplevel_drag
+            .map(|drag| drag.window_id);
+        let client_move_window_id = self
+            .input_routing
+            .shell_move_client_initiated
+            .then_some(self.input_routing.shell_move_window_id)
+            .flatten();
+        let under = if self.shell_resize_is_active() || self.shell_ui_pointer_grab_active() {
+            None
+        } else if let Some(window_id) = shell_toplevel_drag_window_id {
+            self.surface_under_except_window_or_toplevel_bounds(pos, Some(window_id))
+        } else if let Some(window_id) = client_move_window_id {
+            self.surface_under_except_window(pos, Some(window_id))
+        } else if self.shell_move_is_active() {
             None
         } else {
             self.surface_under(pos)
@@ -461,7 +473,10 @@ impl CompositorState {
             },
         );
         pointer.frame(self);
-        if let Some((surface, _surface_loc)) = self.surface_under(pos) {
+        if let Some((surface, _surface_loc)) = self.surface_under_except_window(
+            pos,
+            shell_toplevel_drag_window_id.or(client_move_window_id),
+        ) {
             self.pointer_constraint_maybe_activate(&surface, &pointer, pos);
         }
         if dx != 0 || dy != 0 {
@@ -786,7 +801,15 @@ impl CompositorState {
             if button == BTN_LEFT && button_state == ButtonState::Released {
                 self.input_routing.shell_backed_move_candidate = None;
                 self.shell_resize_end_active();
-                self.shell_move_end_active();
+                if let Some(window_id) = self
+                    .input_routing
+                    .shell_toplevel_drag_drop_pending_window_id
+                    .take()
+                {
+                    self.shell_move_end(window_id);
+                } else {
+                    self.shell_move_end_active();
+                }
                 self.shell_ui_pointer_grab_end();
             }
             return;
@@ -904,7 +927,15 @@ impl CompositorState {
         pointer.frame(self);
         if button == BTN_LEFT && button_state == ButtonState::Released {
             self.shell_resize_end_active();
-            self.shell_move_end_active();
+            if let Some(window_id) = self
+                .input_routing
+                .shell_toplevel_drag_drop_pending_window_id
+                .take()
+            {
+                self.shell_move_end(window_id);
+            } else {
+                self.shell_move_end_active();
+            }
             self.shell_ui_pointer_grab_end();
         }
     }

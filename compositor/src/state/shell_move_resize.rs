@@ -129,8 +129,12 @@ impl CompositorState {
         if !self.windows.window_registry.is_shell_hosted(window_id) || info.minimized {
             return false;
         }
-        self.input_routing
-            .shell_move_begin_state(window_id, pointer_driven, initial_pending_delta);
+        self.input_routing.shell_move_begin_state(
+            window_id,
+            pointer_driven,
+            initial_pending_delta,
+            false,
+        );
         self.shell_move_proxy_cancel(Some(window_id));
         self.shell_keyboard_capture_shell_ui();
         if initial_pending_delta != (0, 0) {
@@ -499,11 +503,15 @@ impl CompositorState {
     }
 
     pub fn shell_move_begin(&mut self, window_id: u32) {
-        self.shell_move_begin_inner(window_id, true);
+        self.shell_move_begin_inner(window_id, true, false);
+    }
+
+    pub fn shell_client_move_begin(&mut self, window_id: u32) {
+        self.shell_move_begin_inner(window_id, true, true);
     }
 
     pub fn shell_move_begin_from_shell(&mut self, window_id: u32) {
-        self.shell_move_begin_inner(window_id, true);
+        self.shell_move_begin_inner(window_id, true, false);
     }
 
     pub(crate) fn shell_toplevel_drag_attach(
@@ -530,7 +538,7 @@ impl CompositorState {
             Size::from((info.width.max(1), info.height.max(1))),
         );
         self.shell_apply_global_client_rect(window_id, rect, 0);
-        self.shell_move_begin(window_id);
+        self.shell_client_move_begin(window_id);
         if self.input_routing.shell_move_window_id == Some(window_id) {
             self.input_routing.shell_toplevel_drag = Some(XdgToplevelDragMoveState {
                 window_id,
@@ -603,7 +611,12 @@ impl CompositorState {
         self.input_routing.shell_toplevel_drag = None;
     }
 
-    pub(crate) fn shell_move_begin_inner(&mut self, window_id: u32, pointer_driven: bool) {
+    pub(crate) fn shell_move_begin_inner(
+        &mut self,
+        window_id: u32,
+        pointer_driven: bool,
+        client_initiated: bool,
+    ) {
         self.shell_resize_end_active();
         if self.shell_move_try_begin_backed(window_id, pointer_driven) {
             return;
@@ -683,8 +696,12 @@ impl CompositorState {
                 }
             });
 
-            self.input_routing
-                .shell_move_begin_state(window_id, pointer_driven, (0, 0));
+            self.input_routing.shell_move_begin_state(
+                window_id,
+                pointer_driven,
+                (0, 0),
+                client_initiated,
+            );
             self.shell_native_drag_preview_begin(window_id);
             self.shell_send_interaction_state();
             return;
@@ -707,8 +724,12 @@ impl CompositorState {
                 }
             });
 
-            self.input_routing
-                .shell_move_begin_state(window_id, pointer_driven, (0, 0));
+            self.input_routing.shell_move_begin_state(
+                window_id,
+                pointer_driven,
+                (0, 0),
+                client_initiated,
+            );
             self.shell_native_drag_preview_begin(window_id);
             self.shell_send_interaction_state();
             return;
@@ -947,6 +968,15 @@ impl CompositorState {
             self.input_routing.shell_move_clear_active_state();
             self.shell_native_drag_preview_cancel(Some(window_id));
             self.shell_move_proxy_cancel(Some(window_id));
+            let live_window_ids = self
+                .windows
+                .window_registry
+                .all_infos()
+                .into_iter()
+                .map(|info| info.window_id)
+                .collect::<Vec<_>>();
+            self.workspace_layout
+                .workspace_sync_from_live_window_ids(&live_window_ids);
             self.shell_send_interaction_state();
             return;
         };
@@ -973,6 +1003,15 @@ impl CompositorState {
         self.input_routing.shell_move_clear_active_state();
         self.shell_native_drag_preview_cancel(Some(window_id));
         self.shell_move_proxy_cancel(Some(window_id));
+        let live_window_ids = self
+            .windows
+            .window_registry
+            .all_infos()
+            .into_iter()
+            .map(|info| info.window_id)
+            .collect::<Vec<_>>();
+        self.workspace_layout
+            .workspace_sync_from_live_window_ids(&live_window_ids);
         self.shell_send_interaction_state();
     }
 

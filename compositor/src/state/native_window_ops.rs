@@ -937,6 +937,14 @@ impl CompositorState {
         if pending_deferred && !buffer_removed {
             return;
         }
+        if !buffer_removed
+            && self
+                .input_routing
+                .shell_toplevel_drag
+                .is_some_and(|drag| drag.window_id == window_id)
+        {
+            return;
+        }
         if !buffer_removed && !lost_buffer_extent {
             return;
         }
@@ -954,6 +962,7 @@ impl CompositorState {
             .space
             .unmap_elem(&DerpSpaceElem::Wayland(window));
         self.clear_toplevel_layout_maps(window_id);
+        self.cancel_shell_move_resize_for_window(window_id);
         self.windows
             .pending_gnome_initial_toplevels
             .remove(&window_id);
@@ -978,6 +987,15 @@ impl CompositorState {
         let removed = self.windows.window_registry.snapshot_for_wl_surface(root);
         if let Some(pruned_window_id) = self.windows.window_registry.remove_by_wl_surface(root) {
             self.capture_forget_window_source_cache(pruned_window_id);
+            let live_window_ids = self
+                .windows
+                .window_registry
+                .all_infos()
+                .into_iter()
+                .map(|info| info.window_id)
+                .collect::<Vec<_>>();
+            self.workspace_layout
+                .workspace_sync_from_live_window_ids(&live_window_ids);
             self.shell_emit_chrome_window_unmapped(pruned_window_id, removed);
             self.try_refocus_after_closed_window(pruned_window_id, keyboard_had_focus);
         } else {

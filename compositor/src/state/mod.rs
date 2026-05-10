@@ -172,11 +172,14 @@ fn rect_contains_rect(outer: Rectangle<i32, Logical>, inner: Rectangle<i32, Logi
 
 pub(crate) fn toplevel_should_defer_initial_map(
     parent: Option<&WlSurface>,
-    _title: &str,
+    title: &str,
     app_id: &str,
     is_embedded_shell_host: bool,
 ) -> bool {
     if is_embedded_shell_host || parent.is_some() {
+        return false;
+    }
+    if window_title_is_screen_sharing_indicator(title) {
         return false;
     }
     app_id.trim().is_empty()
@@ -246,6 +249,21 @@ pub(crate) fn read_toplevel_tiling(wl: &WlSurface) -> (bool, bool) {
 
 pub(crate) fn read_toplevel_client_side_decoration(wl: &WlSurface) -> bool {
     smithay::wayland::compositor::with_states(wl, |states| {
+        if let Some(xdg_mode) = states
+            .data_map
+            .get::<XdgDecorationSurfaceData>()
+            .and_then(|data| data.mode.lock().ok().and_then(|mode| *mode))
+        {
+            return xdg_mode != 2;
+        }
+        if let Some(kde_mode) = states
+            .data_map
+            .get::<KdeServerDecorationSurfaceData>()
+            .and_then(|data| data.mode.lock().ok().and_then(|mode| *mode))
+        {
+            return kde_mode
+                != wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration::Mode::Server;
+        }
         let Some(data) = states.data_map.get::<XdgToplevelSurfaceData>() else {
             return false;
         };
@@ -1665,10 +1683,21 @@ impl CompositorState {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        self.surface_under_except_window(pos, None)
+    }
+
+    pub(crate) fn surface_under_except_window(
+        &self,
+        pos: Point<f64, Logical>,
+        skip_window_id: Option<u32>,
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
         if let Some(hit) = self.layer_surface_under(pos, &[Layer::Overlay, Layer::Top]) {
             return Some(hit);
         }
         for elem in self.space_elements_top_to_bottom() {
+            if skip_window_id.is_some() && self.derp_elem_window_id(&elem) == skip_window_id {
+                continue;
+            }
             let Some(map_loc) = self.output_topology.space.element_location(&elem) else {
                 continue;
             };
@@ -1688,6 +1717,70 @@ impl CompositorState {
                 continue;
             };
             if self.native_hit_blocked_by_shell_exclusion(&elem, pos) {
+                continue;
+            }
+            return Some((surf, p_global));
+        }
+        self.layer_surface_under(pos, &[Layer::Bottom, Layer::Background])
+    }
+
+    pub(crate) fn surface_under_except_window_or_toplevel_bounds(
+        &self,
+        pos: Point<f64, Logical>,
+        skip_window_id: Option<u32>,
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        if let Some(hit) = self.layer_surface_under(pos, &[Layer::Overlay, Layer::Top]) {
+            return Some(hit);
+        }
+        for elem in self.space_elements_top_to_bottom() {
+            if skip_window_id.is_some() && self.derp_elem_window_id(&elem) == skip_window_id {
+                continue;
+            }
+            let Some(map_loc) = self.output_topology.space.element_location(&elem) else {
+                continue;
+            };
+            let geometry = elem.geometry();
+            let render_loc = map_loc - geometry.loc;
+            let local = pos - render_loc.to_f64();
+            let hit = match &elem {
+                DerpSpaceElem::Wayland(window) => window
+                    .surface_under(local, WindowSurfaceType::ALL)
+                    .map(|(s, p)| (s, (p + render_loc).to_f64()))
+                    .or_else(|| {
+                        let inside = local.x >= geometry.loc.x as f64
+                            && local.y >= geometry.loc.y as f64
+                            && local.x < (geometry.loc.x + geometry.size.w) as f64
+                            && local.y < (geometry.loc.y + geometry.size.h) as f64;
+                        let surface = window.toplevel()?.wl_surface().clone();
+                        inside.then(|| (surface, map_loc.to_f64()))
+                    }),
+                DerpSpaceElem::X11(x11) => {
+                    let surf = x11.wl_surface()?;
+                    under_from_surface_tree(&surf, local, (0, 0), WindowSurfaceType::ALL)
+                        .map(|(s, p)| (s, (p + render_loc).to_f64()))
+                        .or_else(|| {
+                            let inside = local.x >= geometry.loc.x as f64
+                                && local.y >= geometry.loc.y as f64
+                                && local.x < (geometry.loc.x + geometry.size.w) as f64
+                                && local.y < (geometry.loc.y + geometry.size.h) as f64;
+                            inside.then(|| (surf, map_loc.to_f64()))
+                        })
+                }
+            };
+            let Some((surf, p_global)) = hit else {
+                continue;
+            };
+            let blocked_by_shell = if self.point_in_shell_exclusion_zones(pos) {
+                true
+            } else if let Some(window_id) = self.derp_elem_window_id(&elem) {
+                self.shell_ui_placement_topmost_at(pos).is_some_and(|w| {
+                    Some(w.id) != skip_window_id
+                        && self.shell_placement_renders_above_window(&w, window_id)
+                })
+            } else {
+                false
+            };
+            if blocked_by_shell {
                 continue;
             }
             return Some((surf, p_global));
@@ -2230,6 +2323,39 @@ impl CompositorState {
                 false,
             );
             if let Some(window_id) = self.windows.window_registry.window_id_for_wl_surface(&wl0) {
+                if self
+                    .windows
+                    .window_registry
+                    .window_info(window_id)
+                    .is_some_and(|info| info.width <= 0 || info.height <= 0)
+                {
+                    let geo = pending.window.geometry();
+                    let width = pending
+                        .initial_client_rect
+                        .as_ref()
+                        .map(|rect| rect.size.w)
+                        .unwrap_or(geo.size.w)
+                        .max(1);
+                    let height = pending
+                        .initial_client_rect
+                        .as_ref()
+                        .map(|rect| rect.size.h)
+                        .unwrap_or(geo.size.h)
+                        .max(1);
+                    let output_name = self
+                        .output_for_window_position(map_x, map_y, width, height)
+                        .unwrap_or_default();
+                    let _ = self
+                        .windows
+                        .window_registry
+                        .update_native(window_id, |info| {
+                            info.x = map_x;
+                            info.y = map_y;
+                            info.width = width;
+                            info.height = height;
+                            info.output_name = output_name;
+                        });
+                }
                 let _ = self
                     .windows
                     .window_registry
@@ -2275,6 +2401,106 @@ impl CompositorState {
                 }
                 let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
             }
+        }
+    }
+
+    pub(crate) fn xdg_force_map_pending_deferred_toplevel(&mut self, root: &WlSurface) {
+        let Some(key) = crate::window_registry::wl_surface_key(root) else {
+            return;
+        };
+        let Some(pending) = self.windows.pending_deferred_toplevels.remove(&key) else {
+            return;
+        };
+        pending.window.on_commit();
+        let Some(toplevel) = pending.window.toplevel() else {
+            return;
+        };
+        let wl0 = toplevel.wl_surface().clone();
+        let existing = self.windows.window_registry.snapshot_for_wl_surface(&wl0);
+        let (title, app_id) = smithay::wayland::compositor::with_states(&wl0, |states| {
+            let attrs = states
+                .data_map
+                .get::<XdgToplevelSurfaceData>()
+                .unwrap()
+                .lock()
+                .unwrap();
+            (
+                attrs.title.clone().unwrap_or_default(),
+                attrs.app_id.clone().unwrap_or_default(),
+            )
+        });
+        let title = if title.trim().is_empty() {
+            existing
+                .as_ref()
+                .map(|info| info.title.clone())
+                .unwrap_or_default()
+        } else {
+            title
+        };
+        let app_id = if app_id.trim().is_empty() {
+            existing
+                .as_ref()
+                .map(|info| info.app_id.clone())
+                .unwrap_or_default()
+        } else {
+            app_id
+        };
+        let _ = self.windows.window_registry.set_title(&wl0, title.clone());
+        let _ = self
+            .windows
+            .window_registry
+            .set_app_id(&wl0, app_id.clone());
+        let map_x = pending
+            .initial_client_rect
+            .as_ref()
+            .map(|rect| rect.loc.x)
+            .unwrap_or(pending.map_x);
+        let map_y = pending
+            .initial_client_rect
+            .as_ref()
+            .map(|rect| rect.loc.y)
+            .unwrap_or(pending.map_y);
+        self.output_topology.space.map_element(
+            DerpSpaceElem::Wayland(pending.window.clone()),
+            (map_x, map_y),
+            false,
+        );
+        if let Some(window_id) = self.windows.window_registry.window_id_for_wl_surface(&wl0) {
+            let geo = pending.window.geometry();
+            let width = pending
+                .initial_client_rect
+                .as_ref()
+                .map(|rect| rect.size.w)
+                .or_else(|| existing.as_ref().map(|info| info.width))
+                .unwrap_or(geo.size.w)
+                .max(360);
+            let height = pending
+                .initial_client_rect
+                .as_ref()
+                .map(|rect| rect.size.h)
+                .or_else(|| existing.as_ref().map(|info| info.height))
+                .unwrap_or(geo.size.h)
+                .max(280);
+            let output_name = self
+                .output_for_window_position(map_x, map_y, width, height)
+                .unwrap_or_default();
+            self.shell_emit_requested_native_geometry(
+                window_id,
+                map_x,
+                map_y,
+                width,
+                height,
+                output_name,
+                false,
+                false,
+            );
+            let _ = self
+                .windows
+                .window_registry
+                .transition(window_id, WindowLifecycleEvent::Map);
+        }
+        if let Some(info) = self.windows.window_registry.snapshot_for_wl_surface(&wl0) {
+            self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
         }
     }
 

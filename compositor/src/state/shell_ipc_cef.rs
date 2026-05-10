@@ -9,13 +9,7 @@ impl CompositorState {
         if !self.shell_osr.prepare_shell_send_to_cef(&msg) {
             return;
         }
-        let workspace_dirty = matches!(
-            msg,
-            shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
-                | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
-                | shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
-        );
-        let workspace_changed = workspace_dirty && self.workspace_sync_from_registry();
+        let workspace_changed = self.workspace_sync_from_registry();
         if workspace_changed {
             self.next_shell_workspace_revision();
         }

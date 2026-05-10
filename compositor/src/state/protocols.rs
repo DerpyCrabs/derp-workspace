@@ -110,6 +110,7 @@ impl
                 {
                     allow_no_target_drop.store(true, Ordering::SeqCst);
                 }
+                state.xdg_force_map_pending_deferred_toplevel(&wl);
                 state.shell_toplevel_drag_attach(window_id, x_offset, y_offset);
             }
             XdgToplevelDragRequest::Destroy => {}

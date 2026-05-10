@@ -54,6 +54,17 @@ impl<S: Source> IsAlive for XdgToplevelDragAwareSource<S> {
 
 impl<S: Source> Source for XdgToplevelDragAwareSource<S> {
     fn is_client_local(&self, target: &dyn std::any::Any) -> bool {
+        let allow_no_target_drop = self.allow_no_target_drop.load(Ordering::SeqCst);
+        let metadata = self.metadata();
+        let chromium_window_drag = metadata.as_ref().is_some_and(|metadata| {
+            metadata
+                .mime_types
+                .iter()
+                .any(|mime| mime == "chromium/x-window" || mime == "chromium/x-window-drag")
+        });
+        if allow_no_target_drop || chromium_window_drag {
+            return false;
+        }
         self.inner.is_client_local(target)
     }
 
@@ -76,6 +87,7 @@ impl<S: Source> Source for XdgToplevelDragAwareSource<S> {
     fn cancel(&self) {
         if self.allow_no_target_drop.swap(false, Ordering::SeqCst) {
             self.inner.drop_performed();
+            self.inner.finished();
         } else {
             self.inner.cancel();
         }
@@ -535,6 +547,10 @@ impl DndGrabHandler for CompositorState {
         _seat: Seat<Self>,
         _location: Point<f64, Logical>,
     ) {
+        if let Some(drag) = self.input_routing.shell_toplevel_drag {
+            self.input_routing
+                .shell_toplevel_drag_drop_pending_window_id = Some(drag.window_id);
+        }
         self.input_routing.xdg_toplevel_drag_allow_no_target_drop = None;
     }
 }

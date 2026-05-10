@@ -291,12 +291,22 @@ impl XdgShellHandler for CompositorState {
         }
         let removed = self.windows.window_registry.snapshot_for_wl_surface(wl);
         if let Some(window_id) = self.windows.window_registry.remove_by_wl_surface(wl) {
+            self.cancel_shell_move_resize_for_window(window_id);
             self.capture_forget_window_source_cache(window_id);
             self.windows
                 .shell_close_pending_native_windows
                 .remove(&window_id);
             self.shell_window_stack_forget(window_id);
             self.windows.window_registry.clear_restore_handle(window_id);
+            let live_window_ids = self
+                .windows
+                .window_registry
+                .all_infos()
+                .into_iter()
+                .map(|info| info.window_id)
+                .collect::<Vec<_>>();
+            self.workspace_layout
+                .workspace_sync_from_live_window_ids(&live_window_ids);
             if let Some(ref meta) = removed {
                 tracing::warn!(
                     target: "derp_toplevel",
@@ -339,7 +349,7 @@ impl XdgShellHandler for CompositorState {
             } else if old_visible && !new_visible {
                 self.shell_retract_phantom_shell_window(info.window_id);
                 self.raise_shell_status_indicators();
-            } else if !new_shell {
+            } else if !new_shell && !self.window_id_is_deferred_initial_map(info.window_id) {
                 let window_id = info.window_id;
                 self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
                 self.scratchpad_consider_window(window_id);
@@ -373,7 +383,7 @@ impl XdgShellHandler for CompositorState {
             } else if old_visible && !new_visible {
                 self.shell_retract_phantom_shell_window(info.window_id);
                 self.raise_shell_status_indicators();
-            } else if !new_shell {
+            } else if !new_shell && !self.window_id_is_deferred_initial_map(info.window_id) {
                 let window_id = info.window_id;
                 self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
                 self.scratchpad_consider_window(window_id);
@@ -422,7 +432,7 @@ impl XdgShellHandler for CompositorState {
                 .window_registry
                 .window_id_for_wl_surface(wl_surface)
             {
-                self.shell_move_begin(window_id);
+                self.shell_client_move_begin(window_id);
             }
         }
     }

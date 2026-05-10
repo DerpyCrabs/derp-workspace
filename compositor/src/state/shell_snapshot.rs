@@ -186,6 +186,11 @@ impl CompositorState {
             {
                 continue;
             }
+            if record.kind != WindowKind::ShellHosted
+                && (record.info.width <= 0 || record.info.height <= 0)
+            {
+                continue;
+            }
             let i = self
                 .shell_window_info_to_output_local_layout(&record.info)
                 .unwrap_or_else(|| record.info.clone());
@@ -449,6 +454,10 @@ impl CompositorState {
                 record.kind == WindowKind::ShellHosted
                     || !self.window_id_is_deferred_initial_map(record.info.window_id)
             })
+            .filter(|record| {
+                record.kind == WindowKind::ShellHosted
+                    || (record.info.width > 0 && record.info.height > 0)
+            })
             .map(|record| record.info.window_id)
             .collect();
         window_ids.sort_unstable();
@@ -494,6 +503,7 @@ impl CompositorState {
                 || self.shell_x11_window_is_tray_hidden(info.window_id)
                 || (record.kind != WindowKind::ShellHosted
                     && self.window_id_is_deferred_initial_map(info.window_id))
+                || (record.kind != WindowKind::ShellHosted && (info.width <= 0 || info.height <= 0))
             {
                 continue;
             }

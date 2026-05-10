@@ -83,57 +83,6 @@ derp_session_merge_rust_log() {
   fi
 }
 
-DERP_SESSION_GSETTINGS_BUTTON_LAYOUT_OLD=""
-DERP_SESSION_GSETTINGS_BUTTON_LAYOUT_SET=0
-DERP_SESSION_GSETTINGS_GTK_DECORATION_LAYOUT_OLD=""
-DERP_SESSION_GSETTINGS_GTK_DECORATION_LAYOUT_SET=0
-DERP_SESSION_CSD_POLICY_APPLIED=0
-
-derp_session_gsettings_get() {
-  gsettings get "$1" "$2" 2>/dev/null
-}
-
-derp_session_gsettings_set() {
-  gsettings set "$1" "$2" "$3" >/dev/null 2>&1
-}
-
-derp_session_apply_csd_button_policy() {
-  export QT_WAYLAND_DISABLE_WINDOWDECORATION="${QT_WAYLAND_DISABLE_WINDOWDECORATION:-1}"
-  [[ "${DERP_SESSION_HIDE_CSD_BUTTONS:-1}" == "1" ]] || return 0
-  [[ "$DERP_SESSION_CSD_POLICY_APPLIED" == "0" ]] || return 0
-  command -v gsettings >/dev/null 2>&1 || return 0
-  local value=""
-  if value="$(derp_session_gsettings_get org.gnome.desktop.wm.preferences button-layout)"; then
-    DERP_SESSION_GSETTINGS_BUTTON_LAYOUT_OLD="$value"
-    if derp_session_gsettings_set org.gnome.desktop.wm.preferences button-layout "''"; then
-      DERP_SESSION_GSETTINGS_BUTTON_LAYOUT_SET=1
-    fi
-  fi
-  if value="$(derp_session_gsettings_get org.gnome.desktop.interface gtk-decoration-layout)"; then
-    DERP_SESSION_GSETTINGS_GTK_DECORATION_LAYOUT_OLD="$value"
-    if derp_session_gsettings_set org.gnome.desktop.interface gtk-decoration-layout "''"; then
-      DERP_SESSION_GSETTINGS_GTK_DECORATION_LAYOUT_SET=1
-    fi
-  fi
-  DERP_SESSION_CSD_POLICY_APPLIED=1
-}
-
-derp_session_restore_csd_button_policy() {
-  command -v gsettings >/dev/null 2>&1 || return 0
-  if [[ "$DERP_SESSION_GSETTINGS_GTK_DECORATION_LAYOUT_SET" == "1" ]]; then
-    derp_session_gsettings_set \
-      org.gnome.desktop.interface \
-      gtk-decoration-layout \
-      "$DERP_SESSION_GSETTINGS_GTK_DECORATION_LAYOUT_OLD" || true
-  fi
-  if [[ "$DERP_SESSION_GSETTINGS_BUTTON_LAYOUT_SET" == "1" ]]; then
-    derp_session_gsettings_set \
-      org.gnome.desktop.wm.preferences \
-      button-layout \
-      "$DERP_SESSION_GSETTINGS_BUTTON_LAYOUT_OLD" || true
-  fi
-}
-
 resolve_cef_dir() {
   local bin rp
   bin="${COMPOSITOR_BIN:-$ROOT/target/debug/compositor}"
@@ -157,7 +106,6 @@ derp_session_build_args() {
   derp_session_source_local_env
   export DERP_ALLOW_SHELL_SPAWN="${DERP_ALLOW_SHELL_SPAWN:-1}"
   derp_session_merge_rust_log
-  derp_session_apply_csd_button_policy
   derp_session_resolve_shell_document_url
 
   ARGS=( --socket "$SOCKET" )
@@ -212,8 +160,6 @@ derp_session_log_fresh_start() {
 derp_session_build_args
 derp_session_import_activation_env
 derp_session_log_fresh_start
-
-trap derp_session_restore_csd_button_policy EXIT
 
 exec >>"$DERP_COMPOSITOR_LOG" 2>&1
 while true; do

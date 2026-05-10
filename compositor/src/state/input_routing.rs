@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct XdgToplevelDragMoveState {
     pub(crate) window_id: u32,
     pub(crate) x_offset: i32,
@@ -41,9 +41,11 @@ pub(crate) struct InputRoutingState {
     pub(crate) shell_move_window_id: Option<u32>,
     pub(crate) shell_move_pending_delta: (i32, i32),
     pub(crate) shell_move_pointer_driven: bool,
+    pub(crate) shell_move_client_initiated: bool,
     pub(crate) shell_move_deferred: Option<ShellMoveDeferredStartState>,
     pub(crate) shell_move_proxy: Option<ShellMoveProxyState>,
     pub(crate) shell_toplevel_drag: Option<XdgToplevelDragMoveState>,
+    pub(crate) shell_toplevel_drag_drop_pending_window_id: Option<u32>,
     pub(crate) xdg_toplevel_drag_allow_no_target_drop: Option<Arc<AtomicBool>>,
     pub(crate) shell_native_drag_preview: Option<NativeDragPreviewState>,
     pub(crate) shell_native_drag_preview_generation: u32,
@@ -104,9 +106,11 @@ impl InputRoutingState {
             shell_move_window_id: None,
             shell_move_pending_delta: (0, 0),
             shell_move_pointer_driven: false,
+            shell_move_client_initiated: false,
             shell_move_deferred: None,
             shell_move_proxy: None,
             shell_toplevel_drag: None,
+            shell_toplevel_drag_drop_pending_window_id: None,
             xdg_toplevel_drag_allow_no_target_drop: None,
             shell_native_drag_preview: None,
             shell_native_drag_preview_generation: 0,
@@ -394,10 +398,12 @@ impl InputRoutingState {
         window_id: u32,
         pointer_driven: bool,
         pending_delta: (i32, i32),
+        client_initiated: bool,
     ) {
         self.shell_move_window_id = Some(window_id);
         self.shell_move_pending_delta = pending_delta;
         self.shell_move_pointer_driven = pointer_driven;
+        self.shell_move_client_initiated = client_initiated;
         self.shell_move_last_flush_at = None;
     }
 
@@ -405,7 +411,9 @@ impl InputRoutingState {
         self.shell_move_window_id = None;
         self.shell_move_pending_delta = (0, 0);
         self.shell_move_pointer_driven = false;
+        self.shell_move_client_initiated = false;
         self.shell_toplevel_drag = None;
+        self.shell_toplevel_drag_drop_pending_window_id = None;
         self.shell_move_last_flush_at = None;
     }
 
