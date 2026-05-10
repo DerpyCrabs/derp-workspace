@@ -2,7 +2,13 @@ mod compositor;
 mod layer_shell;
 mod xdg_shell;
 
-use std::io::Write;
+use std::{
+    io::Write,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use crate::{
     chrome_bridge::{ChromeEvent, WindowIconBufferInfo, WindowIconInfo, WindowInfo},
@@ -13,10 +19,14 @@ use smithay::delegate_layer_shell;
 use smithay::delegate_pointer_constraints;
 use smithay::delegate_pointer_gestures;
 use smithay::delegate_relative_pointer;
-use smithay::input::{Seat, SeatHandler, SeatState};
+use smithay::input::{
+    dnd::{DnDGrab, DndAction, DndGrabHandler, DndTarget, GrabType, Source, SourceMetadata},
+    pointer::Focus,
+    Seat, SeatHandler, SeatState,
+};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
-use smithay::utils::{Logical, Point, Serial};
+use smithay::utils::{IsAlive, Logical, Point, Serial};
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraintsHandler};
 use smithay::wayland::selection::data_device::{
@@ -30,6 +40,51 @@ use smithay::wayland::xdg_activation::{
 };
 use smithay::wayland::xdg_toplevel_icon::{ToplevelIconCachedState, XdgToplevelIconHandler};
 use smithay::{delegate_data_control, delegate_data_device, delegate_output, delegate_seat};
+
+struct XdgToplevelDragAwareSource<S: Source> {
+    inner: S,
+    allow_no_target_drop: Arc<AtomicBool>,
+}
+
+impl<S: Source> IsAlive for XdgToplevelDragAwareSource<S> {
+    fn alive(&self) -> bool {
+        self.inner.alive()
+    }
+}
+
+impl<S: Source> Source for XdgToplevelDragAwareSource<S> {
+    fn is_client_local(&self, target: &dyn std::any::Any) -> bool {
+        self.inner.is_client_local(target)
+    }
+
+    fn metadata(&self) -> Option<SourceMetadata> {
+        self.inner.metadata()
+    }
+
+    fn choose_action(&self, action: DndAction) {
+        self.inner.choose_action(action);
+    }
+
+    fn send(&self, mime_type: &str, fd: std::os::fd::OwnedFd) {
+        self.inner.send(mime_type, fd);
+    }
+
+    fn drop_performed(&self) {
+        self.inner.drop_performed();
+    }
+
+    fn cancel(&self) {
+        if self.allow_no_target_drop.swap(false, Ordering::SeqCst) {
+            self.inner.drop_performed();
+        } else {
+            self.inner.cancel();
+        }
+    }
+
+    fn finished(&self) {
+        self.inner.finished();
+    }
+}
 
 impl CompositorState {
     fn xdg_activation_token_max_age(&self) -> std::time::Duration {
@@ -472,7 +527,69 @@ impl DataControlHandler for CompositorState {
     }
 }
 
-impl WaylandDndGrabHandler for CompositorState {}
+impl DndGrabHandler for CompositorState {
+    fn dropped(
+        &mut self,
+        _target: Option<DndTarget<'_, Self>>,
+        _validated: bool,
+        _seat: Seat<Self>,
+        _location: Point<f64, Logical>,
+    ) {
+        self.input_routing.xdg_toplevel_drag_allow_no_target_drop = None;
+    }
+}
+
+impl WaylandDndGrabHandler for CompositorState {
+    fn dnd_requested<S: Source>(
+        &mut self,
+        source: S,
+        icon: Option<WlSurface>,
+        seat: Seat<Self>,
+        serial: Serial,
+        type_: GrabType,
+    ) {
+        let allow_no_target_drop = Arc::new(AtomicBool::new(false));
+        self.input_routing.xdg_toplevel_drag_allow_no_target_drop =
+            Some(allow_no_target_drop.clone());
+        let source = XdgToplevelDragAwareSource {
+            inner: source,
+            allow_no_target_drop,
+        };
+        drop(icon);
+        match type_ {
+            GrabType::Pointer => {
+                let Some(pointer) = seat.get_pointer() else {
+                    source.cancel();
+                    return;
+                };
+                let Some(start_data) = pointer.grab_start_data() else {
+                    source.cancel();
+                    return;
+                };
+                let grab = DnDGrab::new_pointer(
+                    &self.core.display_handle,
+                    start_data,
+                    source,
+                    seat.clone(),
+                );
+                pointer.set_grab(self, grab, serial, Focus::Keep);
+            }
+            GrabType::Touch => {
+                let Some(touch) = seat.get_touch() else {
+                    source.cancel();
+                    return;
+                };
+                let Some(start_data) = touch.grab_start_data() else {
+                    source.cancel();
+                    return;
+                };
+                let grab =
+                    DnDGrab::new_touch(&self.core.display_handle, start_data, source, seat.clone());
+                touch.set_grab(self, grab, serial);
+            }
+        }
+    }
+}
 
 delegate_data_control!(crate::CompositorState);
 delegate_data_device!(crate::CompositorState);

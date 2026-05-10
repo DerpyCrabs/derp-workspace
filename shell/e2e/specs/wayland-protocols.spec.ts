@@ -10,6 +10,7 @@ import {
   artifactDir,
   artifactPath,
   assert,
+  BTN_LEFT,
   buildNativeSpawnCommand,
   captureScreenshotRect,
   copyArtifactFile,
@@ -21,6 +22,7 @@ import {
   movePoint,
   nativeBin,
   pointerGesture,
+  pointerButton,
   pointerWheel,
   readPngRgba,
   shellQuote,
@@ -411,6 +413,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       "ext_image_copy_capture_manager_v1",
       "--require-global",
       "ext_output_image_capture_source_manager_v1",
+      "--require-global",
+      "xdg_toplevel_drag_manager_v1",
       "--list-globals",
       ">",
       shellQuote(outputPath),
@@ -443,7 +447,89 @@ export default defineGroup(import.meta.url, ({ test }) => {
       output.includes("ext_output_image_capture_source_manager_v1 1"),
       output,
     );
+    assert(output.includes("xdg_toplevel_drag_manager_v1 1"), output);
     assert(output.includes("\nexit:0\n"), output);
+  });
+
+  test("xdg-toplevel-drag attaches new native windows to the active pointer drag", async ({
+    base,
+    state,
+  }) => {
+    const compositor = await getJson<CompositorSnapshot>(
+      base,
+      "/test/state/compositor",
+    );
+    const output = [...compositor.outputs].sort(
+      (a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name),
+    )[0];
+    assert(output, "missing output");
+    const pointer = {
+      x: output.x + Math.min(420, Math.max(180, Math.floor(output.width / 2))),
+      y: output.y + Math.min(320, Math.max(160, Math.floor(output.height / 2))),
+    };
+    const offset = { x: 72, y: 44 };
+    const title = `Derp Xdg Toplevel Drag ${Date.now()}`;
+    const command = [
+      shellQuote(nativeBin()),
+      "--title",
+      shellQuote(title),
+      "--app-id",
+      "derp.e2e.xdg.toplevel.drag",
+      "--token",
+      "xdg-toplevel-drag",
+      "--strip",
+      "green",
+      "--width",
+      "360",
+      "--height",
+      "220",
+      "--xdg-toplevel-drag-attach",
+      "--xdg-toplevel-drag-x-offset",
+      String(offset.x),
+      "--xdg-toplevel-drag-y-offset",
+      String(offset.y),
+    ].join(" ");
+    let windowId: number | null = null;
+    await movePoint(base, pointer.x, pointer.y);
+    await pointerButton(base, BTN_LEFT, "press");
+    try {
+      await spawnCommand(base, command);
+      const attached = await waitFor(
+        "wait for xdg-toplevel-drag attached window",
+        async () => {
+          const snapshot = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = snapshot.windows.find(
+            (entry) => !entry.shell_hosted && entry.title === title,
+          );
+          if (!window) return null;
+          const expectedX = pointer.x - offset.x;
+          const expectedY = pointer.y - offset.y;
+          if (Math.abs(window.x - expectedX) > 12) return null;
+          if (Math.abs(window.y - expectedY) > 12) return null;
+          if (snapshot.shell_move_visual?.x !== window.x) return null;
+          return { snapshot, window, expectedX, expectedY };
+        },
+        5000,
+        40,
+      );
+      windowId = attached.window.window_id;
+      state.knownWindowIds.add(windowId);
+      await writeJsonArtifact("xdg-toplevel-drag-attach.json", {
+        command,
+        pointer,
+        offset,
+        attached: attached.window,
+      });
+    } finally {
+      await pointerButton(base, BTN_LEFT, "release");
+      if (windowId !== null) {
+        await closeWindow(base, windowId);
+        await waitForWindowGone(base, windowId, 5000);
+      }
+    }
   });
 
   test("forwards pointer gestures to native clients without leaking shell UI gestures", async ({

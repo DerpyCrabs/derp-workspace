@@ -1,5 +1,13 @@
 use super::*;
 
+type XdgToplevelDragManager =
+    smithay::reexports::wayland_protocols::xdg::toplevel_drag::v1::server::xdg_toplevel_drag_manager_v1::XdgToplevelDragManagerV1;
+type XdgToplevelDrag =
+    smithay::reexports::wayland_protocols::xdg::toplevel_drag::v1::server::xdg_toplevel_drag_v1::XdgToplevelDragV1;
+type XdgToplevelDragManagerRequest =
+    smithay::reexports::wayland_protocols::xdg::toplevel_drag::v1::server::xdg_toplevel_drag_manager_v1::Request;
+type XdgToplevelDragRequest =
+    smithay::reexports::wayland_protocols::xdg::toplevel_drag::v1::server::xdg_toplevel_drag_v1::Request;
 type XdgDecorationManager =
     smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1;
 type XdgToplevelDecoration =
@@ -10,6 +18,105 @@ type XdgDecorationRequest =
     smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Request;
 type XdgDecorationManagerRequest =
     smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1::Request;
+
+#[derive(Default)]
+pub(crate) struct XdgToplevelDragState {
+    attached_window_id: Mutex<Option<u32>>,
+}
+
+impl smithay::reexports::wayland_server::GlobalDispatch<XdgToplevelDragManager, (), CompositorState>
+    for CompositorState
+{
+    fn bind(
+        _state: &mut CompositorState,
+        _dh: &DisplayHandle,
+        _client: &Client,
+        resource: smithay::reexports::wayland_server::New<XdgToplevelDragManager>,
+        _global_data: &(),
+        data_init: &mut smithay::reexports::wayland_server::DataInit<'_, CompositorState>,
+    ) {
+        data_init.init(resource, ());
+    }
+}
+
+impl smithay::reexports::wayland_server::Dispatch<XdgToplevelDragManager, (), CompositorState>
+    for CompositorState
+{
+    fn request(
+        _state: &mut CompositorState,
+        _client: &Client,
+        _resource: &XdgToplevelDragManager,
+        request: XdgToplevelDragManagerRequest,
+        _data: &(),
+        _dh: &DisplayHandle,
+        data_init: &mut smithay::reexports::wayland_server::DataInit<'_, CompositorState>,
+    ) {
+        match request {
+            XdgToplevelDragManagerRequest::GetXdgToplevelDrag { id, data_source } => {
+                let _ = data_source;
+                data_init.init(id, XdgToplevelDragState::default());
+            }
+            XdgToplevelDragManagerRequest::Destroy => {}
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl
+    smithay::reexports::wayland_server::Dispatch<
+        XdgToplevelDrag,
+        XdgToplevelDragState,
+        CompositorState,
+    > for CompositorState
+{
+    fn request(
+        state: &mut CompositorState,
+        _client: &Client,
+        resource: &XdgToplevelDrag,
+        request: XdgToplevelDragRequest,
+        data: &XdgToplevelDragState,
+        _dh: &DisplayHandle,
+        _data_init: &mut smithay::reexports::wayland_server::DataInit<'_, CompositorState>,
+    ) {
+        match request {
+            XdgToplevelDragRequest::Attach {
+                toplevel,
+                x_offset,
+                y_offset,
+            } => {
+                let Some(toplevel) = state.xdg_shell_state.get_toplevel(&toplevel) else {
+                    return;
+                };
+                let wl = toplevel.wl_surface().clone();
+                let Some(window_id) = state.windows.window_registry.window_id_for_wl_surface(&wl)
+                else {
+                    return;
+                };
+                let Ok(mut attached) = data.attached_window_id.lock() else {
+                    return;
+                };
+                if attached.is_some_and(|attached_window_id| attached_window_id != window_id) {
+                    resource.post_error(
+                        smithay::reexports::wayland_protocols::xdg::toplevel_drag::v1::server::xdg_toplevel_drag_v1::Error::ToplevelAttached,
+                        "a different toplevel is already attached",
+                    );
+                    return;
+                }
+                *attached = Some(window_id);
+                if let Some(allow_no_target_drop) = state
+                    .input_routing
+                    .xdg_toplevel_drag_allow_no_target_drop
+                    .as_ref()
+                {
+                    allow_no_target_drop.store(true, Ordering::SeqCst);
+                }
+                state.shell_toplevel_drag_attach(window_id, x_offset, y_offset);
+            }
+            XdgToplevelDragRequest::Destroy => {}
+            _ => unreachable!(),
+        }
+    }
+}
 
 fn configure_xdg_decoration(
     toplevel: &ToplevelSurface,

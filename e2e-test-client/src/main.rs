@@ -36,7 +36,10 @@ use std::sync::Mutex;
 use wayland_client::{
     delegate_noop,
     globals::registry_queue_init,
-    protocol::{wl_buffer, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
+    protocol::{
+        wl_buffer, wl_data_device, wl_data_device_manager, wl_data_source, wl_keyboard, wl_output,
+        wl_pointer, wl_seat, wl_surface,
+    },
     Connection, Dispatch, Proxy, QueueHandle,
 };
 use wayland_protocols::ext::{
@@ -85,6 +88,9 @@ use wayland_protocols::xdg::decoration::zv1::client::{
     zxdg_toplevel_decoration_v1::{
         Mode as XdgDecorationMode, Request as XdgDecorationRequest, ZxdgToplevelDecorationV1,
     },
+};
+use wayland_protocols::xdg::toplevel_drag::v1::client::{
+    xdg_toplevel_drag_manager_v1::XdgToplevelDragManagerV1, xdg_toplevel_drag_v1::XdgToplevelDragV1,
 };
 use wayland_protocols::xdg::toplevel_icon::v1::client::{
     xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1, xdg_toplevel_icon_v1::XdgToplevelIconV1,
@@ -257,6 +263,14 @@ struct Args {
     #[arg(long, default_value_t = false)]
     xdg_icon_shm: bool,
     #[arg(long, default_value_t = false)]
+    xdg_toplevel_drag_attach: bool,
+    #[arg(long, default_value_t = false)]
+    xdg_toplevel_drag_source: bool,
+    #[arg(long, default_value_t = 64)]
+    xdg_toplevel_drag_x_offset: i32,
+    #[arg(long, default_value_t = 32)]
+    xdg_toplevel_drag_y_offset: i32,
+    #[arg(long, default_value_t = false)]
     kde_decoration_none: bool,
     #[arg(long, default_value_t = false)]
     xdg_decoration_raw_none: bool,
@@ -390,6 +404,15 @@ fn main() {
     } else {
         None
     };
+    let xdg_toplevel_drag_manager = if args.xdg_toplevel_drag_attach {
+        Some(
+            globals
+                .bind::<XdgToplevelDragManagerV1, _, _>(&qh, 1..=1, ())
+                .expect("bind xdg_toplevel_drag_manager_v1"),
+        )
+    } else {
+        None
+    };
     let pointer_gestures = if args.gesture_status_json.is_some() {
         Some(
             globals
@@ -486,6 +509,32 @@ fn main() {
         manager.set_icon(window.xdg_toplevel(), Some(&icon));
         toplevel_icon = Some(icon);
     }
+    let xdg_toplevel_drag = None;
+    let mut xdg_toplevel_drag_data_device_manager = None;
+    let xdg_toplevel_drag_data_source = None;
+    let xdg_toplevel_drag_data_device = None;
+    if args.xdg_toplevel_drag_attach || args.xdg_toplevel_drag_source {
+        let data_device_manager = globals
+            .bind::<wl_data_device_manager::WlDataDeviceManager, _, _>(&qh, 1..=3, ())
+            .expect("bind wl_data_device_manager");
+        xdg_toplevel_drag_data_device_manager = Some(data_device_manager);
+    }
+    let mut xdg_toplevel_drag = xdg_toplevel_drag;
+    let mut xdg_toplevel_drag_data_source = xdg_toplevel_drag_data_source;
+    if let Some(manager) = xdg_toplevel_drag_manager.as_ref() {
+        let data_source = xdg_toplevel_drag_data_device_manager
+            .as_ref()
+            .expect("xdg toplevel drag data device manager")
+            .create_data_source(&qh, ());
+        let drag = manager.get_xdg_toplevel_drag(&data_source, &qh, ());
+        drag.attach(
+            window.xdg_toplevel(),
+            args.xdg_toplevel_drag_x_offset,
+            args.xdg_toplevel_drag_y_offset,
+        );
+        xdg_toplevel_drag_data_source = Some(data_source);
+        xdg_toplevel_drag = Some(drag);
+    }
     window.commit();
     let fifo = fifo_manager
         .as_ref()
@@ -549,6 +598,15 @@ fn main() {
         _content_type: content_type,
         _tearing_control: tearing_control,
         _xdg_toplevel_icon_manager: xdg_toplevel_icon_manager,
+        _xdg_toplevel_drag_manager: xdg_toplevel_drag_manager,
+        _xdg_toplevel_drag: xdg_toplevel_drag,
+        _xdg_toplevel_drag_data_device_manager: xdg_toplevel_drag_data_device_manager,
+        _xdg_toplevel_drag_data_source: xdg_toplevel_drag_data_source,
+        _xdg_toplevel_drag_data_device: xdg_toplevel_drag_data_device,
+        xdg_toplevel_drag_started: false,
+        xdg_toplevel_drag_source: args.xdg_toplevel_drag_source,
+        xdg_toplevel_drag_x_offset: args.xdg_toplevel_drag_x_offset,
+        xdg_toplevel_drag_y_offset: args.xdg_toplevel_drag_y_offset,
         _toplevel_icon: toplevel_icon,
         _icon_pool: icon_pool,
         _icon_buffer: icon_buffer,
@@ -773,6 +831,15 @@ struct TestClient {
     _content_type: Option<wp_content_type_v1::WpContentTypeV1>,
     _tearing_control: Option<wp_tearing_control_v1::WpTearingControlV1>,
     _xdg_toplevel_icon_manager: Option<XdgToplevelIconManagerV1>,
+    _xdg_toplevel_drag_manager: Option<XdgToplevelDragManagerV1>,
+    _xdg_toplevel_drag: Option<XdgToplevelDragV1>,
+    _xdg_toplevel_drag_data_device_manager: Option<wl_data_device_manager::WlDataDeviceManager>,
+    _xdg_toplevel_drag_data_source: Option<wl_data_source::WlDataSource>,
+    _xdg_toplevel_drag_data_device: Option<wl_data_device::WlDataDevice>,
+    xdg_toplevel_drag_started: bool,
+    xdg_toplevel_drag_source: bool,
+    xdg_toplevel_drag_x_offset: i32,
+    xdg_toplevel_drag_y_offset: i32,
     _toplevel_icon: Option<XdgToplevelIconV1>,
     _icon_pool: Option<SlotPool>,
     _icon_buffer: Option<Buffer>,
@@ -827,6 +894,40 @@ struct GestureStatus {
 }
 
 impl TestClient {
+    fn maybe_start_xdg_toplevel_drag(&mut self, qh: &QueueHandle<Self>, serial: u32) {
+        if self.xdg_toplevel_drag_started {
+            return;
+        }
+        if !self.xdg_toplevel_drag_source && self._xdg_toplevel_drag.is_some() {
+            return;
+        }
+        if !self.xdg_toplevel_drag_source && self._xdg_toplevel_drag_manager.is_none() {
+            return;
+        }
+        let Some(data_device) = self._xdg_toplevel_drag_data_device.as_ref() else {
+            return;
+        };
+        self.xdg_toplevel_drag_started = true;
+        let data_source = self
+            ._xdg_toplevel_drag_data_device_manager
+            .as_ref()
+            .expect("xdg toplevel drag data device manager")
+            .create_data_source(qh, ());
+        data_source.offer("application/x-derp-toplevel-drag".to_string());
+        let drag = self._xdg_toplevel_drag_manager.as_ref().map(|manager| {
+            let drag = manager.get_xdg_toplevel_drag(&data_source, qh, ());
+            drag.attach(
+                self.window.xdg_toplevel(),
+                self.xdg_toplevel_drag_x_offset,
+                self.xdg_toplevel_drag_y_offset,
+            );
+            drag
+        });
+        data_device.start_drag(Some(&data_source), self.window.wl_surface(), None, serial);
+        self._xdg_toplevel_drag_data_source = Some(data_source);
+        self._xdg_toplevel_drag = drag;
+    }
+
     fn draw(&mut self, _conn: &Connection, qh: &QueueHandle<Self>) {
         if !self.configured || !self.needs_redraw {
             return;
@@ -3075,6 +3176,9 @@ impl SeatHandler for TestClient {
                 .seat_state
                 .get_pointer(qh, &seat)
                 .expect("create pointer");
+            if let Some(manager) = self._xdg_toplevel_drag_data_device_manager.as_ref() {
+                self._xdg_toplevel_drag_data_device = Some(manager.get_data_device(&seat, qh, ()));
+            }
             self.relative_pointer = self
                 .relative_pointer_state
                 .get_relative_pointer(&pointer, qh)
@@ -3123,6 +3227,9 @@ impl SeatHandler for TestClient {
             if let Some(pointer) = self.pointer.take() {
                 pointer.release();
             }
+            if let Some(data_device) = self._xdg_toplevel_drag_data_device.take() {
+                data_device.release();
+            }
             self.constraint_locked = false;
             self.constraint_confined = false;
             self.pointer_seat = None;
@@ -3163,6 +3270,9 @@ impl PointerHandler for TestClient {
                 }
                 PointerEventKind::Press { serial, button, .. } => {
                     self.request_spawn_activation(qh, serial, seat.clone(), event.surface.clone());
+                    if button == 0x110 {
+                        self.maybe_start_xdg_toplevel_drag(qh, serial);
+                    }
                     if self.move_on_header_press
                         && button == 0x110
                         && event.position.1 >= 0.0
@@ -3389,6 +3499,11 @@ delegate_noop!(TestClient: ignore WpTearingControlManagerV1);
 delegate_noop!(TestClient: ignore wp_tearing_control_v1::WpTearingControlV1);
 delegate_noop!(TestClient: ignore XdgToplevelIconManagerV1);
 delegate_noop!(TestClient: ignore XdgToplevelIconV1);
+delegate_noop!(TestClient: ignore XdgToplevelDragManagerV1);
+delegate_noop!(TestClient: ignore XdgToplevelDragV1);
+delegate_noop!(TestClient: ignore wl_data_device_manager::WlDataDeviceManager);
+delegate_noop!(TestClient: ignore wl_data_device::WlDataDevice);
+delegate_noop!(TestClient: ignore wl_data_source::WlDataSource);
 delegate_noop!(TestClient: ignore ZwpPointerGesturesV1);
 delegate_noop!(TestClient: ignore ZxdgDecorationManagerV1);
 delegate_noop!(TestClient: ignore ZxdgToplevelDecorationV1);

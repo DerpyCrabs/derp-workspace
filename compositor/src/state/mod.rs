@@ -648,6 +648,7 @@ impl CompositorState {
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
         let xdg_foreign_state = XdgForeignState::new::<Self>(&dh);
+        dh.create_global::<Self, smithay::reexports::wayland_protocols::xdg::toplevel_drag::v1::server::xdg_toplevel_drag_manager_v1::XdgToplevelDragManagerV1, _>(1, ());
         dh.create_global::<Self, smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1, _>(1, ());
         let kde_decoration_state = KdeDecorationState::new::<Self>(
             &dh,

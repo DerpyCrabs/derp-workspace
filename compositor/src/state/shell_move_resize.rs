@@ -3,6 +3,13 @@ use super::*;
 impl CompositorState {
     pub(crate) fn cancel_shell_move_resize_for_window(&mut self, window_id: u32) {
         self.shell_move_deferred_cancel(Some(window_id));
+        if self
+            .input_routing
+            .shell_toplevel_drag
+            .is_some_and(|drag| drag.window_id == window_id)
+        {
+            self.input_routing.shell_toplevel_drag = None;
+        }
         if self.input_routing.shell_move_window_id == Some(window_id) {
             if self.windows.window_registry.is_shell_hosted(window_id) {
                 self.shell_move_end_backed_only(window_id);
@@ -497,6 +504,103 @@ impl CompositorState {
 
     pub fn shell_move_begin_from_shell(&mut self, window_id: u32) {
         self.shell_move_begin_inner(window_id, true);
+    }
+
+    pub(crate) fn shell_toplevel_drag_attach(
+        &mut self,
+        window_id: u32,
+        x_offset: i32,
+        y_offset: i32,
+    ) {
+        let Some(pointer) = self.input_routing.seat.get_pointer() else {
+            return;
+        };
+        let Some(info) = self.windows.window_registry.window_info(window_id) else {
+            return;
+        };
+        if self.window_info_is_solid_shell_host(&info) {
+            return;
+        }
+        let pointer_i32: Point<i32, Logical> = pointer.current_location().to_i32_round();
+        let rect = Rectangle::new(
+            Point::from((
+                pointer_i32.x.saturating_sub(x_offset),
+                pointer_i32.y.saturating_sub(y_offset),
+            )),
+            Size::from((info.width.max(1), info.height.max(1))),
+        );
+        self.shell_apply_global_client_rect(window_id, rect, 0);
+        self.shell_move_begin(window_id);
+        if self.input_routing.shell_move_window_id == Some(window_id) {
+            self.input_routing.shell_toplevel_drag = Some(XdgToplevelDragMoveState {
+                window_id,
+                x_offset,
+                y_offset,
+            });
+        }
+    }
+
+    pub(crate) fn shell_toplevel_drag_update(&mut self, pointer: Point<f64, Logical>) {
+        let Some(drag) = self.input_routing.shell_toplevel_drag else {
+            return;
+        };
+        let Some(info) = self.windows.window_registry.window_info(drag.window_id) else {
+            self.input_routing.shell_toplevel_drag = None;
+            return;
+        };
+        if self.window_info_is_solid_shell_host(&info) {
+            self.input_routing.shell_toplevel_drag = None;
+            return;
+        }
+        let pointer: Point<i32, Logical> = pointer.to_i32_round();
+        let rect = Rectangle::new(
+            Point::from((
+                pointer.x.saturating_sub(drag.x_offset),
+                pointer.y.saturating_sub(drag.y_offset),
+            )),
+            Size::from((info.width.max(1), info.height.max(1))),
+        );
+        let Some(sid) = self
+            .windows
+            .window_registry
+            .surface_id_for_window(drag.window_id)
+        else {
+            self.input_routing.shell_toplevel_drag = None;
+            return;
+        };
+        if let Some(window) = self.find_window_by_surface_id(sid) {
+            self.output_topology.space.map_element(
+                DerpSpaceElem::Wayland(window.clone()),
+                rect.loc,
+                true,
+            );
+            let output_name = self
+                .output_for_window_position(
+                    rect.loc.x,
+                    rect.loc.y,
+                    info.width.max(1),
+                    info.height.max(1),
+                )
+                .unwrap_or_default();
+            let snapshot = self
+                .windows
+                .window_registry
+                .update_native(drag.window_id, |updated| {
+                    updated.x = rect.loc.x;
+                    updated.y = rect.loc.y;
+                    updated.width = info.width.max(1);
+                    updated.height = info.height.max(1);
+                    updated.output_name = output_name.clone();
+                    updated.clone()
+                });
+            if let Some(info) = snapshot {
+                self.capture_refresh_window_source_cache(info.window_id);
+                self.shell_emit_chrome_event(ChromeEvent::WindowGeometryChanged { info });
+            }
+            self.shell_reply_window_list();
+            return;
+        }
+        self.input_routing.shell_toplevel_drag = None;
     }
 
     pub(crate) fn shell_move_begin_inner(&mut self, window_id: u32, pointer_driven: bool) {

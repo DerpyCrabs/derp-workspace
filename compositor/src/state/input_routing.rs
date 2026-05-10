@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(crate) struct XdgToplevelDragMoveState {
+    pub(crate) window_id: u32,
+    pub(crate) x_offset: i32,
+    pub(crate) y_offset: i32,
+}
+
 pub(crate) struct InputRoutingState {
     pub(crate) seat_state: SeatState<CompositorState>,
     pub(crate) seat: Seat<CompositorState>,
@@ -36,6 +43,8 @@ pub(crate) struct InputRoutingState {
     pub(crate) shell_move_pointer_driven: bool,
     pub(crate) shell_move_deferred: Option<ShellMoveDeferredStartState>,
     pub(crate) shell_move_proxy: Option<ShellMoveProxyState>,
+    pub(crate) shell_toplevel_drag: Option<XdgToplevelDragMoveState>,
+    pub(crate) xdg_toplevel_drag_allow_no_target_drop: Option<Arc<AtomicBool>>,
     pub(crate) shell_native_drag_preview: Option<NativeDragPreviewState>,
     pub(crate) shell_native_drag_preview_generation: u32,
     pub(crate) shell_backed_move_candidate: Option<(u32, Point<f64, Logical>)>,
@@ -97,6 +106,8 @@ impl InputRoutingState {
             shell_move_pointer_driven: false,
             shell_move_deferred: None,
             shell_move_proxy: None,
+            shell_toplevel_drag: None,
+            xdg_toplevel_drag_allow_no_target_drop: None,
             shell_native_drag_preview: None,
             shell_native_drag_preview_generation: 0,
             shell_backed_move_candidate: None,
@@ -394,6 +405,7 @@ impl InputRoutingState {
         self.shell_move_window_id = None;
         self.shell_move_pending_delta = (0, 0);
         self.shell_move_pointer_driven = false;
+        self.shell_toplevel_drag = None;
         self.shell_move_last_flush_at = None;
     }
 

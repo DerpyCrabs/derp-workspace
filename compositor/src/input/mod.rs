@@ -421,10 +421,7 @@ impl CompositorState {
 
         self.input_routing.shell_pointer_norm = self.shell_pointer_norm_from_global(pos);
         self.sync_shell_shared_state_for_input();
-        let grabbed = pointer.is_grabbed();
-
-        let under = if grabbed
-            || self.shell_move_is_active()
+        let under = if self.shell_move_is_active()
             || self.shell_resize_is_active()
             || self.shell_ui_pointer_grab_active()
         {
@@ -449,6 +446,11 @@ impl CompositorState {
             }
         }
 
+        let shell_toplevel_drag_active = self.input_routing.shell_toplevel_drag.is_some();
+        if (dx != 0 || dy != 0) && shell_toplevel_drag_active {
+            self.shell_toplevel_drag_update(pos);
+        }
+
         pointer.motion(
             self,
             under,
@@ -463,7 +465,10 @@ impl CompositorState {
             self.pointer_constraint_maybe_activate(&surface, &pointer, pos);
         }
         if dx != 0 || dy != 0 {
-            if self.shell_move_is_active() && self.shell_move_accepts_pointer_delta() {
+            if !shell_toplevel_drag_active
+                && self.shell_move_is_active()
+                && self.shell_move_accepts_pointer_delta()
+            {
                 self.shell_move_delta(dx, dy);
             } else if self.input_routing.shell_move_deferred.is_some()
                 && self.shell_move_accepts_pointer_delta()

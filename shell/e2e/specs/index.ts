@@ -1,4 +1,5 @@
 import artifactsGroup from './artifacts.spec.ts'
+import chromeTabDetachGroup from './chrome-tab-detach.spec.ts'
 import compositorSnapshotGroup from './compositor-snapshot.spec.ts'
 import customHotkeysGroup from './custom-hotkeys.spec.ts'
 import externalControlGroup from './external-control.spec.ts'
@@ -27,6 +28,7 @@ import x11WindowsGroup from './x11-windows.spec.ts'
 import xdgActivationGroup from './xdg-activation.spec.ts'
 
 export const defaultGroups = [
+  chromeTabDetachGroup,
   shellChromeGroup,
   compositorSnapshotGroup,
   nativeWindowsGroup,
