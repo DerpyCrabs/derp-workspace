@@ -29,6 +29,28 @@ impl CompositorState {
         } else {
             self.shell_native_outer_global_rect(info)
         };
+        let (origin_x, origin_y) = self.output_topology.shell_canvas_logical_origin;
+        let restore = if kind == WindowKind::ShellHosted {
+            self.windows
+                .window_registry
+                .window_record(info.window_id)
+                .and_then(|record| record.shell_hosted_float_restore)
+                .map(|rect| {
+                    (
+                        rect.loc.x.saturating_sub(origin_x),
+                        rect.loc.y.saturating_sub(origin_y),
+                        rect.size.w,
+                        rect.size.h,
+                    )
+                })
+        } else {
+            self.windows
+                .toplevel_floating_restore
+                .get(&info.window_id)
+                .copied()
+                .map(|(x, y, w, h)| (x.saturating_sub(origin_x), y.saturating_sub(origin_y), w, h))
+        }
+        .unwrap_or((0, 0, 0, 0));
         let capture_identifier = self
             .capture
             .capture_toplevel_handles
@@ -51,6 +73,10 @@ impl CompositorState {
             frame_y: frame.loc.y,
             frame_w: frame.size.w,
             frame_h: frame.size.h,
+            restore_x: restore.0,
+            restore_y: restore.1,
+            restore_w: restore.2,
+            restore_h: restore.3,
             minimized: if info.minimized { 1 } else { 0 },
             maximized: if info.maximized { 1 } else { 0 },
             fullscreen: if info.fullscreen { 1 } else { 0 },

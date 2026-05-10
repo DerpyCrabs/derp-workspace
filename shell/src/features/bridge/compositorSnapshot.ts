@@ -283,7 +283,11 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
     const frameY = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 48, true) : y
     const frameWidth = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 52, true) : width
     const frameHeight = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 56, true) : height
-    const minimizedOffset = rowBytes === WINDOW_LIST_ROW_BYTES ? 60 : 28
+    const restoreX = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 60, true) : 0
+    const restoreY = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 64, true) : 0
+    const restoreWidth = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 68, true) : 0
+    const restoreHeight = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 72, true) : 0
+    const minimizedOffset = rowBytes === WINDOW_LIST_ROW_BYTES ? 76 : 28
     const minimized = view.getUint32(cursor + minimizedOffset, true) !== 0
     const maximized = view.getUint32(cursor + minimizedOffset + 4, true) !== 0
     const fullscreen = view.getUint32(cursor + minimizedOffset + 8, true) !== 0
@@ -378,6 +382,10 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
       frame_y: frameY,
       frame_width: frameWidth,
       frame_height: frameHeight,
+      restore_x: restoreX,
+      restore_y: restoreY,
+      restore_width: restoreWidth,
+      restore_height: restoreHeight,
       minimized,
       maximized,
       fullscreen,

@@ -7,13 +7,15 @@ import type { WorkspaceMutation } from '@/features/workspace/workspaceProtocol'
 import type { DerpWindow } from '@/host/appWindowState'
 import { windowIsShellHosted } from '@/host/appWindowState'
 import type { LayoutScreen } from '@/host/types'
-import { SHELL_LAYOUT_FLOATING } from '@/lib/chromeConstants'
+import { SHELL_LAYOUT_FLOATING, SHELL_LAYOUT_MAXIMIZED } from '@/lib/chromeConstants'
 import { rectCanvasLocalToGlobal, rectGlobalToCanvasLocal } from '@/lib/shellCoords'
+import { matchDesktopApplication, type DesktopAppMatchCandidate } from '@/features/desktop/desktopApplicationsState'
 import { matchNativeSessionWindow } from './nativeSessionMatch'
 import {
   nativeWindowRef,
   shellWindowRef,
   type NativeLaunchMetadata,
+  type SavedMaximizedState,
   type SavedMonitorTileState,
   type SavedNativeWindow,
   type SavedRect,
@@ -32,6 +34,7 @@ type SessionRuntimeOptions = {
   getWindowsList: () => readonly DerpWindow[]
   getWorkspaceState: () => WorkspaceSnapshot
   getTaskbarScreens: () => LayoutScreen[]
+  getWorkspacePrimary?: () => LayoutScreen | null
   getLayoutCanvasOrigin: () => { x: number; y: number } | null
   getNativeWindowRefs: () => ReadonlyMap<number, SessionWindowRef>
   getNextNativeWindowSeq: () => number
@@ -55,6 +58,7 @@ type SessionRuntimeOptions = {
   scheduleExclusionZonesSync: () => void
   nativeLaunchMetadataByRef: Map<SessionWindowRef, NativeLaunchMetadata>
   pendingNativeLaunches: NativeLaunchQueueEntry[]
+  getDesktopApps?: () => readonly DesktopAppMatchCandidate[]
   getShellHostedAppStateForWindow?: (windowId: number) => unknown | undefined
 }
 
@@ -135,6 +139,8 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
     )
     const fitsOutput =
       (outputId.length > 0 ? target.identity === outputId : outputName === target.name) &&
+      bounds.width > 1 &&
+      bounds.height > 1 &&
       globalRect.x >= target.x &&
       globalRect.y >= target.y &&
       globalRect.x + globalRect.w <= target.x + target.width &&
@@ -146,6 +152,29 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
     const y = work.y + Math.max(0, Math.floor((work.h - height) / 2))
     const local = rectGlobalToCanvasLocal(x, y, width, height, options.getLayoutCanvasOrigin())
     return { x: local.x, y: local.y, width: local.w, height: local.h }
+  }
+
+  function maximizedOutputBoundsToLocalRect(outputId: string, outputName: string, clientSideDecoration: boolean): SavedRect | null {
+    const target = screenBySavedOutput(outputId, outputName)
+    const primary = options.getWorkspacePrimary?.() ?? null
+    const resolved = target ?? primary ?? options.getTaskbarScreens()[0]
+    if (!resolved) return null
+    const reserveTb = options.reserveTaskbarForMon(resolved)
+    const work = monitorWorkAreaGlobal(resolved, reserveTb, clientSideDecoration ? 0 : undefined, undefined, resolved.taskbar_side)
+    const local = rectGlobalToCanvasLocal(work.x, work.y, work.w, work.h, options.getLayoutCanvasOrigin())
+    return { x: local.x, y: local.y, width: local.w, height: local.h }
+  }
+
+  function savedMaximizedForWindow(window: DerpWindow): SavedMaximizedState {
+    return window.maximized ? { outputId: window.output_id, outputName: window.output_name } : false
+  }
+
+  function savedWindowIsMaximized(maximized: SavedMaximizedState): boolean {
+    return maximized !== false
+  }
+
+  function savedMaximizedOutput(maximized: SavedMaximizedState, outputId: string, outputName: string) {
+    return maximized === false ? { outputId, outputName } : maximized
   }
 
   function restoreBackedShellWindow(record: SavedShellWindow) {
@@ -216,8 +245,13 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
       const live = windowsById.get(record.windowId)
       if (!live) continue
       if (record.minimized && !live.minimized) options.shellWireSend('minimize', live.window_id)
-      if (!record.minimized && record.maximized !== live.maximized) {
-        options.shellWireSend('set_maximized', live.window_id, record.maximized ? 1 : 0)
+      if (!record.minimized && savedWindowIsMaximized(record.maximized) && !record.fullscreen) {
+        const output = savedMaximizedOutput(record.maximized, record.outputId, record.outputName)
+        const bounds = maximizedOutputBoundsToLocalRect(output.outputId, output.outputName, !!live.client_side_decoration) ?? savedWindowBoundsToLocalRect(record.bounds, record.outputId, record.outputName)
+        options.shellWireSend('set_geometry', live.window_id, bounds.x, bounds.y, bounds.width, bounds.height, SHELL_LAYOUT_MAXIMIZED)
+      }
+      if (!record.minimized && savedWindowIsMaximized(record.maximized) !== live.maximized) {
+        options.shellWireSend('set_maximized', live.window_id, savedWindowIsMaximized(record.maximized) ? 1 : 0)
       }
       if (!record.minimized && record.fullscreen !== live.fullscreen) {
         options.shellWireSend('set_fullscreen', live.window_id, record.fullscreen ? 1 : 0)
@@ -229,8 +263,13 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
       const live = windowsById.get(liveWindowId)
       if (!live) continue
       if (record.minimized && !live.minimized) options.shellWireSend('minimize', liveWindowId)
-      if (!record.minimized && record.maximized !== live.maximized) {
-        options.shellWireSend('set_maximized', liveWindowId, record.maximized ? 1 : 0)
+      if (!record.minimized && savedWindowIsMaximized(record.maximized) && !record.fullscreen) {
+        const output = savedMaximizedOutput(record.maximized, record.outputId, record.outputName)
+        const bounds = maximizedOutputBoundsToLocalRect(output.outputId, output.outputName, !!live.client_side_decoration) ?? savedWindowBoundsToLocalRect(record.bounds, record.outputId, record.outputName)
+        options.shellWireSend('set_geometry', liveWindowId, bounds.x, bounds.y, bounds.width, bounds.height, SHELL_LAYOUT_MAXIMIZED)
+      }
+      if (!record.minimized && savedWindowIsMaximized(record.maximized) !== live.maximized) {
+        options.shellWireSend('set_maximized', liveWindowId, savedWindowIsMaximized(record.maximized) ? 1 : 0)
       }
       if (!record.minimized && record.fullscreen !== live.fullscreen) {
         options.shellWireSend('set_fullscreen', liveWindowId, record.fullscreen ? 1 : 0)
@@ -382,6 +421,51 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
     )
   }
 
+  function nativeLaunchMetadataForWindow(windowRef: SessionWindowRef, window: DerpWindow): NativeLaunchMetadata | null {
+    const existing = options.nativeLaunchMetadataByRef.get(windowRef)
+    const app = matchDesktopApplication(options.getDesktopApps?.() ?? [], {
+      title: window.title,
+      app_id: window.app_id,
+    })
+    const command = app?.exec?.trim() || app?.executable?.trim() || ''
+    if (!command) return existing ?? null
+    const inferred = {
+      command,
+      desktopId: app?.desktop_id?.trim() || null,
+      appName: app?.name?.trim() || null,
+    }
+    if (
+      !existing ||
+      existing.desktopId !== inferred.desktopId ||
+      existing.appName !== inferred.appName
+    ) {
+      options.nativeLaunchMetadataByRef.set(windowRef, inferred)
+      return inferred
+    }
+    return existing
+  }
+
+  function savedBoundsForWindow(window: DerpWindow): SavedRect {
+    if (window.maximized && !window.minimized && !window.fullscreen) {
+      if (
+        typeof window.restore_x === 'number' &&
+        typeof window.restore_y === 'number' &&
+        typeof window.restore_width === 'number' &&
+        typeof window.restore_height === 'number' &&
+        window.restore_width > 1 &&
+        window.restore_height > 1
+      ) {
+        return {
+          x: window.restore_x,
+          y: window.restore_y,
+          width: window.restore_width,
+          height: window.restore_height,
+        }
+      }
+    }
+    return options.rectFromWindow(window)
+  }
+
   function buildSessionSnapshot(): SessionSnapshot {
     const shellWindows: SavedShellWindow[] = []
     const nativeWindows: SavedNativeWindow[] = []
@@ -406,9 +490,9 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
           appId: window.app_id,
           outputId: window.output_id,
           outputName: window.output_name,
-          bounds: options.rectFromWindow(window),
+          bounds: savedBoundsForWindow(window),
           minimized: window.minimized,
-          maximized: window.maximized,
+          maximized: savedMaximizedForWindow(window),
           fullscreen: window.fullscreen,
           stackZ: window.stack_z,
           state: shellWindowState,
@@ -423,11 +507,11 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
         appId: window.app_id,
         outputId: window.output_id,
         outputName: window.output_name,
-        bounds: options.rectFromWindow(window),
+        bounds: savedBoundsForWindow(window),
         minimized: window.minimized,
-        maximized: window.maximized,
+        maximized: savedMaximizedForWindow(window),
         fullscreen: window.fullscreen,
-        launch: options.nativeLaunchMetadataByRef.get(windowRef) ?? null,
+        launch: nativeLaunchMetadataForWindow(windowRef, window),
       })
     }
 
@@ -530,8 +614,13 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
       const live = windowsById.get(shellWindow.windowId)
       if (!live) return false
       if (live.minimized !== shellWindow.minimized) return false
-      if (live.maximized !== shellWindow.maximized) return false
+      if (live.maximized !== savedWindowIsMaximized(shellWindow.maximized)) return false
       if (live.fullscreen !== shellWindow.fullscreen) return false
+      if (!shellWindow.minimized && savedWindowIsMaximized(shellWindow.maximized) && !shellWindow.fullscreen) {
+        const output = savedMaximizedOutput(shellWindow.maximized, shellWindow.outputId, shellWindow.outputName)
+        const expectedBounds = maximizedOutputBoundsToLocalRect(output.outputId, output.outputName, !!live.client_side_decoration) ?? savedWindowBoundsToLocalRect(shellWindow.bounds, shellWindow.outputId, shellWindow.outputName)
+        if (!rectMatches(live, expectedBounds, 8)) return false
+      }
     }
     for (const nativeWindow of snapshot.nativeWindows) {
       const liveWindowId = liveWindowIdForRef(nativeWindow.windowRef)
@@ -539,8 +628,13 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
       const live = windowsById.get(liveWindowId)
       if (!live) return false
       if (live.minimized !== nativeWindow.minimized) return false
-      if (live.maximized !== nativeWindow.maximized) return false
+      if (live.maximized !== savedWindowIsMaximized(nativeWindow.maximized)) return false
       if (live.fullscreen !== nativeWindow.fullscreen) return false
+      if (!nativeWindow.minimized && savedWindowIsMaximized(nativeWindow.maximized) && !nativeWindow.fullscreen) {
+        const output = savedMaximizedOutput(nativeWindow.maximized, nativeWindow.outputId, nativeWindow.outputName)
+        const expectedBounds = maximizedOutputBoundsToLocalRect(output.outputId, output.outputName, !!live.client_side_decoration) ?? savedWindowBoundsToLocalRect(nativeWindow.bounds, nativeWindow.outputId, nativeWindow.outputName)
+        if (!rectMatches(live, expectedBounds, 8)) return false
+      }
     }
     for (const monitorState of snapshot.monitorTiles) {
       const targetMonitor = screenBySavedOutput(monitorState.outputId ?? '', monitorState.outputName)

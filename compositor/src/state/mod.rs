@@ -2342,18 +2342,29 @@ impl CompositorState {
         };
         let (max, fs) = read_toplevel_tiling(wl);
         let client_side_decoration = read_toplevel_client_side_decoration(wl);
+        let mut layout_x = gx;
+        let mut layout_y = gy;
         let mut layout_w = gw;
         let mut layout_h = gh;
         let mut layout_max = max;
         let mut layout_fs = fs;
         let mut pending_output_name = None;
-        if let Some(pending) = self
+        let mut remap_to_canonical_maximized_rect = false;
+        if self.input_routing.shell_move_window_id == Some(window_id) {
+            self.windows
+                .shell_pending_native_configure_frames
+                .remove(&window_id);
+        } else if let Some(pending) = self
             .windows
             .shell_pending_native_configure_frames
             .get(&window_id)
             .cloned()
         {
-            if pending.x == gx
+            if (pending.width <= 1 || pending.height <= 1) && gw > 1 && gh > 1 {
+                self.windows
+                    .shell_pending_native_configure_frames
+                    .remove(&window_id);
+            } else if pending.x == gx
                 && pending.y == gy
                 && pending.width == gw
                 && pending.height == gh
@@ -2365,6 +2376,8 @@ impl CompositorState {
                     .remove(&window_id);
                 pending_output_name = Some(pending.output_name);
             } else {
+                layout_x = pending.x;
+                layout_y = pending.y;
                 layout_w = pending.width;
                 layout_h = pending.height;
                 layout_max = pending.maximized;
@@ -2375,18 +2388,48 @@ impl CompositorState {
                 );
             }
         }
-        let output_name = pending_output_name.unwrap_or_else(|| {
+        let mut output_name = pending_output_name.unwrap_or_else(|| {
             self.output_for_window_position(gx, gy, layout_w, layout_h)
                 .unwrap_or_default()
         });
+        if layout_max && !layout_fs {
+            if let Some(output) = self
+                .output_topology
+                .space
+                .outputs()
+                .find(|output| output.name() == output_name)
+                .cloned()
+                .or_else(|| self.output_for_global_xywh(layout_x, layout_y, layout_w, layout_h))
+                .or_else(|| self.leftmost_output())
+            {
+                if let Some(rect) =
+                    self.shell_maximize_work_area_global_for_window(&output, window_id)
+                {
+                    remap_to_canonical_maximized_rect =
+                        (layout_x, layout_y) != (rect.loc.x, rect.loc.y);
+                    layout_x = rect.loc.x;
+                    layout_y = rect.loc.y;
+                    layout_w = rect.size.w.max(1);
+                    layout_h = rect.size.h.max(1);
+                    output_name = output.name().to_string();
+                }
+            }
+        }
         let changed = self.windows.window_registry.set_shell_layout(
             wl,
-            gx,
-            gy,
+            layout_x,
+            layout_y,
             layout_w,
             layout_h,
             output_name,
         );
+        if remap_to_canonical_maximized_rect && (layout_x, layout_y) != (gx, gy) {
+            self.output_topology.space.map_element(
+                DerpSpaceElem::Wayland(window.clone()),
+                (layout_x, layout_y),
+                false,
+            );
+        }
         self.capture_refresh_window_source_cache(window_id);
         let tiling_changed = self
             .windows

@@ -547,6 +547,7 @@ function App() {
     getWindowsList: windowsList,
     getWorkspaceState: workspaceSnapshot,
     getTaskbarScreens: () => taskbarScreens(),
+    getWorkspacePrimary: () => workspacePartition().primary,
     getLayoutCanvasOrigin: layoutCanvasOrigin,
     getNativeWindowRefs: nativeWindowRefs,
     getNextNativeWindowSeq: nextNativeWindowSeq,
@@ -563,6 +564,7 @@ function App() {
     scheduleExclusionZonesSync: () => scheduleExclusionZonesSync(),
     nativeLaunchMetadataByRef,
     pendingNativeLaunches,
+    getDesktopApps: () => desktopApps.items(),
     getShellHostedAppStateForWindow: (windowId) =>
       shellHostedAppByWindow()[windowId],
   });

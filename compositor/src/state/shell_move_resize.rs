@@ -549,6 +549,16 @@ impl CompositorState {
         }
         self.shell_restore_tiled_drag_window_if_needed(window_id);
         if let Some(window) = self.find_window_by_surface_id(sid) {
+            if self
+                .windows
+                .shell_pending_native_configure_frames
+                .get(&window_id)
+                .is_some_and(|pending| pending.width <= 1 || pending.height <= 1)
+            {
+                self.windows
+                    .shell_pending_native_configure_frames
+                    .remove(&window_id);
+            }
             self.output_topology
                 .space
                 .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);

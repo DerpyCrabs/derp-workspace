@@ -50,6 +50,10 @@ pub struct ShellWindowSnapshot {
     pub frame_y: i32,
     pub frame_w: i32,
     pub frame_h: i32,
+    pub restore_x: i32,
+    pub restore_y: i32,
+    pub restore_w: i32,
+    pub restore_h: i32,
     pub minimized: u32,
     pub maximized: u32,
     pub fullscreen: u32,
@@ -661,7 +665,7 @@ pub const WINDOW_LIST_SCHEMA_VERSION: u32 = 1146246915;
 pub const WINDOW_LIST_HEADER_BYTES_V1: usize = 16;
 pub const WINDOW_LIST_HEADER_BYTES: usize = 24;
 pub const WINDOW_LIST_ROW_BYTES_V1: usize = 60;
-pub const WINDOW_LIST_ROW_BYTES: usize = 92;
+pub const WINDOW_LIST_ROW_BYTES: usize = 108;
 pub const WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION: u32 = 1146242818;
 pub const WINDOW_GEOMETRY_RECTS_BYTES: usize = 36;
 pub const COMPOSITOR_INTERACTION_STATE_BYTES_V1: usize = 80;

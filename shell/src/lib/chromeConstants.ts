@@ -16,5 +16,5 @@ export const CHROME_RESIZE_HANDLE_PX = 10
 
 export const CHROME_TASKBAR_RESERVE_PX = 36
 
-/** `layout_state` tail on [`MSG_SHELL_SET_GEOMETRY`]: normal floating geometry. */
 export const SHELL_LAYOUT_FLOATING = 0
+export const SHELL_LAYOUT_MAXIMIZED = 1

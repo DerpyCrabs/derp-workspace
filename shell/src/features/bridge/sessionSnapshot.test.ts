@@ -99,7 +99,7 @@ describe('sessionSnapshot', () => {
           outputName: 'DP-1',
           bounds: { x: 1, y: 2, width: 300, height: 200 },
           minimized: false,
-          maximized: true,
+          maximized: { outputId: 'make:model:serial-1', outputName: 'DP-1' },
           fullscreen: false,
           stackZ: 9,
           state: { ok: true },

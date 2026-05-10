@@ -116,6 +116,10 @@ export function buildWindowsMapFromList(
       frame_y: coerceOptionalFiniteNumber(r.frame_y),
       frame_width: coerceOptionalFiniteNumber(r.frame_width),
       frame_height: coerceOptionalFiniteNumber(r.frame_height),
+      restore_x: coerceOptionalFiniteNumber(r.restore_x),
+      restore_y: coerceOptionalFiniteNumber(r.restore_y),
+      restore_width: coerceOptionalFiniteNumber(r.restore_width),
+      restore_height: coerceOptionalFiniteNumber(r.restore_height),
       title: typeof r.title === 'string' ? r.title : '',
       app_id: typeof r.app_id === 'string' ? r.app_id : '',
       icon_name: typeof r.icon_name === 'string' ? r.icon_name : '',
@@ -169,6 +173,10 @@ function sameDerpWindow(left: DerpWindow, right: DerpWindow): boolean {
     left.frame_y === right.frame_y &&
     left.frame_width === right.frame_width &&
     left.frame_height === right.frame_height &&
+    left.restore_x === right.restore_x &&
+    left.restore_y === right.restore_y &&
+    left.restore_width === right.restore_width &&
+    left.restore_height === right.restore_height &&
     left.title === right.title &&
     left.app_id === right.app_id &&
     left.icon_name === right.icon_name &&

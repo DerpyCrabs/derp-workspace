@@ -1,4 +1,4 @@
-import type { SavedNativeWindow } from './sessionSnapshot'
+import type { SavedMaximizedState, SavedNativeWindow } from './sessionSnapshot'
 
 export type NativeMatchWindow = {
   title: string
@@ -11,6 +11,10 @@ export type NativeMatchWindow = {
 
 function normalize(value: string): string {
   return value.trim().toLocaleLowerCase()
+}
+
+function savedMaximizedStateToBool(value: SavedMaximizedState): boolean {
+  return value !== false
 }
 
 export function scoreNativeSessionMatch(
@@ -39,7 +43,7 @@ export function scoreNativeSessionMatch(
     else score -= 8
   }
   if (liveOutput && savedOutput && liveOutput === savedOutput) score += 6
-  if (window.maximized === saved.maximized) score += 2
+  if (window.maximized === savedMaximizedStateToBool(saved.maximized)) score += 2
   if (window.fullscreen === saved.fullscreen) score += 2
   if (saved.launch?.appName) {
     const appName = normalize(saved.launch.appName)

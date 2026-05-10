@@ -996,6 +996,10 @@ pub fn encode_window_list(revision: u64, windows: &[ShellWindowSnapshot]) -> Opt
         body.extend_from_slice(&w.frame_y.to_le_bytes());
         body.extend_from_slice(&w.frame_w.to_le_bytes());
         body.extend_from_slice(&w.frame_h.to_le_bytes());
+        body.extend_from_slice(&w.restore_x.to_le_bytes());
+        body.extend_from_slice(&w.restore_y.to_le_bytes());
+        body.extend_from_slice(&w.restore_w.to_le_bytes());
+        body.extend_from_slice(&w.restore_h.to_le_bytes());
         body.extend_from_slice(&w.minimized.to_le_bytes());
         body.extend_from_slice(&w.maximized.to_le_bytes());
         body.extend_from_slice(&w.fullscreen.to_le_bytes());
@@ -2646,6 +2650,10 @@ fn decode_window_list_compositor_body(
             frame_y,
             frame_w,
             frame_h,
+            restore_x,
+            restore_y,
+            restore_w,
+            restore_h,
             minimized,
             maximized,
             fullscreen,
@@ -2656,6 +2664,10 @@ fn decode_window_list_compositor_body(
             app_len,
         ) = if row_bytes == WINDOW_LIST_ROW_BYTES {
             (
+                cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
+                cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
                 cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
                 cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
                 cursor.read_i32().ok_or(DecodeError::BadWindowListPayload)?,
@@ -2683,6 +2695,10 @@ fn decode_window_list_compositor_body(
                 y,
                 w,
                 h,
+                0,
+                0,
+                0,
+                0,
                 cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
                 cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
                 cursor.read_u32().ok_or(DecodeError::BadWindowListPayload)?,
@@ -2819,6 +2835,10 @@ fn decode_window_list_compositor_body(
             frame_y,
             frame_w,
             frame_h,
+            restore_x,
+            restore_y,
+            restore_w,
+            restore_h,
             minimized,
             maximized,
             fullscreen,
@@ -3070,6 +3090,10 @@ mod tests {
                 frame_y: -11,
                 frame_w: 648,
                 frame_h: 510,
+                restore_x: 21,
+                restore_y: 22,
+                restore_w: 620,
+                restore_h: 430,
                 minimized: 0,
                 maximized: 1,
                 fullscreen: 0,
@@ -3115,6 +3139,10 @@ mod tests {
                     frame_y: -11,
                     frame_w: 648,
                     frame_h: 510,
+                    restore_x: 21,
+                    restore_y: 22,
+                    restore_w: 620,
+                    restore_h: 430,
                     minimized: 0,
                     maximized: 1,
                     fullscreen: 0,
@@ -3386,6 +3414,10 @@ mod tests {
             frame_y: -11,
             frame_w: 648,
             frame_h: 510,
+            restore_x: 21,
+            restore_y: 22,
+            restore_w: 620,
+            restore_h: 430,
             minimized: 0,
             maximized: 1,
             fullscreen: 0,

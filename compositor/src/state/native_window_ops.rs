@@ -487,16 +487,51 @@ impl CompositorState {
         else {
             return;
         };
-        let target_output_name = self
+        let mut target_output_name = self
             .output_for_window_position(x, y, w, h)
             .unwrap_or_default();
+        let maximized_rect = if layout_state == 1 {
+            self.output_topology
+                .space
+                .outputs()
+                .find(|output| output.name() == target_output_name)
+                .cloned()
+                .or_else(|| {
+                    if info.output_name.is_empty() {
+                        None
+                    } else {
+                        self.output_topology
+                            .space
+                            .outputs()
+                            .find(|output| output.name() == info.output_name)
+                            .cloned()
+                    }
+                })
+                .or_else(|| self.leftmost_output())
+                .and_then(|output| {
+                    target_output_name = output.name().to_string();
+                    self.shell_maximize_work_area_global_for_window(&output, window_id)
+                })
+        } else {
+            None
+        };
+        let (target_x, target_y, target_w, target_h) = if let Some(rect) = maximized_rect {
+            (
+                rect.loc.x,
+                rect.loc.y,
+                rect.size.w.max(1),
+                rect.size.h.max(1),
+            )
+        } else {
+            (x, y, w.max(1), h.max(1))
+        };
         if info.minimized
             && self.shell_set_hidden_native_window_geometry(
                 window_id,
-                x,
-                y,
-                w,
-                h,
+                target_x,
+                target_y,
+                target_w,
+                target_h,
                 &target_output_name,
                 &previous_output_name,
                 layout_state,
@@ -519,7 +554,7 @@ impl CompositorState {
                     }
                 }
             }
-            let (map_x, map_y, content_w, content_h) = (x, y, w.max(1), h.max(1));
+            let (map_x, map_y, content_w, content_h) = (target_x, target_y, target_w, target_h);
 
             let tl = window.toplevel().unwrap();
             tl.with_pending_state(|state| {
@@ -585,7 +620,10 @@ impl CompositorState {
                 );
             }
         }
-        let rect = Rectangle::new(Point::from((x, y)), Size::from((w.max(1), h.max(1))));
+        let rect = Rectangle::new(
+            Point::from((target_x, target_y)),
+            Size::from((target_w, target_h)),
+        );
         self.apply_x11_window_bounds(window_id, &x11, rect, layout_state == 1, false, true);
         self.workspace_relayout_auto_layout_outputs_after_geometry(
             &previous_output_name,

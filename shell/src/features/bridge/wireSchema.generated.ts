@@ -98,7 +98,7 @@ export const WINDOW_LIST_SCHEMA_VERSION = 1146246915 as const
 export const WINDOW_LIST_HEADER_BYTES_V1 = 16 as const
 export const WINDOW_LIST_HEADER_BYTES = 24 as const
 export const WINDOW_LIST_ROW_BYTES_V1 = 60 as const
-export const WINDOW_LIST_ROW_BYTES = 92 as const
+export const WINDOW_LIST_ROW_BYTES = 108 as const
 export const WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION = 1146242818 as const
 export const WINDOW_GEOMETRY_RECTS_BYTES = 36 as const
 export const COMPOSITOR_INTERACTION_STATE_BYTES_V1 = 80 as const
@@ -309,9 +309,9 @@ export type TaskbarSide = (typeof TASKBAR_SIDES)[keyof typeof TASKBAR_SIDES]
 
 export type ShellWindowIconBufferSnapshot = { width: number; height: number; scale: number }
 
-export type ShellWindowSnapshot = { window_id: number; surface_id: number; stack_z: number; x: number; y: number; width: number; height: number; client_x: number; client_y: number; client_width: number; client_height: number; frame_x: number; frame_y: number; frame_width: number; frame_height: number; minimized: boolean; maximized: boolean; fullscreen: boolean; client_side_decoration: boolean; workspace_visible: boolean; shell_flags: number; title: string; app_id: string; output_id: string; output_name: string; capture_identifier: string; kind: string; x11_class: string; x11_instance: string; icon_name: string; icon_buffers: ShellWindowIconBufferSnapshot[] }
+export type ShellWindowSnapshot = { window_id: number; surface_id: number; stack_z: number; x: number; y: number; width: number; height: number; client_x: number; client_y: number; client_width: number; client_height: number; frame_x: number; frame_y: number; frame_width: number; frame_height: number; restore_x: number; restore_y: number; restore_width: number; restore_height: number; minimized: boolean; maximized: boolean; fullscreen: boolean; client_side_decoration: boolean; workspace_visible: boolean; shell_flags: number; title: string; app_id: string; output_id: string; output_name: string; capture_identifier: string; kind: string; x11_class: string; x11_instance: string; icon_name: string; icon_buffers: ShellWindowIconBufferSnapshot[] }
 
-export type DerpWindow = Omit<ShellWindowSnapshot, 'client_x' | 'client_y' | 'client_width' | 'client_height' | 'frame_x' | 'frame_y' | 'frame_width' | 'frame_height' | 'client_side_decoration'> & { client_x?: number; client_y?: number; client_width?: number; client_height?: number; frame_x?: number; frame_y?: number; frame_width?: number; frame_height?: number; client_side_decoration?: boolean }
+export type DerpWindow = Omit<ShellWindowSnapshot, 'client_x' | 'client_y' | 'client_width' | 'client_height' | 'frame_x' | 'frame_y' | 'frame_width' | 'frame_height' | 'restore_x' | 'restore_y' | 'restore_width' | 'restore_height' | 'client_side_decoration'> & { client_x?: number; client_y?: number; client_width?: number; client_height?: number; frame_x?: number; frame_y?: number; frame_width?: number; frame_height?: number; restore_x?: number; restore_y?: number; restore_width?: number; restore_height?: number; client_side_decoration?: boolean }
 
 export type ShellWindowListRow = Partial<DerpWindow> & { window_id: number; surface_id: number }
 

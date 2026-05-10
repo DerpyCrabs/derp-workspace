@@ -30,6 +30,11 @@ export type SavedRect = {
   height: number
 }
 
+export type SavedMaximizedState = false | {
+  outputId: string
+  outputName: string
+}
+
 export type SavedShellWindow = {
   windowId: number
   windowRef: SessionWindowRef
@@ -40,7 +45,7 @@ export type SavedShellWindow = {
   outputName: string
   bounds: SavedRect
   minimized: boolean
-  maximized: boolean
+  maximized: SavedMaximizedState
   fullscreen: boolean
   stackZ: number
   state: unknown | null
@@ -54,7 +59,7 @@ export type SavedNativeWindow = {
   outputName: string
   bounds: SavedRect
   minimized: boolean
-  maximized: boolean
+  maximized: SavedMaximizedState
   fullscreen: boolean
   launch: NativeLaunchMetadata | null
 }
@@ -126,6 +131,16 @@ function coerceBool(value: unknown): boolean {
   return value === true
 }
 
+function sanitizeMaximizedState(value: unknown, outputId: string, outputName: string): SavedMaximizedState {
+  if (value === false || value === null || value === undefined) return false
+  if (value === true) return { outputId, outputName }
+  if (!isObject(value)) return false
+  return {
+    outputId: coerceString(value.outputId) || outputId,
+    outputName: coerceString(value.outputName) || outputName,
+  }
+}
+
 function sanitizeWindowRef(value: unknown): SessionWindowRef | null {
   const ref = coerceString(value).trim()
   if (!/^shell:\d+$/.test(ref) && !/^native:\d+$/.test(ref)) return null
@@ -176,17 +191,19 @@ function sanitizeShellWindow(value: unknown): SavedShellWindow | null {
   const windowId = coercePositiveInt(value.windowId, 0)
   const windowRef = sanitizeWindowRef(value.windowRef) ?? shellWindowRef(windowId)
   if (!windowId || !windowRef.startsWith('shell:')) return null
+  const outputId = coerceString(value.outputId)
+  const outputName = coerceString(value.outputName)
   return {
     windowId,
     windowRef,
     kind: sanitizeShellWindowKind(value.kind),
     title: coerceString(value.title),
     appId: coerceString(value.appId),
-    outputId: coerceString(value.outputId),
-    outputName: coerceString(value.outputName),
+    outputId,
+    outputName,
     bounds: sanitizeRect(value.bounds),
     minimized: coerceBool(value.minimized),
-    maximized: coerceBool(value.maximized),
+    maximized: sanitizeMaximizedState(value.maximized, outputId, outputName),
     fullscreen: coerceBool(value.fullscreen),
     stackZ: coerceInt(value.stackZ),
     state: value.state ?? null,
@@ -197,15 +214,17 @@ function sanitizeNativeWindow(value: unknown): SavedNativeWindow | null {
   if (!isObject(value)) return null
   const windowRef = sanitizeWindowRef(value.windowRef)
   if (!windowRef || !windowRef.startsWith('native:')) return null
+  const outputId = coerceString(value.outputId)
+  const outputName = coerceString(value.outputName)
   return {
     windowRef,
     title: coerceString(value.title),
     appId: coerceString(value.appId),
-    outputId: coerceString(value.outputId),
-    outputName: coerceString(value.outputName),
+    outputId,
+    outputName,
     bounds: sanitizeRect(value.bounds),
     minimized: coerceBool(value.minimized),
-    maximized: coerceBool(value.maximized),
+    maximized: sanitizeMaximizedState(value.maximized, outputId, outputName),
     fullscreen: coerceBool(value.fullscreen),
     launch: sanitizeLaunchMetadata(value.launch),
   }
