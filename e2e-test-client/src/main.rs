@@ -4,7 +4,7 @@ use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_activation, delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer,
     delegate_pointer_constraints, delegate_registry, delegate_relative_pointer, delegate_seat,
-    delegate_shm, delegate_xdg_shell, delegate_xdg_window,
+    delegate_shm, delegate_xdg_popup, delegate_xdg_shell, delegate_xdg_window,
     globals::ProvidesBoundGlobal,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
@@ -18,8 +18,9 @@ use smithay_client_toolkit::{
     },
     shell::{
         xdg::{
+            popup::{Popup, PopupConfigure, PopupHandler},
             window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
-            XdgShell,
+            XdgPositioner, XdgShell, XdgSurface,
         },
         WaylandSurface,
     },
@@ -89,6 +90,7 @@ use wayland_protocols::xdg::decoration::zv1::client::{
         Mode as XdgDecorationMode, Request as XdgDecorationRequest, ZxdgToplevelDecorationV1,
     },
 };
+use wayland_protocols::xdg::shell::client::xdg_positioner;
 use wayland_protocols::xdg::toplevel_drag::v1::client::{
     xdg_toplevel_drag_manager_v1::XdgToplevelDragManagerV1, xdg_toplevel_drag_v1::XdgToplevelDragV1,
 };
@@ -288,6 +290,10 @@ struct Args {
     gesture_status_json: Option<String>,
     #[arg(long)]
     cursor_shape_status_json: Option<String>,
+    #[arg(long, default_value_t = false)]
+    xdg_popup_grab_probe: bool,
+    #[arg(long)]
+    xdg_popup_grab_status_json: Option<String>,
 }
 
 fn main() {
@@ -640,6 +646,11 @@ fn main() {
         constraint_confined: false,
         last_relative: (0.0, 0.0),
         total_relative: (0.0, 0.0),
+        xdg_popup_grab_probe: args.xdg_popup_grab_probe,
+        xdg_popup_grab_status_json: args.xdg_popup_grab_status_json,
+        xdg_popup_parent: None,
+        xdg_popup_child: None,
+        xdg_popup_status: PopupProbeStatus::default(),
     };
 
     while !state.exit {
@@ -873,6 +884,34 @@ struct TestClient {
     constraint_confined: bool,
     last_relative: (f64, f64),
     total_relative: (f64, f64),
+    xdg_popup_grab_probe: bool,
+    xdg_popup_grab_status_json: Option<String>,
+    xdg_popup_parent: Option<PopupProbeSurface>,
+    xdg_popup_child: Option<PopupProbeSurface>,
+    xdg_popup_status: PopupProbeStatus,
+}
+
+struct PopupProbeSurface {
+    popup: Popup,
+    buffer: Option<Buffer>,
+    width: u32,
+    height: u32,
+    configured: bool,
+}
+
+#[derive(Default)]
+struct PopupProbeStatus {
+    parent_configured: u32,
+    child_configured: u32,
+    parent_done: u32,
+    child_done: u32,
+    pointer_enters: u32,
+    pointer_presses: u32,
+    keyboard_enters: u32,
+    escape_pressed: u32,
+    keyboard_enter_surface: String,
+    last_pointer_surface: String,
+    last_press_surface: String,
 }
 
 #[derive(Default)]
@@ -894,6 +933,233 @@ struct GestureStatus {
 }
 
 impl TestClient {
+    fn popup_status_escape(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('"', "\\\"")
+    }
+
+    fn xdg_popup_open_depth(&self) -> u32 {
+        u32::from(self.xdg_popup_parent.is_some()) + u32::from(self.xdg_popup_child.is_some())
+    }
+
+    fn write_xdg_popup_status(&self) {
+        let Some(path) = self.xdg_popup_grab_status_json.as_ref() else {
+            return;
+        };
+        let status = &self.xdg_popup_status;
+        let json = format!(
+            "{{\"parent_configured\":{},\"child_configured\":{},\"parent_done\":{},\"child_done\":{},\"pointer_enters\":{},\"pointer_presses\":{},\"keyboard_enters\":{},\"escape_pressed\":{},\"open_depth\":{},\"keyboard_enter_surface\":\"{}\",\"last_pointer_surface\":\"{}\",\"last_press_surface\":\"{}\"}}",
+            status.parent_configured,
+            status.child_configured,
+            status.parent_done,
+            status.child_done,
+            status.pointer_enters,
+            status.pointer_presses,
+            status.keyboard_enters,
+            status.escape_pressed,
+            self.xdg_popup_open_depth(),
+            Self::popup_status_escape(&status.keyboard_enter_surface),
+            Self::popup_status_escape(&status.last_pointer_surface),
+            Self::popup_status_escape(&status.last_press_surface),
+        );
+        let _ = std::fs::write(path, json);
+    }
+
+    fn popup_surface_label(&self, surface: &wl_surface::WlSurface) -> &'static str {
+        if self.window.wl_surface() == surface {
+            return "toplevel";
+        }
+        if self
+            .xdg_popup_child
+            .as_ref()
+            .is_some_and(|entry| entry.popup.wl_surface() == surface)
+        {
+            return "child";
+        }
+        if self
+            .xdg_popup_parent
+            .as_ref()
+            .is_some_and(|entry| entry.popup.wl_surface() == surface)
+        {
+            return "parent";
+        }
+        "other"
+    }
+
+    fn make_xdg_popup_positioner(&self, x: i32, y: i32, width: u32, height: u32) -> XdgPositioner {
+        let positioner = XdgPositioner::new(&self._xdg_shell_state).expect("create positioner");
+        positioner.set_size(width as i32, height as i32);
+        positioner.set_anchor_rect(x, y, 1, 1);
+        positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
+        positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
+        positioner
+    }
+
+    fn open_xdg_popup_parent(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        seat: &wl_seat::WlSeat,
+        serial: u32,
+    ) {
+        if self.xdg_popup_parent.is_some() {
+            return;
+        }
+        let width = 170;
+        let height = 110;
+        let positioner = self.make_xdg_popup_positioner(24, 44, width, height);
+        let surface = self._compositor_state.create_surface(qh);
+        let popup = Popup::from_surface(
+            Some(self.window.xdg_surface()),
+            &positioner,
+            qh,
+            surface,
+            &self._xdg_shell_state,
+        )
+        .expect("create parent popup");
+        popup.xdg_popup().grab(seat, serial);
+        popup.wl_surface().commit();
+        self.xdg_popup_parent = Some(PopupProbeSurface {
+            popup,
+            buffer: None,
+            width,
+            height,
+            configured: false,
+        });
+        self.write_xdg_popup_status();
+    }
+
+    fn open_xdg_popup_child(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        seat: &wl_seat::WlSeat,
+        serial: u32,
+    ) {
+        if self.xdg_popup_child.is_some() {
+            return;
+        }
+        let Some(parent) = self.xdg_popup_parent.as_ref() else {
+            return;
+        };
+        let parent_surface = parent.popup.xdg_surface().clone();
+        let width = 150;
+        let height = 90;
+        let positioner = self.make_xdg_popup_positioner(122, 26, width, height);
+        let surface = self._compositor_state.create_surface(qh);
+        let popup = Popup::from_surface(
+            Some(&parent_surface),
+            &positioner,
+            qh,
+            surface,
+            &self._xdg_shell_state,
+        )
+        .expect("create child popup");
+        popup.xdg_popup().grab(seat, serial);
+        popup.wl_surface().commit();
+        self.xdg_popup_child = Some(PopupProbeSurface {
+            popup,
+            buffer: None,
+            width,
+            height,
+            configured: false,
+        });
+        self.write_xdg_popup_status();
+    }
+
+    fn destroy_topmost_xdg_popup(&mut self) {
+        if self.xdg_popup_child.take().is_some() {
+            self.write_xdg_popup_status();
+            return;
+        }
+        if self.xdg_popup_parent.take().is_some() {
+            self.write_xdg_popup_status();
+        }
+    }
+
+    fn draw_popup_probe(pool: &mut SlotPool, popup: &mut PopupProbeSurface, color: [u8; 4]) {
+        let stride = (popup.width * 4) as i32;
+        let required_len = (popup.width * popup.height * 4) as usize;
+        if pool.len() < required_len {
+            pool.resize(required_len).expect("resize popup pool");
+        }
+        if popup.buffer.is_none() {
+            pool.resize(pool.len() + required_len)
+                .expect("reserve popup buffer");
+            let (buffer, _) = pool
+                .create_buffer(
+                    popup.width as i32,
+                    popup.height as i32,
+                    stride,
+                    wayland_client::protocol::wl_shm::Format::Argb8888,
+                )
+                .expect("create popup buffer");
+            popup.buffer = Some(buffer);
+        }
+        let buffer = popup.buffer.as_mut().expect("popup buffer");
+        let canvas = pool.canvas(buffer).expect("popup canvas");
+        for y in 0..popup.height {
+            for x in 0..popup.width {
+                let index = ((y * popup.width + x) * 4) as usize;
+                let edge = x < 3 || y < 3 || x + 3 >= popup.width || y + 3 >= popup.height;
+                canvas[index] = if edge { 0x20 } else { color[0] };
+                canvas[index + 1] = if edge { 0x20 } else { color[1] };
+                canvas[index + 2] = if edge { 0x20 } else { color[2] };
+                canvas[index + 3] = color[3];
+            }
+        }
+        popup
+            .popup
+            .wl_surface()
+            .damage_buffer(0, 0, popup.width as i32, popup.height as i32);
+        buffer
+            .attach_to(popup.popup.wl_surface())
+            .expect("attach popup buffer");
+        popup.popup.wl_surface().commit();
+    }
+
+    fn configure_xdg_popup_probe(&mut self, popup: &Popup) {
+        if let Some(parent) = self.xdg_popup_parent.as_mut() {
+            if &parent.popup == popup {
+                parent.configured = true;
+                self.xdg_popup_status.parent_configured =
+                    self.xdg_popup_status.parent_configured.saturating_add(1);
+                Self::draw_popup_probe(&mut self.pool, parent, [0x48, 0x88, 0xe8, 0xff]);
+                self.write_xdg_popup_status();
+                return;
+            }
+        }
+        if let Some(child) = self.xdg_popup_child.as_mut() {
+            if &child.popup == popup {
+                child.configured = true;
+                self.xdg_popup_status.child_configured =
+                    self.xdg_popup_status.child_configured.saturating_add(1);
+                Self::draw_popup_probe(&mut self.pool, child, [0xe8, 0xc2, 0x42, 0xff]);
+                self.write_xdg_popup_status();
+            }
+        }
+    }
+
+    fn xdg_popup_probe_done(&mut self, popup: &Popup) {
+        if self
+            .xdg_popup_child
+            .as_ref()
+            .is_some_and(|entry| &entry.popup == popup)
+        {
+            self.xdg_popup_child = None;
+            self.xdg_popup_status.child_done = self.xdg_popup_status.child_done.saturating_add(1);
+            self.write_xdg_popup_status();
+            return;
+        }
+        if self
+            .xdg_popup_parent
+            .as_ref()
+            .is_some_and(|entry| &entry.popup == popup)
+        {
+            self.xdg_popup_child = None;
+            self.xdg_popup_parent = None;
+            self.xdg_popup_status.parent_done = self.xdg_popup_status.parent_done.saturating_add(1);
+            self.write_xdg_popup_status();
+        }
+    }
+
     fn maybe_start_xdg_toplevel_drag(&mut self, qh: &QueueHandle<Self>, serial: u32) {
         if self.xdg_toplevel_drag_started {
             return;
@@ -2928,6 +3194,22 @@ impl WindowHandler for TestClient {
     }
 }
 
+impl PopupHandler for TestClient {
+    fn configure(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        popup: &Popup,
+        _config: PopupConfigure,
+    ) {
+        self.configure_xdg_popup_probe(popup);
+    }
+
+    fn done(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, popup: &Popup) {
+        self.xdg_popup_probe_done(popup);
+    }
+}
+
 impl ActivationHandler for TestClient {
     type RequestData = RequestData;
 
@@ -2957,11 +3239,18 @@ impl KeyboardHandler for TestClient {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _keyboard: &wl_keyboard::WlKeyboard,
-        _surface: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _serial: u32,
         _raw: &[u32],
         _keysyms: &[Keysym],
     ) {
+        if self.xdg_popup_grab_probe {
+            self.xdg_popup_status.keyboard_enters =
+                self.xdg_popup_status.keyboard_enters.saturating_add(1);
+            self.xdg_popup_status.keyboard_enter_surface =
+                self.popup_surface_label(surface).to_string();
+            self.write_xdg_popup_status();
+        }
     }
 
     fn leave(
@@ -2980,8 +3269,13 @@ impl KeyboardHandler for TestClient {
         qh: &QueueHandle<Self>,
         _keyboard: &wl_keyboard::WlKeyboard,
         serial: u32,
-        _event: KeyEvent,
+        event: KeyEvent,
     ) {
+        if self.xdg_popup_grab_probe && event.keysym == Keysym::Escape {
+            self.xdg_popup_status.escape_pressed =
+                self.xdg_popup_status.escape_pressed.saturating_add(1);
+            self.destroy_topmost_xdg_popup();
+        }
         let Some(seat) = self.keyboard_seat.as_ref() else {
             return;
         };
@@ -3242,7 +3536,7 @@ impl SeatHandler for TestClient {
 impl PointerHandler for TestClient {
     fn pointer_frame(
         &mut self,
-        _conn: &Connection,
+        conn: &Connection,
         qh: &QueueHandle<Self>,
         _pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
@@ -3253,6 +3547,13 @@ impl PointerHandler for TestClient {
             };
             match event.kind {
                 PointerEventKind::Enter { serial, .. } => {
+                    if self.xdg_popup_grab_probe {
+                        self.xdg_popup_status.pointer_enters =
+                            self.xdg_popup_status.pointer_enters.saturating_add(1);
+                        self.xdg_popup_status.last_pointer_surface =
+                            self.popup_surface_label(&event.surface).to_string();
+                        self.write_xdg_popup_status();
+                    }
                     self.gesture_status.pointer_enter =
                         self.gesture_status.pointer_enter.saturating_add(1);
                     self.write_gesture_status();
@@ -3269,6 +3570,22 @@ impl PointerHandler for TestClient {
                     }
                 }
                 PointerEventKind::Press { serial, button, .. } => {
+                    if self.xdg_popup_grab_probe && button == 0x110 {
+                        let label = self.popup_surface_label(&event.surface);
+                        self.xdg_popup_status.pointer_presses =
+                            self.xdg_popup_status.pointer_presses.saturating_add(1);
+                        self.xdg_popup_status.last_press_surface = label.to_string();
+                        self.write_xdg_popup_status();
+                        if let Some(seat) = self.pointer_seat.clone() {
+                            if label == "toplevel" {
+                                self.open_xdg_popup_parent(qh, &seat, serial);
+                                let _ = conn.flush();
+                            } else if label == "parent" {
+                                self.open_xdg_popup_child(qh, &seat, serial);
+                                let _ = conn.flush();
+                            }
+                        }
+                    }
                     self.request_spawn_activation(qh, serial, seat.clone(), event.surface.clone());
                     if button == 0x110 {
                         self.maybe_start_xdg_toplevel_drag(qh, serial);
@@ -3484,6 +3801,7 @@ delegate_pointer_constraints!(TestClient);
 delegate_relative_pointer!(TestClient);
 delegate_xdg_shell!(TestClient);
 delegate_xdg_window!(TestClient);
+delegate_xdg_popup!(TestClient);
 delegate_seat!(TestClient);
 delegate_registry!(TestClient);
 delegate_activation!(TestClient);

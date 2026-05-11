@@ -440,6 +440,7 @@ impl CompositorState {
         let serial = SERIAL_COUNTER.next_serial();
         let time = self.e2e_now_ms() as u32;
         let keycode = keycode.saturating_add(8);
+        let keyboard_grabbed = keyboard.is_grabbed();
         keyboard.input::<(), _>(
             self,
             keycode.into(),
@@ -468,6 +469,9 @@ impl CompositorState {
                         state.cancel_screenshot_selection_mode();
                     }
                     return FilterResult::Intercept(());
+                }
+                if keyboard_grabbed {
+                    return FilterResult::Forward;
                 }
                 if key_state == KeyState::Pressed {
                     if is_super && !state.input_routing.seat.keyboard_shortcuts_inhibited() {

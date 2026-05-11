@@ -687,6 +687,45 @@ impl CompositorState {
             None
         };
         let in_excl = self.point_in_shell_exclusion_zones(pos);
+        let popup_grab_root = keyboard.current_focus().and_then(|focus| {
+            self.popups
+                .find_popup(&focus)
+                .and_then(|popup| smithay::desktop::find_popup_root_surface(&popup).ok())
+        });
+        if popup_grab_root.is_some()
+            && pointer.is_grabbed()
+            && !self.shell_move_is_active()
+            && !self.shell_resize_is_active()
+            && !self.shell_ui_pointer_grab_active()
+        {
+            let keyboard_focus_root = popup_grab_root;
+            pointer.motion(
+                self,
+                self.surface_under(pos),
+                &MotionEvent {
+                    location: pos,
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_msec,
+                },
+            );
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    button,
+                    state: button_state,
+                    serial,
+                    time: time_msec,
+                },
+            );
+            pointer.frame(self);
+            if !pointer.is_grabbed() && keyboard.is_grabbed() {
+                keyboard.unset_grab(self);
+                if let Some(root) = keyboard_focus_root {
+                    keyboard.set_focus(self, Some(root), SERIAL_COUNTER.next_serial());
+                }
+            }
+            return;
+        }
         let shell_ui_hit_window_id = self
             .shell_ui_placement_topmost_for_input_at(pos)
             .map(|placement| placement.id);
@@ -954,6 +993,7 @@ impl CompositorState {
                 let keyboard = self.input_routing.seat.get_keyboard().unwrap();
                 let is_autorepeat =
                     key_state == KeyState::Pressed && keyboard.pressed_keys().contains(&keycode);
+                let keyboard_grabbed = keyboard.is_grabbed();
 
                 let lh_kbd = loop_handle.clone();
                 keyboard.input::<(), _>(
@@ -988,6 +1028,9 @@ impl CompositorState {
                                 state.cancel_screenshot_selection_mode();
                             }
                             return FilterResult::Intercept(());
+                        }
+                        if keyboard_grabbed {
+                            return FilterResult::Forward;
                         }
                         if key_state == KeyState::Pressed {
                             if mods.ctrl && mods.alt {

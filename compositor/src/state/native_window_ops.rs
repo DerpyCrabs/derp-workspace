@@ -1239,7 +1239,12 @@ impl CompositorState {
         let window_id = self
             .windows
             .window_registry
-            .window_id_for_wl_surface(&surf)?;
+            .window_id_for_wl_surface(&surf)
+            .or_else(|| {
+                let popup = self.popups.find_popup(&surf)?;
+                let root = smithay::desktop::find_popup_root_surface(&popup).ok()?;
+                self.windows.window_registry.window_id_for_wl_surface(&root)
+            })?;
         self.logical_focus_target_is_valid(window_id)
             .then_some(window_id)
     }

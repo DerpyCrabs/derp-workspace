@@ -88,6 +88,21 @@ type TestRunCommandResult = {
   stderr: string;
 };
 
+type XdgPopupGrabStatus = {
+  parent_configured: number;
+  child_configured: number;
+  parent_done: number;
+  child_done: number;
+  pointer_enters: number;
+  pointer_presses: number;
+  keyboard_enters: number;
+  escape_pressed: number;
+  open_depth: number;
+  keyboard_enter_surface: string;
+  last_pointer_surface: string;
+  last_press_surface: string;
+};
+
 async function readStatusJson<T>(filePath: string): Promise<T | null> {
   try {
     return JSON.parse(await readFile(filePath, "utf8")) as T;
@@ -529,6 +544,146 @@ export default defineGroup(import.meta.url, ({ test }) => {
         await closeWindow(base, windowId);
         await waitForWindowGone(base, windowId, 5000);
       }
+    }
+  });
+
+  test("xdg-popup explicit grabs keep nested native menus modal", async ({
+    base,
+    state,
+  }) => {
+    const stamp = Date.now();
+    const statusPath = path.join(
+      artifactDir(),
+      `xdg-popup-grab-status-${stamp}.json`,
+    );
+    const title = `Derp Xdg Popup Grab ${stamp}`;
+    const native = await spawnNativeWindow(base, state.knownWindowIds, {
+      title,
+      appId: "derp.e2e.xdg.popup.grab",
+      token: `xdg-popup-grab-${stamp}`,
+      strip: "blue",
+      width: 420,
+      height: 260,
+      xdgPopupGrabProbe: true,
+      xdgPopupGrabStatusJson: statusPath,
+    });
+    state.spawnedNativeWindowIds.add(native.window.window_id);
+    try {
+      await waitForNativeFocus(base, native.window.window_id);
+      const readyCompositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      const readyWindow =
+        compositorWindowById(readyCompositor, native.window.window_id) ??
+        native.window;
+      const parentOpenPoint = {
+        x: readyWindow.x + 56,
+        y: readyWindow.y + 72,
+      };
+      const childOpenPoint = {
+        x: readyWindow.x + 24 + 40,
+        y: readyWindow.y + 44 + 40,
+      };
+      await movePoint(base, parentOpenPoint.x, parentOpenPoint.y);
+      await pointerButton(base, BTN_LEFT, "press");
+      await pointerButton(base, BTN_LEFT, "release");
+      await waitForStatusJson<XdgPopupGrabStatus>(
+        statusPath,
+        "wait for parent popup grab",
+        (status) =>
+          status.open_depth === 1 &&
+          status.parent_configured >= 1 &&
+          status.keyboard_enter_surface === "parent",
+      );
+      let compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      assert(
+        compositor.focused_window_id === native.window.window_id,
+        "parent popup should preserve logical native focus",
+      );
+      assert(
+        compositor.shell_keyboard_focus === false,
+        "parent popup should not move keyboard focus to shell",
+      );
+      await movePoint(base, childOpenPoint.x, childOpenPoint.y);
+      await pointerButton(base, BTN_LEFT, "press");
+      await pointerButton(base, BTN_LEFT, "release");
+      await waitForStatusJson<XdgPopupGrabStatus>(
+        statusPath,
+        "wait for child popup grab",
+        (status) =>
+          status.open_depth === 2 &&
+          status.child_configured >= 1 &&
+          status.keyboard_enter_surface === "child",
+      );
+      compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      assert(
+        compositor.focused_window_id === native.window.window_id,
+        "child popup should preserve logical native focus",
+      );
+      assert(
+        compositor.shell_keyboard_focus === false,
+        "child popup should not move keyboard focus to shell",
+      );
+      await tapKey(base, KEY.escape);
+      await waitForStatusJson<XdgPopupGrabStatus>(
+        statusPath,
+        "wait for Escape to close topmost popup",
+        (status) =>
+          status.open_depth === 1 &&
+          status.child_done >= 1 &&
+          status.parent_done === 0,
+      );
+      await movePoint(base, childOpenPoint.x, childOpenPoint.y);
+      await pointerButton(base, BTN_LEFT, "press");
+      await pointerButton(base, BTN_LEFT, "release");
+      await waitForStatusJson<XdgPopupGrabStatus>(
+        statusPath,
+        "wait for child popup reopen",
+        (status) => status.open_depth === 2 && status.child_configured >= 2,
+      );
+      const output = readyCompositor.outputs.find(
+        (entry) => entry.name === readyWindow.output_name,
+      ) ?? readyCompositor.outputs[0];
+      assert(output, "missing output for outside popup click");
+      await movePoint(base, output.x + output.width - 12, output.y + output.height - 12);
+      await pointerButton(base, BTN_LEFT, "press");
+      await pointerButton(base, BTN_LEFT, "release");
+      const dismissed = await waitForStatusJson<XdgPopupGrabStatus>(
+        statusPath,
+        "wait for outside click popup dismissal",
+        (status) =>
+          status.open_depth === 0 &&
+          status.parent_done >= 1 &&
+          status.child_done >= 1,
+      );
+      compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      assert(
+        compositor.focused_window_id === native.window.window_id,
+        `outside dismissal should restore native focus: ${JSON.stringify(dismissed)}`,
+      );
+      assert(
+        compositor.shell_keyboard_focus === false,
+        "outside dismissal should not leak keyboard focus to shell",
+      );
+      await writeJsonArtifact("xdg-popup-grab.json", {
+        window: readyWindow,
+        status: dismissed,
+        parentOpenPoint,
+        childOpenPoint,
+      });
+    } finally {
+      await closeWindow(base, native.window.window_id);
+      await waitForWindowGone(base, native.window.window_id, 5000);
     }
   });
 

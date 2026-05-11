@@ -3135,6 +3135,8 @@ export function buildNativeSpawnCommand({
   noBorder = false,
   solidClient = false,
   gestureStatusJson,
+  xdgPopupGrabProbe = false,
+  xdgPopupGrabStatusJson,
 }: {
   title: string
   appId?: string
@@ -3163,6 +3165,8 @@ export function buildNativeSpawnCommand({
   noBorder?: boolean
   solidClient?: boolean
   gestureStatusJson?: string
+  xdgPopupGrabProbe?: boolean
+  xdgPopupGrabStatusJson?: string
 }): string {
   const parts = [
     nativeBin(),
@@ -3197,6 +3201,8 @@ export function buildNativeSpawnCommand({
   if (noBorder) parts.push('--no-border')
   if (solidClient) parts.push('--solid-client')
   if (gestureStatusJson) parts.push('--gesture-status-json', shellQuote(gestureStatusJson))
+  if (xdgPopupGrabProbe) parts.push('--xdg-popup-grab-probe')
+  if (xdgPopupGrabStatusJson) parts.push('--xdg-popup-grab-status-json', shellQuote(xdgPopupGrabStatusJson))
   if (spawnOnPressCommand) {
     parts.push('--spawn-on-press-command', shellQuote(spawnOnPressCommand))
   }
@@ -3241,6 +3247,8 @@ export async function spawnNativeWindow(
     noBorder,
     solidClient,
     gestureStatusJson,
+    xdgPopupGrabProbe,
+    xdgPopupGrabStatusJson,
   }: {
     title: string
     appId?: string
@@ -3269,6 +3277,8 @@ export async function spawnNativeWindow(
     noBorder?: boolean
     solidClient?: boolean
     gestureStatusJson?: string
+    xdgPopupGrabProbe?: boolean
+    xdgPopupGrabStatusJson?: string
   },
 ): Promise<NativeSpawnResult> {
   const command = buildNativeSpawnCommand({
@@ -3299,6 +3309,8 @@ export async function spawnNativeWindow(
     noBorder,
     solidClient,
     gestureStatusJson,
+    xdgPopupGrabProbe,
+    xdgPopupGrabStatusJson,
   })
   await spawnCommand(base, command)
   return waitForSpawnedWindow(base, knownWindowIds, { title, appId, command })

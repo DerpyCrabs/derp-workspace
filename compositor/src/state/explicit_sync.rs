@@ -100,6 +100,29 @@ impl ExplicitSyncState {
         }
     }
 
+    fn commit_waiting_for_release(&self, key: &ExplicitSyncCommitKey) -> bool {
+        self.output_sampled.contains(key) || self.frame_sampled.contains_key(key)
+    }
+
+    fn retire_stale_surface_commits(&mut self, surface_key: &ExplicitSyncSurfaceKey) {
+        let stale: Vec<_> = self
+            .commits
+            .iter()
+            .filter_map(|(key, commit)| {
+                (key.surface == *surface_key
+                    && !self
+                        .active_by_surface
+                        .get(surface_key)
+                        .is_some_and(|active| active == key)
+                    && (!commit.sampled || !self.commit_waiting_for_release(key)))
+                .then_some(key.clone())
+            })
+            .collect();
+        for key in stale {
+            self.retire_commit(key);
+        }
+    }
+
     pub(crate) fn capture_surface_commit(&mut self, surface: &WlSurface) {
         let surface_key = explicit_sync_surface_key(surface);
         let release_point = smithay::wayland::compositor::with_states(surface, |states| {
@@ -117,13 +140,14 @@ impl ExplicitSyncState {
             if self
                 .commits
                 .get(&old_key)
-                .is_some_and(|commit| !commit.sampled)
+                .is_some_and(|commit| !commit.sampled || !self.commit_waiting_for_release(&old_key))
             {
                 self.retire_commit(old_key);
             }
         }
         let key = self.next_key(surface_key.clone());
-        self.active_by_surface.insert(surface_key, key.clone());
+        self.active_by_surface
+            .insert(surface_key.clone(), key.clone());
         self.commits.insert(
             key,
             ExplicitSyncCommit {
@@ -131,6 +155,7 @@ impl ExplicitSyncState {
                 sampled: false,
             },
         );
+        self.retire_stale_surface_commits(&surface_key);
     }
 
     pub(crate) fn surface_destroyed(&mut self, surface: &WlSurface) {

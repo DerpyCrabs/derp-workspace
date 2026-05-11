@@ -304,8 +304,16 @@ impl SeatHandler for CompositorState {
 
         self.keyboard_on_focus_surface_changed(focused);
 
-        let window_id =
-            focused.and_then(|s| self.windows.window_registry.window_id_for_wl_surface(s));
+        let window_id = focused.and_then(|s| {
+            self.windows
+                .window_registry
+                .window_id_for_wl_surface(s)
+                .or_else(|| {
+                    let popup = self.popups.find_popup(s)?;
+                    let root = smithay::desktop::find_popup_root_surface(&popup).ok()?;
+                    self.windows.window_registry.window_id_for_wl_surface(&root)
+                })
+        });
         if let Some(wid) = window_id {
             if let Some(sid) = self.windows.window_registry.surface_id_for_window(wid) {
                 if let Some(window) = self.find_window_by_surface_id(sid) {

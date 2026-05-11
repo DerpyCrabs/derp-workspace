@@ -3,7 +3,20 @@ use smithay::{
     desktop::{
         find_popup_root_surface, get_popup_toplevel_coords, PopupKind, PopupManager, Space, Window,
     },
-    input::{pointer::GrabStartData as PointerGrabStartData, Seat},
+    input::{
+        keyboard::{
+            GrabStartData as KeyboardGrabStartData, KeyboardGrab, KeyboardInnerHandle, Keycode,
+            ModifiersState,
+        },
+        pointer::{
+            AxisFrame, ButtonEvent, Focus, GestureHoldBeginEvent, GestureHoldEndEvent,
+            GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
+            GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent,
+            GrabStartData as PointerGrabStartData, MotionEvent, PointerGrab, PointerInnerHandle,
+            RelativeMotionEvent,
+        },
+        Seat,
+    },
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
@@ -11,9 +24,10 @@ use smithay::{
             Client, Resource,
         },
     },
-    utils::Serial,
+    utils::{Serial, SERIAL_COUNTER},
     wayland::{
         compositor::with_states,
+        seat::WaylandFocus,
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
             XdgToplevelSurfaceData,
@@ -588,10 +602,302 @@ impl XdgShellHandler for CompositorState {
         let _ = self.toplevel_unfullscreen(&window);
     }
 
-    fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
+    fn grab(&mut self, surface: PopupSurface, seat: wl_seat::WlSeat, serial: Serial) {
+        let Some(seat) = Seat::from_resource(&seat) else {
+            return;
+        };
+        if seat != self.input_routing.seat {
+            return;
+        }
+        let popup = PopupKind::Xdg(surface);
+        let Ok(root) = find_popup_root_surface(&popup) else {
+            return;
+        };
+        let Ok(mut grab) = self
+            .popups
+            .grab_popup::<CompositorState>(root, popup, &seat, serial)
+        else {
+            return;
+        };
+        if let Some(keyboard) = seat.get_keyboard() {
+            if keyboard.is_grabbed()
+                && !(keyboard.has_grab(serial)
+                    || keyboard.has_grab(grab.previous_serial().unwrap_or(serial)))
+            {
+                let _ = grab.ungrab(smithay::desktop::PopupUngrabStrategy::All);
+                return;
+            }
+            keyboard.set_focus(self, grab.current_grab(), serial);
+            keyboard.set_grab(self, DerpPopupKeyboardGrab::new(&grab), serial);
+        }
+        if let Some(pointer) = seat.get_pointer() {
+            if pointer.is_grabbed()
+                && !(pointer.has_grab(serial)
+                    || pointer.has_grab(grab.previous_serial().unwrap_or_else(|| grab.serial())))
+            {
+                let _ = grab.ungrab(smithay::desktop::PopupUngrabStrategy::All);
+                return;
+            }
+            pointer.set_grab(self, DerpPopupPointerGrab::new(&grab), serial, Focus::Keep);
+        }
+    }
 }
 
 delegate_xdg_shell!(crate::CompositorState);
+
+struct DerpPopupKeyboardGrab {
+    popup_grab: smithay::desktop::PopupGrab<CompositorState>,
+}
+
+struct DerpPopupPointerGrab {
+    popup_grab: smithay::desktop::PopupGrab<CompositorState>,
+}
+
+impl DerpPopupPointerGrab {
+    fn new(popup_grab: &smithay::desktop::PopupGrab<CompositorState>) -> Self {
+        Self {
+            popup_grab: popup_grab.clone(),
+        }
+    }
+}
+
+impl PointerGrab<CompositorState> for DerpPopupPointerGrab {
+    fn motion(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+        focus: Option<(
+            WlSurface,
+            smithay::utils::Point<f64, smithay::utils::Logical>,
+        )>,
+        event: &MotionEvent,
+    ) {
+        if self.popup_grab.has_ended() {
+            handle.unset_grab(self, data, event.serial, event.time, true);
+            return;
+        }
+        if focus
+            .as_ref()
+            .and_then(|f1| {
+                self.popup_grab
+                    .current_grab()
+                    .as_ref()
+                    .and_then(|f2| f2.wl_surface())
+                    .map(|s| f1.0.same_client_as(&s.id()))
+            })
+            .unwrap_or(false)
+        {
+            handle.motion(data, focus, event);
+        } else {
+            handle.motion(data, None, event);
+        }
+    }
+
+    fn relative_motion(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+        focus: Option<(
+            WlSurface,
+            smithay::utils::Point<f64, smithay::utils::Logical>,
+        )>,
+        event: &RelativeMotionEvent,
+    ) {
+        handle.relative_motion(data, focus, event);
+    }
+
+    fn button(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+        event: &ButtonEvent,
+    ) {
+        let serial = event.serial;
+        let time = event.time;
+        if self.popup_grab.has_ended() {
+            handle.unset_grab(self, data, serial, time, true);
+            handle.button(data, event);
+            return;
+        }
+        if event.state == smithay::backend::input::ButtonState::Pressed
+            && !handle
+                .current_focus()
+                .and_then(|f| {
+                    self.popup_grab
+                        .current_grab()
+                        .and_then(|f2| f.0.wl_surface().map(|s| f2.same_client_as(&s.id())))
+                })
+                .unwrap_or(false)
+        {
+            let _ = self
+                .popup_grab
+                .ungrab(smithay::desktop::PopupUngrabStrategy::All);
+            handle.unset_grab(self, data, serial, time, true);
+            handle.button(data, event);
+            return;
+        }
+        handle.button(data, event);
+    }
+
+    fn axis(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+        details: AxisFrame,
+    ) {
+        handle.axis(data, details);
+    }
+
+    fn frame(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+    ) {
+        handle.frame(data);
+    }
+
+    fn gesture_swipe_begin(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+        event: &GestureSwipeBeginEvent,
+    ) {
+        handle.gesture_swipe_begin(data, event);
+    }
+
+    fn gesture_swipe_update(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+        event: &GestureSwipeUpdateEvent,
+    ) {
+        handle.gesture_swipe_update(data, event);
+    }
+
+    fn gesture_swipe_end(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+        event: &GestureSwipeEndEvent,
+    ) {
+        handle.gesture_swipe_end(data, event);
+    }
+
+    fn gesture_pinch_begin(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+        event: &GesturePinchBeginEvent,
+    ) {
+        handle.gesture_pinch_begin(data, event);
+    }
+
+    fn gesture_pinch_update(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+        event: &GesturePinchUpdateEvent,
+    ) {
+        handle.gesture_pinch_update(data, event);
+    }
+
+    fn gesture_pinch_end(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+        event: &GesturePinchEndEvent,
+    ) {
+        handle.gesture_pinch_end(data, event);
+    }
+
+    fn gesture_hold_begin(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+        event: &GestureHoldBeginEvent,
+    ) {
+        handle.gesture_hold_begin(data, event);
+    }
+
+    fn gesture_hold_end(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+        event: &GestureHoldEndEvent,
+    ) {
+        handle.gesture_hold_end(data, event);
+    }
+
+    fn start_data(&self) -> &PointerGrabStartData<CompositorState> {
+        self.popup_grab.pointer_grab_start_data()
+    }
+
+    fn unset(&mut self, _data: &mut CompositorState) {}
+}
+
+impl DerpPopupKeyboardGrab {
+    fn new(popup_grab: &smithay::desktop::PopupGrab<CompositorState>) -> Self {
+        Self {
+            popup_grab: popup_grab.clone(),
+        }
+    }
+}
+
+impl KeyboardGrab<CompositorState> for DerpPopupKeyboardGrab {
+    fn input(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut KeyboardInnerHandle<'_, CompositorState>,
+        keycode: Keycode,
+        state: smithay::backend::input::KeyState,
+        modifiers: Option<ModifiersState>,
+        serial: Serial,
+        time: u32,
+    ) {
+        if state == smithay::backend::input::KeyState::Pressed
+            && (keycode == Keycode::from(1u32) || keycode == Keycode::from(9u32))
+        {
+            let focus = self
+                .popup_grab
+                .ungrab(smithay::desktop::PopupUngrabStrategy::Topmost);
+            handle.set_focus(data, focus, SERIAL_COUNTER.next_serial());
+            if self.popup_grab.has_ended() {
+                handle.unset_grab(self, data, serial, false);
+            }
+            return;
+        }
+        if let Some(focus) = self.popup_grab.current_grab() {
+            handle.set_focus(data, Some(focus), serial);
+        }
+        if self.popup_grab.has_ended() {
+            handle.unset_grab(self, data, serial, false);
+        }
+        handle.input(data, keycode, state, modifiers, serial, time)
+    }
+
+    fn set_focus(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut KeyboardInnerHandle<'_, CompositorState>,
+        focus: Option<WlSurface>,
+        serial: Serial,
+    ) {
+        if self.popup_grab.has_ended() {
+            handle.set_focus(data, focus, serial);
+            handle.unset_grab(self, data, serial, false);
+            return;
+        }
+        if self.popup_grab.current_grab() == focus {
+            handle.set_focus(data, focus, serial);
+        }
+    }
+
+    fn start_data(&self) -> &KeyboardGrabStartData<CompositorState> {
+        self.popup_grab.keyboard_grab_start_data()
+    }
+
+    fn unset(&mut self, _data: &mut CompositorState) {}
+}
 
 fn check_grab(
     seat: &Seat<CompositorState>,
