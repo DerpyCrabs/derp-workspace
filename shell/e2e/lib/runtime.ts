@@ -2247,6 +2247,40 @@ export async function pointerButton(base: string, button: number, action: 'press
   await syncTest(base)
 }
 
+export async function touchDown(base: string, x: number, y: number, id = 0): Promise<void> {
+  await postJson(base, '/test/input/touch', { action: 'down', id, x, y })
+  await syncTest(base)
+}
+
+export async function touchMove(base: string, x: number, y: number, id = 0): Promise<void> {
+  await postJson(base, '/test/input/touch', { action: 'motion', id, x, y })
+  await syncTest(base)
+}
+
+export async function touchUp(base: string, id = 0): Promise<void> {
+  await postJson(base, '/test/input/touch', { action: 'up', id })
+  await syncTest(base)
+}
+
+export async function touchCancel(base: string, id = 0): Promise<void> {
+  await postJson(base, '/test/input/touch', { action: 'cancel', id })
+  await syncTest(base)
+}
+
+export async function touchTap(base: string, x: number, y: number, id = 0): Promise<void> {
+  await touchDown(base, x, y, id)
+  await touchUp(base, id)
+}
+
+export async function touchSequence(base: string, points: Array<{ x: number; y: number }>, id = 0): Promise<void> {
+  if (points.length === 0) throw new Error('touchSequence requires at least one point')
+  await touchDown(base, points[0].x, points[0].y, id)
+  for (const point of points.slice(1)) {
+    await touchMove(base, point.x, point.y, id)
+  }
+  await touchUp(base, id)
+}
+
 export async function dragBetweenPoints(base: string, x0: number, y0: number, x1: number, y1: number, steps = 12): Promise<void> {
   const count = Math.max(1, steps)
   await movePoint(base, x0, y0)
@@ -3135,6 +3169,7 @@ export function buildNativeSpawnCommand({
   noBorder = false,
   solidClient = false,
   gestureStatusJson,
+  touchStatusJson,
   xdgPopupGrabProbe = false,
   xdgPopupGrabStatusJson,
 }: {
@@ -3165,6 +3200,7 @@ export function buildNativeSpawnCommand({
   noBorder?: boolean
   solidClient?: boolean
   gestureStatusJson?: string
+  touchStatusJson?: string
   xdgPopupGrabProbe?: boolean
   xdgPopupGrabStatusJson?: string
 }): string {
@@ -3201,6 +3237,7 @@ export function buildNativeSpawnCommand({
   if (noBorder) parts.push('--no-border')
   if (solidClient) parts.push('--solid-client')
   if (gestureStatusJson) parts.push('--gesture-status-json', shellQuote(gestureStatusJson))
+  if (touchStatusJson) parts.push('--touch-status-json', shellQuote(touchStatusJson))
   if (xdgPopupGrabProbe) parts.push('--xdg-popup-grab-probe')
   if (xdgPopupGrabStatusJson) parts.push('--xdg-popup-grab-status-json', shellQuote(xdgPopupGrabStatusJson))
   if (spawnOnPressCommand) {
@@ -3247,6 +3284,7 @@ export async function spawnNativeWindow(
     noBorder,
     solidClient,
     gestureStatusJson,
+    touchStatusJson,
     xdgPopupGrabProbe,
     xdgPopupGrabStatusJson,
   }: {
@@ -3277,6 +3315,7 @@ export async function spawnNativeWindow(
     noBorder?: boolean
     solidClient?: boolean
     gestureStatusJson?: string
+    touchStatusJson?: string
     xdgPopupGrabProbe?: boolean
     xdgPopupGrabStatusJson?: string
   },
@@ -3309,6 +3348,7 @@ export async function spawnNativeWindow(
     noBorder,
     solidClient,
     gestureStatusJson,
+    touchStatusJson,
     xdgPopupGrabProbe,
     xdgPopupGrabStatusJson,
   })

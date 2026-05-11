@@ -4,7 +4,7 @@ use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_activation, delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer,
     delegate_pointer_constraints, delegate_registry, delegate_relative_pointer, delegate_seat,
-    delegate_shm, delegate_xdg_popup, delegate_xdg_shell, delegate_xdg_window,
+    delegate_shm, delegate_touch, delegate_xdg_popup, delegate_xdg_shell, delegate_xdg_window,
     globals::ProvidesBoundGlobal,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
@@ -14,6 +14,7 @@ use smithay_client_toolkit::{
         pointer::{PointerEvent, PointerEventKind, PointerHandler},
         pointer_constraints::{PointerConstraintsHandler, PointerConstraintsState},
         relative_pointer::{RelativeMotionEvent, RelativePointerHandler, RelativePointerState},
+        touch::TouchHandler,
         Capability, SeatHandler, SeatState,
     },
     shell::{
@@ -39,7 +40,7 @@ use wayland_client::{
     globals::registry_queue_init,
     protocol::{
         wl_buffer, wl_data_device, wl_data_device_manager, wl_data_source, wl_keyboard, wl_output,
-        wl_pointer, wl_seat, wl_surface,
+        wl_pointer, wl_seat, wl_surface, wl_touch,
     },
     Connection, Dispatch, Proxy, QueueHandle,
 };
@@ -288,6 +289,8 @@ struct Args {
     solid_client: bool,
     #[arg(long)]
     gesture_status_json: Option<String>,
+    #[arg(long)]
+    touch_status_json: Option<String>,
     #[arg(long)]
     cursor_shape_status_json: Option<String>,
     #[arg(long, default_value_t = false)]
@@ -627,6 +630,8 @@ fn main() {
         keyboard_seat: None,
         pointer: None,
         pointer_seat: None,
+        touch: None,
+        touch_seat: None,
         relative_pointer: None,
         pointer_gestures,
         gesture_swipe: None,
@@ -636,6 +641,8 @@ fn main() {
         gesture_ready: false,
         gesture_status_json: args.gesture_status_json,
         gesture_status: GestureStatus::default(),
+        touch_status_json: args.touch_status_json,
+        touch_status: TouchStatus::default(),
         cursor_shape_status_json: args.cursor_shape_status_json,
         cursor_shape_ready_pending: false,
         cursor_shape_ready: false,
@@ -652,6 +659,7 @@ fn main() {
         xdg_popup_child: None,
         xdg_popup_status: PopupProbeStatus::default(),
     };
+    state.write_touch_status();
 
     while !state.exit {
         event_queue
@@ -865,6 +873,8 @@ struct TestClient {
     keyboard_seat: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
     pointer_seat: Option<wl_seat::WlSeat>,
+    touch: Option<wl_touch::WlTouch>,
+    touch_seat: Option<wl_seat::WlSeat>,
     relative_pointer: Option<zwp_relative_pointer_v1::ZwpRelativePointerV1>,
     pointer_gestures: Option<ZwpPointerGesturesV1>,
     gesture_swipe: Option<zwp_pointer_gesture_swipe_v1::ZwpPointerGestureSwipeV1>,
@@ -874,6 +884,8 @@ struct TestClient {
     gesture_ready: bool,
     gesture_status_json: Option<String>,
     gesture_status: GestureStatus,
+    touch_status_json: Option<String>,
+    touch_status: TouchStatus,
     cursor_shape_status_json: Option<String>,
     cursor_shape_ready_pending: bool,
     cursor_shape_ready: bool,
@@ -930,6 +942,21 @@ struct GestureStatus {
     last_pinch_scale: f64,
     last_pinch_rotation: f64,
     last_cancelled: bool,
+}
+
+#[derive(Default)]
+struct TouchStatus {
+    device_ready: bool,
+    down: u32,
+    motion: u32,
+    up: u32,
+    frame: u32,
+    cancel: u32,
+    pointer_press: u32,
+    last_id: i32,
+    last_surface: String,
+    last_x: f64,
+    last_y: f64,
 }
 
 impl TestClient {
@@ -1410,6 +1437,33 @@ impl TestClient {
             },
         );
         fs::write(path, json).expect("write gesture status json");
+    }
+
+    fn write_touch_status(&self) {
+        let Some(path) = self.touch_status_json.as_ref() else {
+            return;
+        };
+        let status = &self.touch_status;
+        let json = format!(
+            concat!(
+                "{{",
+                "\"device_ready\":{},\"down\":{},\"motion\":{},\"up\":{},\"frame\":{},\"cancel\":{},",
+                "\"pointer_press\":{},\"last_id\":{},\"last_surface\":\"{}\",\"last_position\":[{:.3},{:.3}]",
+                "}}\n"
+            ),
+            if status.device_ready { "true" } else { "false" },
+            status.down,
+            status.motion,
+            status.up,
+            status.frame,
+            status.cancel,
+            status.pointer_press,
+            status.last_id,
+            Self::popup_status_escape(&status.last_surface),
+            status.last_x,
+            status.last_y,
+        );
+        fs::write(path, json).expect("write touch status json");
     }
 
     fn maybe_activate_from_startup_token(&mut self) {
@@ -3482,6 +3536,13 @@ impl SeatHandler for TestClient {
             self.ensure_gesture_pointer_state(qh);
             self.ensure_cursor_shape_pointer_state(qh);
         }
+        if capability == Capability::Touch && self.touch.is_none() {
+            self.touch_seat = Some(seat.clone());
+            let touch = self.seat_state.get_touch(qh, &seat).expect("create touch");
+            self.touch = Some(touch);
+            self.touch_status.device_ready = true;
+            self.write_touch_status();
+        }
     }
 
     fn remove_capability(
@@ -3528,6 +3589,14 @@ impl SeatHandler for TestClient {
             self.constraint_confined = false;
             self.pointer_seat = None;
         }
+        if capability == Capability::Touch {
+            if let Some(touch) = self.touch.take() {
+                touch.release();
+            }
+            self.touch_seat = None;
+            self.touch_status.device_ready = false;
+            self.write_touch_status();
+        }
     }
 
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
@@ -3570,6 +3639,9 @@ impl PointerHandler for TestClient {
                     }
                 }
                 PointerEventKind::Press { serial, button, .. } => {
+                    self.touch_status.pointer_press =
+                        self.touch_status.pointer_press.saturating_add(1);
+                    self.write_touch_status();
                     if self.xdg_popup_grab_probe && button == 0x110 {
                         let label = self.popup_surface_label(&event.surface);
                         self.xdg_popup_status.pointer_presses =
@@ -3604,6 +3676,86 @@ impl PointerHandler for TestClient {
                 _ => {}
             }
         }
+    }
+}
+
+impl TouchHandler for TestClient {
+    fn down(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _serial: u32,
+        _time: u32,
+        surface: wl_surface::WlSurface,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        self.touch_status.down = self.touch_status.down.saturating_add(1);
+        self.touch_status.frame = self.touch_status.frame.saturating_add(1);
+        self.touch_status.last_id = id;
+        self.touch_status.last_surface = self.popup_surface_label(&surface).to_string();
+        self.touch_status.last_x = position.0;
+        self.touch_status.last_y = position.1;
+        self.write_touch_status();
+    }
+
+    fn up(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _serial: u32,
+        _time: u32,
+        id: i32,
+    ) {
+        self.touch_status.up = self.touch_status.up.saturating_add(1);
+        self.touch_status.frame = self.touch_status.frame.saturating_add(1);
+        self.touch_status.last_id = id;
+        self.write_touch_status();
+    }
+
+    fn motion(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _time: u32,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        self.touch_status.motion = self.touch_status.motion.saturating_add(1);
+        self.touch_status.frame = self.touch_status.frame.saturating_add(1);
+        self.touch_status.last_id = id;
+        self.touch_status.last_x = position.0;
+        self.touch_status.last_y = position.1;
+        self.write_touch_status();
+    }
+
+    fn shape(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _id: i32,
+        _major: f64,
+        _minor: f64,
+    ) {
+    }
+
+    fn orientation(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _id: i32,
+        _orientation: f64,
+    ) {
+    }
+
+    fn cancel(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch) {
+        self.touch_status.cancel = self.touch_status.cancel.saturating_add(1);
+        self.write_touch_status();
     }
 }
 
@@ -3797,6 +3949,7 @@ delegate_compositor!(TestClient);
 delegate_output!(TestClient);
 delegate_shm!(TestClient);
 delegate_pointer!(TestClient);
+delegate_touch!(TestClient);
 delegate_pointer_constraints!(TestClient);
 delegate_relative_pointer!(TestClient);
 delegate_xdg_shell!(TestClient);

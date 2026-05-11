@@ -345,6 +345,7 @@ impl CompositorState {
             .ok_or_else(|| "missing output geometry for pointer move".to_string())?;
         let local = pos - output_geo.loc.to_f64();
         self.sync_shell_shared_state_for_input();
+        self.pointer_cursor_touch_reveal_for_pointer_motion();
         self.pointer_motion_output_local(output_geo, local, self.e2e_now_ms() as u32);
         Ok(())
     }
@@ -384,6 +385,40 @@ impl CompositorState {
         self.e2e_pointer_move_global(x, y)?;
         self.e2e_pointer_button(button, true)?;
         self.e2e_pointer_button(button, false)?;
+        Ok(())
+    }
+
+    pub(crate) fn e2e_touch(
+        &mut self,
+        action: &str,
+        slot_id: i32,
+        x: Option<f64>,
+        y: Option<f64>,
+    ) -> Result<(), String> {
+        if self.workspace_logical_bounds().is_none() {
+            return Err("no workspace bounds available".to_string());
+        }
+        let slot_u32 = u32::try_from(slot_id).map_err(|_| "touch id must be >= 0".to_string())?;
+        let slot = smithay::backend::input::TouchSlot::from(Some(slot_u32));
+        let time = self.e2e_now_ms() as u32;
+        match action {
+            "down" | "motion" => {
+                let x = x.ok_or_else(|| "touch: x required for down/motion".to_string())?;
+                let y = y.ok_or_else(|| "touch: y required for down/motion".to_string())?;
+                let pos = self
+                    .e2e_clamp_global_point(Point::from((x, y)))
+                    .ok_or_else(|| "no workspace bounds available".to_string())?;
+                if action == "down" {
+                    self.process_touch_down(slot, pos, time);
+                } else {
+                    self.process_touch_motion(slot, pos, time);
+                }
+            }
+            "up" => self.process_touch_up(slot, time),
+            "cancel" => self.process_touch_cancel(Some(slot), time),
+            "frame" => self.process_touch_frame(),
+            _ => return Err("touch: action must be down, motion, up, cancel, or frame".to_string()),
+        }
         Ok(())
     }
 
@@ -642,7 +677,9 @@ impl CompositorState {
         let mut cursor_shape = "hidden".to_string();
         let mut cursor_name = None;
         let mut cursor_source_path = None;
-        if let smithay::input::pointer::CursorImageStatus::Named(icon) =
+        if self.input_routing.pointer_cursor_hidden_after_touch {
+            cursor_shape = "hidden".to_string();
+        } else if let smithay::input::pointer::CursorImageStatus::Named(icon) =
             &self.input_routing.pointer_cursor_image
         {
             let _ = self

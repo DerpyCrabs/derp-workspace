@@ -1441,6 +1441,24 @@ fn handle_one(
         return Ok(());
     }
 
+    if req_path == "/test/input/touch" {
+        let action = v
+            .get("action")
+            .and_then(|x| x.as_str())
+            .unwrap_or("down")
+            .to_string();
+        let id = v
+            .get("id")
+            .and_then(|x| x.as_i64())
+            .and_then(|value| i32::try_from(value).ok())
+            .unwrap_or(0);
+        let x = v.get("x").and_then(|x| x.as_f64());
+        let y = v.get("y").and_then(|y| y.as_f64());
+        uplink.test_touch(action, id, x, y)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if req_path == "/test/input/click" {
         let button = v
             .get("button")

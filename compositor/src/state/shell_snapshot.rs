@@ -613,13 +613,6 @@ impl CompositorState {
                 ));
             }
         }
-        if self.input_routing.touch_emulation_slot.is_none()
-            && self.input_routing.touch_routes_to_cef
-        {
-            failures.push(format!(
-                "{context}: touch routes to CEF without an active touch slot"
-            ));
-        }
         failures
     }
 

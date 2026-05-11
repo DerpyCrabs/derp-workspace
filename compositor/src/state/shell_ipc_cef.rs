@@ -345,7 +345,7 @@ impl CompositorState {
         self.input_routing.shell_last_pointer_ipc_px = None;
         self.input_routing.shell_last_pointer_ipc_global_logical = None;
         self.input_routing.shell_last_pointer_ipc_modifiers = None;
-        self.input_routing.touch_routes_to_cef = false;
+        self.input_routing.touch_routes.clear();
     }
 
     /// Current keyboard → `cef_event_flags_t` (shift/control/alt/meta/caps/AltGr).

@@ -25,12 +25,17 @@ import {
   pointerButton,
   pointerWheel,
   readPngRgba,
+  rectCenter,
   shellQuote,
   shellWindowById,
   SkipError,
   spawnCommand,
   syncTest,
   tapKey,
+  touchDown,
+  touchMove,
+  touchTap,
+  touchUp,
   waitFor,
   waitForNativeFocus,
   waitForSpawnedWindow,
@@ -101,6 +106,19 @@ type XdgPopupGrabStatus = {
   keyboard_enter_surface: string;
   last_pointer_surface: string;
   last_press_surface: string;
+};
+
+type TouchStatus = {
+  device_ready: boolean;
+  down: number;
+  motion: number;
+  up: number;
+  frame: number;
+  cancel: number;
+  pointer_press: number;
+  last_id: number;
+  last_surface: string;
+  last_position: [number, number];
 };
 
 async function readStatusJson<T>(filePath: string): Promise<T | null> {
@@ -845,6 +863,148 @@ export default defineGroup(import.meta.url, ({ test }) => {
         afterShellGesture,
         shellRect,
         pointerAfterMotion: pointerAfterMotion.pointer,
+      });
+    } finally {
+      await closeWindow(base, native.window.window_id);
+      await waitForWindowGone(base, native.window.window_id, 5000);
+    }
+  });
+
+  test("native wl_touch is delivered without pointer emulation and shell touch stays in CEF", async ({
+    base,
+    state,
+  }) => {
+    const stamp = Date.now();
+    const statusPath = path.join(artifactDir(), `touch-status-${stamp}.json`);
+    const native = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Touch Probe ${stamp}`,
+      appId: "derp.e2e.touch.probe",
+      token: `touch-probe-${stamp}`,
+      strip: "purple",
+      width: 440,
+      height: 280,
+      touchStatusJson: statusPath,
+    });
+    state.spawnedNativeWindowIds.add(native.window.window_id);
+    try {
+      await waitForNativeFocus(base, native.window.window_id);
+      const ready = await waitForStatusJson<TouchStatus>(
+        statusPath,
+        "wait for touch probe ready",
+        (status) => status.device_ready,
+      );
+      const compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      const window =
+        compositorWindowById(compositor, native.window.window_id) ?? native.window;
+      const nativePoint = {
+        x: window.x + Math.floor(window.width / 2),
+        y: window.y + Math.floor(window.height / 2),
+      };
+      await touchDown(base, nativePoint.x, nativePoint.y);
+      await touchMove(base, nativePoint.x + 24, nativePoint.y + 18);
+      await touchUp(base);
+      const delivered = await waitForStatusJson<TouchStatus>(
+        statusPath,
+        "wait for native wl_touch delivery",
+        (status) =>
+          status.down >= ready.down + 1 &&
+          status.motion >= ready.motion + 1 &&
+          status.up >= ready.up + 1 &&
+          status.frame >= ready.frame + 1 &&
+          status.pointer_press === ready.pointer_press,
+      );
+      assert(
+        delivered.last_surface === "toplevel",
+        `native touch should target toplevel surface: ${JSON.stringify(delivered)}`,
+      );
+
+      const shellBefore = await getSnapshots(base);
+      const toggle = shellBefore.shell.controls?.taskbar_programs_toggle;
+      assert(toggle, "missing taskbar programs toggle for touch regression");
+      const togglePoint = rectCenter(toggle);
+      const beforeShellTouch = await readStatusJson<TouchStatus>(statusPath);
+      assert(beforeShellTouch, "missing touch status before shell touch");
+      if (shellBefore.shell.programs_menu_open) {
+        await tapKey(base, KEY.escape);
+      }
+      await touchTap(base, togglePoint.x, togglePoint.y);
+      const shellOpened = await waitFor(
+        "wait for programs menu opened by touch",
+        async () => {
+          const snapshots = await getSnapshots(base);
+          return snapshots.shell.programs_menu_open ? snapshots : null;
+        },
+      );
+      const afterShellTouch = await readStatusJson<TouchStatus>(statusPath);
+      assert(afterShellTouch, "missing touch status after shell touch");
+      assert(
+        afterShellTouch.down === beforeShellTouch.down &&
+          afterShellTouch.motion === beforeShellTouch.motion &&
+          afterShellTouch.up === beforeShellTouch.up,
+        `shell touch leaked to native client: before=${JSON.stringify(beforeShellTouch)} after=${JSON.stringify(afterShellTouch)}`,
+      );
+
+      await touchDown(base, nativePoint.x, nativePoint.y, 1);
+      await touchMove(base, togglePoint.x, togglePoint.y, 1);
+      await touchUp(base, 1);
+      const stableNative = await waitForStatusJson<TouchStatus>(
+        statusPath,
+        "wait for native touch route stability",
+        (status) =>
+          status.down >= delivered.down + 1 &&
+          status.motion >= delivered.motion + 1 &&
+          status.up >= delivered.up + 1,
+      );
+
+      await touchDown(base, togglePoint.x, togglePoint.y, 2);
+      await touchMove(base, nativePoint.x, nativePoint.y, 2);
+      await touchUp(base, 2);
+      const afterShellToNative = await readStatusJson<TouchStatus>(statusPath);
+      assert(afterShellToNative, "missing touch status after shell-to-native route probe");
+      assert(
+        afterShellToNative.down === stableNative.down &&
+          afterShellToNative.motion === stableNative.motion &&
+          afterShellToNative.up === stableNative.up,
+        `shell-started touch retargeted to native client: before=${JSON.stringify(stableNative)} after=${JSON.stringify(afterShellToNative)}`,
+      );
+
+      const hiddenCursor = await waitFor(
+        "wait for cursor hidden after touch idle",
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          return compositor.cursor_shape === "hidden" ? compositor : null;
+        },
+      );
+      await movePoint(base, nativePoint.x + 2, nativePoint.y + 2);
+      const restoredCursor = await waitFor(
+        "wait for cursor restored by pointer motion",
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          return compositor.cursor_shape !== "hidden" ? compositor : null;
+        },
+      );
+
+      await writeJsonArtifact("native-wl-touch-routing.json", {
+        native: window,
+        ready,
+        delivered,
+        beforeShellTouch,
+        afterShellTouch,
+        stableNative,
+        afterShellToNative,
+        hiddenCursorShape: hiddenCursor.cursor_shape,
+        restoredCursorShape: restoredCursor.cursor_shape,
+        shellOpened: shellOpened.shell.programs_menu_open,
+        toggle,
       });
     } finally {
       await closeWindow(base, native.window.window_id);

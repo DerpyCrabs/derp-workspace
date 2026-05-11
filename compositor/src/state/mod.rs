@@ -20,7 +20,7 @@ use smithay::{
     backend::allocator::{Format, Fourcc, Modifier},
     backend::drm::DrmDeviceFd,
     backend::egl::EGLDevice,
-    backend::input::{KeyState, Keycode, TouchSlot},
+    backend::input::{KeyState, Keycode},
     backend::renderer::{
         element::solid::SolidColorBuffer,
         gles::{GlesRenderer, GlesTarget},
@@ -711,6 +711,7 @@ impl CompositorState {
         seat.add_keyboard(Default::default(), 200, 25)
             .map_err(|e| format!("seat add keyboard: {e:?}"))?;
         seat.add_pointer();
+        seat.add_touch();
 
         let space = Space::default();
 

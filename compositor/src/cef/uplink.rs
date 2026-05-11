@@ -519,6 +519,16 @@ impl UplinkToCompositor {
         self.run_result(move |s| s.e2e_pointer_click(x, y, button))
     }
 
+    pub fn test_touch(
+        &self,
+        action: String,
+        id: i32,
+        x: Option<f64>,
+        y: Option<f64>,
+    ) -> Result<(), String> {
+        self.run_result(move |s| s.e2e_touch(&action, id, x, y))
+    }
+
     pub fn test_pointer_drag(
         &self,
         x0: f64,

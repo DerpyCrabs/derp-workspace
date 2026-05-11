@@ -71,6 +71,9 @@ pub fn append_pointer_desktop_elements(
     let Some(pointer) = state.input_routing.seat.get_pointer() else {
         return;
     };
+    if state.input_routing.pointer_cursor_hidden_after_touch {
+        return;
+    }
     let pos_global = pointer.current_location();
     let scale_f = output.current_scale().fractional_scale();
 

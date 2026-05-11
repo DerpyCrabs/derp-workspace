@@ -7,6 +7,20 @@ pub(crate) struct XdgToplevelDragMoveState {
     pub(crate) y_offset: i32,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum TouchRoute {
+    Native {
+        focus: WlSurface,
+        surface_origin: Point<f64, Logical>,
+    },
+    ShellCef {
+        last_pos: Point<f64, Logical>,
+    },
+    PointerEmulation {
+        last_pos: Point<f64, Logical>,
+    },
+}
+
 pub(crate) struct InputRoutingState {
     pub(crate) seat_state: SeatState<CompositorState>,
     pub(crate) seat: Seat<CompositorState>,
@@ -15,8 +29,7 @@ pub(crate) struct InputRoutingState {
     pub(crate) idle_inhibit_surfaces: HashSet<(ClientId, u32)>,
     pub(crate) keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
     pub(crate) touch_abs_is_window_pixels: bool,
-    pub(crate) touch_emulation_slot: Option<TouchSlot>,
-    pub(crate) touch_routes_to_cef: bool,
+    pub(crate) touch_routes: HashMap<i32, TouchRoute>,
     pub(crate) shell_keyboard_capture: ShellKeyboardCapture,
     pub(crate) shell_cef_repeat_token: Option<RegistrationToken>,
     pub(crate) shell_cef_repeat_keycode: Option<Keycode>,
@@ -37,6 +50,9 @@ pub(crate) struct InputRoutingState {
     pub(crate) shell_last_pointer_ipc_modifiers: Option<u32>,
     pub(crate) pointer_pressed_buttons: HashSet<u32>,
     pub(crate) pointer_cursor_image: CursorImageStatus,
+    pub(crate) pointer_cursor_hidden_after_touch: bool,
+    pub(crate) pointer_cursor_touch_hide_generation: u64,
+    pub(crate) pointer_cursor_touch_hide_token: Option<RegistrationToken>,
     pub(crate) cursor_theme: crate::platform::cursor_fallback::CursorThemeManager,
     pub(crate) shell_move_window_id: Option<u32>,
     pub(crate) shell_move_pending_delta: (i32, i32),
@@ -80,8 +96,7 @@ impl InputRoutingState {
             idle_inhibit_surfaces: HashSet::new(),
             keyboard_shortcuts_inhibit_state,
             touch_abs_is_window_pixels: false,
-            touch_emulation_slot: None,
-            touch_routes_to_cef: false,
+            touch_routes: HashMap::new(),
             shell_keyboard_capture: ShellKeyboardCapture::None,
             shell_cef_repeat_token: None,
             shell_cef_repeat_keycode: None,
@@ -102,6 +117,9 @@ impl InputRoutingState {
             shell_last_pointer_ipc_modifiers: None,
             pointer_pressed_buttons: HashSet::new(),
             pointer_cursor_image: CursorImageStatus::default_named(),
+            pointer_cursor_hidden_after_touch: false,
+            pointer_cursor_touch_hide_generation: 0,
+            pointer_cursor_touch_hide_token: None,
             cursor_theme,
             shell_move_window_id: None,
             shell_move_pending_delta: (0, 0),

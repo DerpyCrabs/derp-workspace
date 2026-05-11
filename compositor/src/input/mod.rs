@@ -12,6 +12,7 @@ use smithay::{
             GesturePinchUpdateEvent as BackendGesturePinchUpdateEvent,
             GestureSwipeUpdateEvent as BackendGestureSwipeUpdateEvent, InputEvent, KeyState,
             KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, TouchEvent,
+            TouchSlot,
         },
         session::Session,
     },
@@ -23,14 +24,22 @@ use smithay::{
             GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent, MotionEvent,
             RelativeMotionEvent,
         },
+        touch::{
+            DownEvent as TouchDownEvent, MotionEvent as TouchMotionEvent, UpEvent as TouchUpEvent,
+        },
     },
+    reexports::calloop::timer::{TimeoutAction, Timer},
     reexports::{calloop::LoopHandle, wayland_server::protocol::wl_surface::WlSurface},
-    utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER},
+    utils::{Logical, Point, Rectangle, Serial, Size, SERIAL_COUNTER},
     wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitorSeat,
     wayland::pointer_constraints::{with_pointer_constraint, PointerConstraint},
 };
 
-use crate::{derp_space::DerpSpaceElem, state::CompositorState, CalloopData};
+use crate::{
+    derp_space::DerpSpaceElem,
+    state::{CompositorState, TouchRoute},
+    CalloopData,
+};
 
 static TOUCH_LEFTMOST_FALLBACK_LOG: OnceLock<()> = OnceLock::new();
 
@@ -95,6 +104,63 @@ fn vt_number_from_fkey(sym: u32) -> Option<i32> {
 }
 
 impl CompositorState {
+    fn pointer_cursor_touch_repaint(&mut self) {
+        self.shell_osr.shell_exclusion_zones_need_full_damage = true;
+        self.capture.capture_force_full_damage_frames =
+            self.capture.capture_force_full_damage_frames.max(2);
+    }
+
+    fn pointer_cursor_touch_hide_arm(&mut self) {
+        self.input_routing.pointer_cursor_touch_hide_generation = self
+            .input_routing
+            .pointer_cursor_touch_hide_generation
+            .wrapping_add(1);
+        if let Some(token) = self.input_routing.pointer_cursor_touch_hide_token.take() {
+            let _ = self.core.loop_handle.remove(token);
+        }
+        let generation = self.input_routing.pointer_cursor_touch_hide_generation;
+        let loop_handle = self.core.loop_handle.clone();
+        match loop_handle.insert_source(
+            Timer::from_duration(std::time::Duration::from_secs(1)),
+            move |_, _, d: &mut CalloopData| {
+                let state = &mut d.state;
+                state.input_routing.pointer_cursor_touch_hide_token = None;
+                if state.input_routing.pointer_cursor_touch_hide_generation == generation
+                    && !state.input_routing.pointer_cursor_hidden_after_touch
+                {
+                    state.input_routing.pointer_cursor_hidden_after_touch = true;
+                    state.pointer_cursor_touch_repaint();
+                    if let Some(drms) = d.drm.as_mut() {
+                        drms.request_render();
+                    }
+                }
+                TimeoutAction::Drop
+            },
+        ) {
+            Ok(token) => self.input_routing.pointer_cursor_touch_hide_token = Some(token),
+            Err(_) => {
+                self.input_routing.pointer_cursor_touch_hide_generation = self
+                    .input_routing
+                    .pointer_cursor_touch_hide_generation
+                    .wrapping_add(1)
+            }
+        }
+    }
+
+    pub(crate) fn pointer_cursor_touch_reveal_for_pointer_motion(&mut self) {
+        self.input_routing.pointer_cursor_touch_hide_generation = self
+            .input_routing
+            .pointer_cursor_touch_hide_generation
+            .wrapping_add(1);
+        if let Some(token) = self.input_routing.pointer_cursor_touch_hide_token.take() {
+            let _ = self.core.loop_handle.remove(token);
+        }
+        if self.input_routing.pointer_cursor_hidden_after_touch {
+            self.input_routing.pointer_cursor_hidden_after_touch = false;
+            self.pointer_cursor_touch_repaint();
+        }
+    }
+
     fn pointer_gesture_should_route_to_native(&mut self) -> bool {
         let Some(pointer) = self.input_routing.seat.get_pointer() else {
             return false;
@@ -297,6 +363,7 @@ impl CompositorState {
         utime: u64,
         time_msec: u32,
     ) {
+        self.pointer_cursor_touch_reveal_for_pointer_motion();
         let Some(ws) = self.workspace_logical_bounds() else {
             return;
         };
@@ -616,6 +683,314 @@ impl CompositorState {
             return geo.loc.to_f64() + event.position_transformed(geo.size);
         }
         workspace.loc.to_f64() + event.position_transformed(workspace.size)
+    }
+
+    fn focus_native_window_for_touch(&mut self, pos: Point<f64, Logical>, serial: Serial) {
+        let Some(keyboard) = self.input_routing.seat.get_keyboard() else {
+            return;
+        };
+        self.shell_keyboard_capture_clear();
+        let Some((elem, _loc)) = self.element_under_respecting_shell_exclusions(pos) else {
+            return;
+        };
+        match elem {
+            DerpSpaceElem::Wayland(window) => {
+                let window_id = self
+                    .windows
+                    .window_registry
+                    .window_id_for_wl_surface(window.toplevel().unwrap().wl_surface());
+                self.output_topology.space.elements().for_each(|e| {
+                    e.set_activate(false);
+                    if let DerpSpaceElem::Wayland(w) = e {
+                        w.toplevel().unwrap().send_pending_configure();
+                    }
+                });
+                let _ = window.set_activated(true);
+                self.output_topology
+                    .space
+                    .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
+                keyboard.set_focus(
+                    self,
+                    Some(window.toplevel().unwrap().wl_surface().clone()),
+                    serial,
+                );
+                if let Some(window_id) = window_id {
+                    self.shell_window_stack_touch(window_id);
+                    self.raise_shell_status_indicators();
+                    self.shell_reply_window_list();
+                }
+                self.output_topology.space.elements().for_each(|e| {
+                    if let DerpSpaceElem::Wayland(w) = e {
+                        w.toplevel().unwrap().send_pending_configure();
+                    }
+                });
+            }
+            DerpSpaceElem::X11(x11) => {
+                if let Some(surf) = x11.wl_surface() {
+                    if !x11.is_override_redirect() {
+                        let window_id =
+                            self.windows.window_registry.window_id_for_wl_surface(&surf);
+                        self.output_topology.space.elements().for_each(|e| {
+                            e.set_activate(false);
+                            if let DerpSpaceElem::Wayland(w) = e {
+                                w.toplevel().unwrap().send_pending_configure();
+                            }
+                        });
+                        self.output_topology
+                            .space
+                            .raise_element(&DerpSpaceElem::X11(x11.clone()), true);
+                        x11.set_activate(true);
+                        keyboard.set_focus(self, Some(surf), serial);
+                        if let Some(window_id) = window_id {
+                            self.shell_window_stack_touch(window_id);
+                            self.raise_shell_status_indicators();
+                            self.shell_reply_window_list();
+                        }
+                        self.output_topology.space.elements().for_each(|e| {
+                            if let DerpSpaceElem::Wayland(w) = e {
+                                w.toplevel().unwrap().send_pending_configure();
+                            }
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    fn send_touch_to_cef(&mut self, slot: i32, phase: u32, pos: Point<f64, Logical>) {
+        if !self.shell_osr.shell_has_frame || !self.shell_cef_active() {
+            return;
+        }
+        if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
+            self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
+                touch_id: slot,
+                phase,
+                x: bx,
+                y: by,
+            });
+        }
+    }
+
+    fn touch_output_geo_and_local(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(Rectangle<i32, Logical>, Point<f64, Logical>)> {
+        let output = self
+            .output_containing_global_point(pos)
+            .or_else(|| self.leftmost_output())?;
+        let output_geo = self.output_topology.space.output_geometry(&output)?;
+        Some((output_geo, pos - output_geo.loc.to_f64()))
+    }
+
+    fn touch_route_for_down(&mut self, pos: Point<f64, Logical>) -> TouchRoute {
+        self.sync_shell_shared_state_for_input();
+        if self.screenshot_selection_active() {
+            return TouchRoute::PointerEmulation { last_pos: pos };
+        }
+        if self.shell_osr.shell_exclusion_overlay_open
+            && !self.shell_point_in_shell_floating_overlay_global(pos)
+            && !self.shell_pointer_route_to_cef(pos)
+        {
+            self.shell_dismiss_context_menu_from_compositor();
+            self.sync_shell_shared_state_for_input();
+        }
+        let in_excl = self.point_in_shell_exclusion_zones(pos);
+        let in_shell_ui = self.shell_ui_placement_topmost_for_input_at(pos).is_some();
+        if !in_excl && !in_shell_ui {
+            if let Some((_window_id, surface, surface_origin)) =
+                self.native_surface_under_no_shell_exclusion(pos)
+            {
+                return TouchRoute::Native {
+                    focus: surface,
+                    surface_origin,
+                };
+            }
+        }
+        if self.shell_pointer_route_to_cef(pos)
+            && self.shell_osr.shell_has_frame
+            && self.shell_cef_active()
+            && self.shell_pointer_coords_for_cef(pos).is_some()
+        {
+            TouchRoute::ShellCef { last_pos: pos }
+        } else {
+            TouchRoute::PointerEmulation { last_pos: pos }
+        }
+    }
+
+    pub(crate) fn process_touch_down(
+        &mut self,
+        slot: TouchSlot,
+        pos: Point<f64, Logical>,
+        time_msec: u32,
+    ) {
+        self.pointer_cursor_touch_hide_arm();
+        let slot_id = i32::from(slot);
+        if self.input_routing.touch_routes.contains_key(&slot_id) {
+            return;
+        }
+        let route = self.touch_route_for_down(pos);
+        match &route {
+            TouchRoute::Native {
+                focus,
+                surface_origin,
+            } => {
+                let serial = SERIAL_COUNTER.next_serial();
+                self.focus_native_window_for_touch(pos, serial);
+                if let Some(touch) = self.input_routing.seat.get_touch() {
+                    touch.down(
+                        self,
+                        Some((focus.clone(), *surface_origin)),
+                        &TouchDownEvent {
+                            slot,
+                            location: pos,
+                            serial,
+                            time: time_msec,
+                        },
+                    );
+                    touch.frame(self);
+                }
+            }
+            TouchRoute::ShellCef { .. } => {
+                self.send_touch_to_cef(slot_id, shell_wire::TOUCH_PHASE_PRESSED, pos);
+                self.shell_keyboard_capture_shell_ui();
+                self.shell_emit_shell_ui_focus_from_point(pos);
+            }
+            TouchRoute::PointerEmulation { .. } => {
+                if let Some((output_geo, local)) = self.touch_output_geo_and_local(pos) {
+                    self.pointer_motion_output_local(output_geo, local, time_msec);
+                    self.process_pointer_button(0x110, ButtonState::Pressed, time_msec);
+                }
+            }
+        }
+        self.input_routing.touch_routes.insert(slot_id, route);
+    }
+
+    pub(crate) fn process_touch_motion(
+        &mut self,
+        slot: TouchSlot,
+        pos: Point<f64, Logical>,
+        time_msec: u32,
+    ) {
+        self.pointer_cursor_touch_hide_arm();
+        let slot_id = i32::from(slot);
+        let Some(route) = self.input_routing.touch_routes.get(&slot_id).cloned() else {
+            return;
+        };
+        match route {
+            TouchRoute::Native {
+                focus,
+                surface_origin,
+            } => {
+                if let Some(touch) = self.input_routing.seat.get_touch() {
+                    touch.motion(
+                        self,
+                        Some((focus, surface_origin)),
+                        &TouchMotionEvent {
+                            slot,
+                            location: pos,
+                            time: time_msec,
+                        },
+                    );
+                    touch.frame(self);
+                }
+            }
+            TouchRoute::ShellCef { .. } => {
+                self.send_touch_to_cef(slot_id, shell_wire::TOUCH_PHASE_MOVED, pos);
+                self.input_routing
+                    .touch_routes
+                    .insert(slot_id, TouchRoute::ShellCef { last_pos: pos });
+            }
+            TouchRoute::PointerEmulation { .. } => {
+                if let Some((output_geo, local)) = self.touch_output_geo_and_local(pos) {
+                    self.pointer_motion_output_local(output_geo, local, time_msec);
+                    self.input_routing
+                        .touch_routes
+                        .insert(slot_id, TouchRoute::PointerEmulation { last_pos: pos });
+                }
+            }
+        }
+    }
+
+    pub(crate) fn process_touch_up(&mut self, slot: TouchSlot, time_msec: u32) {
+        self.pointer_cursor_touch_hide_arm();
+        let slot_id = i32::from(slot);
+        let Some(route) = self.input_routing.touch_routes.remove(&slot_id) else {
+            return;
+        };
+        match route {
+            TouchRoute::Native { .. } => {
+                if let Some(touch) = self.input_routing.seat.get_touch() {
+                    touch.up(
+                        self,
+                        &TouchUpEvent {
+                            slot,
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time: time_msec,
+                        },
+                    );
+                    touch.frame(self);
+                }
+            }
+            TouchRoute::ShellCef { last_pos } => {
+                self.send_touch_to_cef(slot_id, shell_wire::TOUCH_PHASE_RELEASED, last_pos);
+            }
+            TouchRoute::PointerEmulation { last_pos } => {
+                if let Some((output_geo, local)) = self.touch_output_geo_and_local(last_pos) {
+                    self.pointer_motion_output_local(output_geo, local, time_msec);
+                }
+                self.process_pointer_button(0x110, ButtonState::Released, time_msec);
+            }
+        }
+    }
+
+    pub(crate) fn process_touch_cancel(&mut self, slot: Option<TouchSlot>, time_msec: u32) {
+        self.pointer_cursor_touch_hide_arm();
+        let routes: Vec<(i32, TouchRoute)> = if let Some(slot) = slot {
+            let slot_id = i32::from(slot);
+            self.input_routing
+                .touch_routes
+                .remove(&slot_id)
+                .map(|route| vec![(slot_id, route)])
+                .unwrap_or_default()
+        } else {
+            self.input_routing.touch_routes.drain().collect()
+        };
+        let mut cancel_native = false;
+        for (slot_id, route) in routes {
+            match route {
+                TouchRoute::Native { .. } => {
+                    cancel_native = true;
+                }
+                TouchRoute::ShellCef { last_pos } => {
+                    self.send_touch_to_cef(slot_id, shell_wire::TOUCH_PHASE_CANCELLED, last_pos);
+                }
+                TouchRoute::PointerEmulation { last_pos } => {
+                    if let Some((output_geo, local)) = self.touch_output_geo_and_local(last_pos) {
+                        self.pointer_motion_output_local(output_geo, local, time_msec);
+                    }
+                    self.process_pointer_button(0x110, ButtonState::Released, time_msec);
+                }
+            }
+        }
+        if cancel_native {
+            if let Some(touch) = self.input_routing.seat.get_touch() {
+                touch.cancel(self);
+                touch.frame(self);
+            }
+        }
+    }
+
+    pub(crate) fn process_touch_frame(&mut self) {
+        if self
+            .input_routing
+            .touch_routes
+            .values()
+            .any(|route| matches!(route, TouchRoute::Native { .. }))
+        {
+            if let Some(touch) = self.input_routing.seat.get_touch() {
+                touch.frame(self);
+            }
+        }
     }
 
     pub(crate) fn process_pointer_button(
@@ -1228,6 +1603,7 @@ impl CompositorState {
                     shell_ph = self.shell_osr.shell_window_physical_px.1,
                     "PointerMotionAbsolute"
                 );
+                self.pointer_cursor_touch_reveal_for_pointer_motion();
                 self.pointer_motion_output_local(output_geo, local, event.time_msec());
             }
             InputEvent::PointerButton { event, .. } => {
@@ -1238,198 +1614,63 @@ impl CompositorState {
                 if !libinput_device_is_screen_touch(&dev) {
                     return;
                 }
-                if self.input_routing.touch_emulation_slot.is_some() {
-                    tracing::debug!(
-                        target: "derp_input",
-                        slot = ?event.slot(),
-                        "TouchDown ignored (first finger still active)"
-                    );
-                    return;
-                }
                 let Some(ws) = self.workspace_logical_bounds() else {
                     return;
                 };
-                self.input_routing.touch_emulation_slot = Some(event.slot());
                 let pos = self.touch_global_point(&event, ws);
-                if self.shell_osr.shell_exclusion_overlay_open
-                    && !self.shell_point_in_shell_floating_overlay_global(pos)
-                    && !self.shell_pointer_route_to_cef(pos)
-                {
-                    self.shell_dismiss_context_menu_from_compositor();
-                }
-                let output = self
-                    .output_containing_global_point(pos)
-                    .or_else(|| self.leftmost_output())
-                    .unwrap();
-                let output_geo = self.output_topology.space.output_geometry(&output).unwrap();
-                let local = pos - output_geo.loc.to_f64();
                 let time = Event::time_msec(&event);
-                self.sync_shell_shared_state_for_input();
-                let cef_touch = self.shell_pointer_route_to_cef(pos)
-                    && self.shell_osr.shell_has_frame
-                    && self.shell_cef_active()
-                    && self.shell_pointer_coords_for_cef(pos).is_some();
-                self.input_routing.touch_routes_to_cef = cef_touch;
                 tracing::debug!(
                     target: "derp_input",
                     slot = ?event.slot(),
                     raw_x = event.x(),
                     raw_y = event.y(),
-                    local_x = local.x,
-                    local_y = local.y,
+                    global_x = pos.x,
+                    global_y = pos.y,
                     touch_window_px = self.input_routing.touch_abs_is_window_pixels,
                     shell_pw = self.shell_osr.shell_window_physical_px.0,
                     shell_ph = self.shell_osr.shell_window_physical_px.1,
-                    cef_touch,
                     "TouchDown"
                 );
-                self.pointer_motion_output_local(output_geo, local, time);
-                if cef_touch {
-                    if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
-                        let tid = i32::from(event.slot());
-                        self.shell_send_to_cef(
-                            shell_wire::DecodedCompositorToShellMessage::Touch {
-                                touch_id: tid,
-                                phase: shell_wire::TOUCH_PHASE_PRESSED,
-                                x: bx,
-                                y: by,
-                            },
-                        );
-                    }
-                    self.shell_keyboard_capture_shell_ui();
-                    self.shell_emit_shell_ui_focus_from_point(pos);
-                } else {
-                    self.process_pointer_button(0x110, ButtonState::Pressed, time);
-                }
+                self.process_touch_down(event.slot(), pos, time);
             }
             InputEvent::TouchMotion { event, .. } => {
                 let dev: libinput::Device = event.device();
                 if !libinput_device_is_screen_touch(&dev) {
                     return;
                 }
-                if self.input_routing.touch_emulation_slot != Some(event.slot()) {
-                    tracing::debug!(
-                        target: "derp_input",
-                        active = ?self.input_routing.touch_emulation_slot,
-                        slot = ?event.slot(),
-                        "TouchMotion ignored (wrong slot)"
-                    );
-                    return;
-                }
                 let Some(ws) = self.workspace_logical_bounds() else {
                     return;
                 };
                 let pos = self.touch_global_point(&event, ws);
-                let output = self
-                    .output_containing_global_point(pos)
-                    .or_else(|| self.leftmost_output())
-                    .unwrap();
-                let output_geo = self.output_topology.space.output_geometry(&output).unwrap();
-                let local = pos - output_geo.loc.to_f64();
                 tracing::trace!(
                     target: "derp_input",
                     raw_x = event.x(),
                     raw_y = event.y(),
-                    local_x = local.x,
-                    local_y = local.y,
+                    global_x = pos.x,
+                    global_y = pos.y,
                     "TouchMotion"
                 );
-                self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
-                if self.input_routing.touch_routes_to_cef {
-                    if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
-                        let tid = i32::from(event.slot());
-                        self.shell_send_to_cef(
-                            shell_wire::DecodedCompositorToShellMessage::Touch {
-                                touch_id: tid,
-                                phase: shell_wire::TOUCH_PHASE_MOVED,
-                                x: bx,
-                                y: by,
-                            },
-                        );
-                    }
-                }
+                self.process_touch_motion(event.slot(), pos, Event::time_msec(&event));
             }
             InputEvent::TouchUp { event, .. } => {
                 let dev: libinput::Device = event.device();
                 if !libinput_device_is_screen_touch(&dev) {
                     return;
                 }
-                if self.input_routing.touch_emulation_slot != Some(event.slot()) {
-                    tracing::debug!(
-                        target: "derp_input",
-                        active = ?self.input_routing.touch_emulation_slot,
-                        slot = ?event.slot(),
-                        "TouchUp ignored (wrong slot)"
-                    );
-                    return;
-                }
                 tracing::debug!(target: "derp_input", slot = ?event.slot(), "TouchUp");
-                let time = Event::time_msec(&event);
-                let pos = self
-                    .input_routing
-                    .seat
-                    .get_pointer()
-                    .unwrap()
-                    .current_location();
-                if self.input_routing.touch_routes_to_cef {
-                    if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
-                        let tid = i32::from(event.slot());
-                        self.shell_send_to_cef(
-                            shell_wire::DecodedCompositorToShellMessage::Touch {
-                                touch_id: tid,
-                                phase: shell_wire::TOUCH_PHASE_RELEASED,
-                                x: bx,
-                                y: by,
-                            },
-                        );
-                    }
-                } else {
-                    self.process_pointer_button(0x110, ButtonState::Released, time);
-                }
-                self.input_routing.touch_emulation_slot = None;
-                self.input_routing.touch_routes_to_cef = false;
+                self.process_touch_up(event.slot(), Event::time_msec(&event));
             }
             InputEvent::TouchCancel { event, .. } => {
                 let dev: libinput::Device = event.device();
                 if !libinput_device_is_screen_touch(&dev) {
                     return;
                 }
-                if self.input_routing.touch_emulation_slot != Some(event.slot()) {
-                    tracing::debug!(
-                        target: "derp_input",
-                        active = ?self.input_routing.touch_emulation_slot,
-                        slot = ?event.slot(),
-                        "TouchCancel ignored (wrong slot)"
-                    );
-                    return;
-                }
                 tracing::debug!(target: "derp_input", slot = ?event.slot(), "TouchCancel");
-                let time = Event::time_msec(&event);
-                let pos = self
-                    .input_routing
-                    .seat
-                    .get_pointer()
-                    .unwrap()
-                    .current_location();
-                if self.input_routing.touch_routes_to_cef {
-                    if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
-                        let tid = i32::from(event.slot());
-                        self.shell_send_to_cef(
-                            shell_wire::DecodedCompositorToShellMessage::Touch {
-                                touch_id: tid,
-                                phase: shell_wire::TOUCH_PHASE_CANCELLED,
-                                x: bx,
-                                y: by,
-                            },
-                        );
-                    }
-                } else {
-                    self.process_pointer_button(0x110, ButtonState::Released, time);
-                }
-                self.input_routing.touch_emulation_slot = None;
-                self.input_routing.touch_routes_to_cef = false;
+                self.process_touch_cancel(Some(event.slot()), Event::time_msec(&event));
             }
-            InputEvent::TouchFrame { .. } => {}
+            InputEvent::TouchFrame { .. } => {
+                self.process_touch_frame();
+            }
             InputEvent::PointerAxis { event, .. } => {
                 let source = event.source();
 

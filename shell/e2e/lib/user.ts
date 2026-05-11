@@ -11,5 +11,11 @@ export {
   rightClickPoint,
   rightClickRect,
   tapKey,
+  touchCancel,
+  touchDown,
+  touchMove,
+  touchSequence,
+  touchTap,
+  touchUp,
   typeText,
 } from './runtime.ts'
