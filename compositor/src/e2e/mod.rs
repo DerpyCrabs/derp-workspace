@@ -124,6 +124,7 @@ struct E2eRectSnapshot {
 #[derive(Serialize)]
 struct E2eOutputSnapshot {
     name: String,
+    identity: String,
     x: i32,
     y: i32,
     width: i32,
@@ -735,6 +736,7 @@ impl CompositorState {
                     .unwrap_or(geometry);
                 Some(E2eOutputSnapshot {
                     name: output.name(),
+                    identity: Self::shell_output_identity(output),
                     x: geometry.loc.x,
                     y: geometry.loc.y,
                     width: geometry.size.w,

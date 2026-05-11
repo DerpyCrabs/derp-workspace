@@ -94,6 +94,37 @@ mod taskbar_work_area_tests {
 }
 
 #[cfg(test)]
+mod output_identity_tests {
+    use super::OutputTopologyState;
+    use smithay::output::{Output, PhysicalProperties, Subpixel};
+
+    fn output(name: &str, serial_number: &str) -> Output {
+        Output::new(
+            name.to_string(),
+            PhysicalProperties {
+                size: (530, 300).into(),
+                subpixel: Subpixel::Unknown,
+                make: "derp-workspace".into(),
+                model: "DRM".into(),
+                serial_number: serial_number.into(),
+            },
+        )
+    }
+
+    #[test]
+    fn drm_output_identity_uses_serialized_monitor_connector_identity() {
+        let first =
+            OutputTopologyState::shell_output_identity(&output("DP-1", "m3412-abcd-12345678@DP-1"));
+        let second =
+            OutputTopologyState::shell_output_identity(&output("DP-2", "m3412-abcd-12345678@DP-2"));
+
+        assert_ne!(first, second);
+        assert!(first.contains("m3412-abcd-12345678@DP-1"));
+        assert!(second.contains("m3412-abcd-12345678@DP-2"));
+    }
+}
+
+#[cfg(test)]
 mod state_invariant_tests {
     use super::{rect_contains_rect, Logical, Point, Rectangle, Size};
 

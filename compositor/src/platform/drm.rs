@@ -77,6 +77,9 @@ fn log_egl_dmabuf_caps_after_drm_init(renderer: &GlesRenderer) {
 }
 
 use crate::{
+    controls::display_config::{
+        monitor_id_from_edid, output_identity_from_monitor_id_and_connector, read_connector_edid,
+    },
     desktop::desktop_stack::{DesktopStack, SpaceExclusionClip},
     render::pointer_render,
     CalloopData, CompositorState,
@@ -872,6 +875,7 @@ impl DrmSession {
 
             let mode = OutputMode::from(drm_mode);
             self.hotplug_retry_after.remove(&conns[0]);
+            let output_serial = drm_output_serial_number(&self.drm, conns[0], &output_name);
             let output = Output::new(
                 output_name.clone(),
                 PhysicalProperties {
@@ -879,7 +883,7 @@ impl DrmSession {
                     subpixel: Subpixel::Unknown,
                     make: "derp-workspace".into(),
                     model: "DRM".into(),
-                    serial_number: "N/A".into(),
+                    serial_number: output_serial,
                 },
             );
             let _global = output.create_global::<CompositorState>(display);
@@ -1007,6 +1011,17 @@ fn drm_connector_topology_sort_key(info: &connector::Info, h: connector::Handle)
         _ => 5,
     };
     (kind, info.interface_id(), u32::from(h))
+}
+
+fn drm_output_serial_number(
+    drm: &DrmDevice,
+    conn: connector::Handle,
+    connector_name: &str,
+) -> String {
+    let monitor_id = read_connector_edid(drm, conn)
+        .as_deref()
+        .and_then(monitor_id_from_edid);
+    output_identity_from_monitor_id_and_connector(monitor_id.as_deref(), connector_name)
 }
 
 fn sort_connected_connector_handles(
@@ -1336,7 +1351,7 @@ pub fn init_drm(
                 subpixel: Subpixel::Unknown,
                 make: "derp-workspace".into(),
                 model: "DRM".into(),
-                serial_number: "N/A".into(),
+                serial_number: drm_output_serial_number(&drm, conns[0], &output_name),
             },
         );
         let _global = output.create_global::<CompositorState>(&mut data.display_handle);

@@ -298,6 +298,58 @@ async function closeLaunchedWindowAndAssertNoGhost(
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
+  test("multi-monitor output identities are unique", async ({ base }) => {
+    const { compositor, shell } = await getSnapshots(base);
+    if (compositor.outputs.length < 2) {
+      throw new SkipError("multi-monitor identity regression requires at least two outputs");
+    }
+    const outputs = compositor.outputs.map((output) => ({
+      name: output.name,
+      identity: output.identity ?? "",
+      x: output.x,
+      y: output.y,
+      width: output.width,
+      height: output.height,
+      physical_width: output.physical_width,
+      physical_height: output.physical_height,
+    }));
+    for (const output of outputs) {
+      assert(output.identity.length > 0, `missing identity for output ${output.name}`);
+    }
+    const identities = new Set(outputs.map((output) => output.identity));
+    assert(identities.size === outputs.length, `duplicate output identities: ${JSON.stringify(outputs)}`);
+    const sameSizePair = outputs.find((output, index) =>
+      outputs.some(
+        (other, otherIndex) =>
+          otherIndex !== index &&
+          other.width === output.width &&
+          other.height === output.height &&
+          other.physical_width === output.physical_width &&
+          other.physical_height === output.physical_height,
+      ),
+    );
+    if (sameSizePair) {
+      const sameSize = outputs.filter(
+        (output) =>
+          output.width === sameSizePair.width &&
+          output.height === sameSizePair.height &&
+          output.physical_width === sameSizePair.physical_width &&
+          output.physical_height === sameSizePair.physical_height,
+      );
+      assert(
+        new Set(sameSize.map((output) => output.identity)).size === sameSize.length,
+        `same-size outputs share identity: ${JSON.stringify(sameSize)}`,
+      );
+    }
+    for (const taskbar of shell.taskbars) {
+      assert(
+        outputs.some((output) => output.name === taskbar.monitor),
+        `taskbar monitor ${taskbar.monitor} missing from compositor outputs`,
+      );
+    }
+    await writeJsonArtifact("multimonitor-output-identities.json", { outputs, taskbars: shell.taskbars });
+  });
+
   test("programs menu opens searches and optionally launches a terminal app", async ({
     base,
     state,

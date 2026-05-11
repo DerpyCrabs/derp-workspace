@@ -82,6 +82,7 @@ export interface Rect {
 
 export interface OutputSnapshot {
   name: string
+  identity?: string
   x: number
   y: number
   width: number

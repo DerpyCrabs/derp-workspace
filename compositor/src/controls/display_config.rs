@@ -182,7 +182,10 @@ fn drm_connector_connected<D: ControlDevice>(drm: &D, conn: connector::Handle) -
         .unwrap_or(false)
 }
 
-fn read_connector_edid<D: ControlDevice>(drm: &D, conn: connector::Handle) -> Option<Vec<u8>> {
+pub(crate) fn read_connector_edid<D: ControlDevice>(
+    drm: &D,
+    conn: connector::Handle,
+) -> Option<Vec<u8>> {
     let props = drm.get_properties(conn).ok()?;
     for (prop_id, raw_val) in props.iter() {
         let info = drm.get_property(*prop_id).ok()?;
@@ -208,6 +211,22 @@ pub fn monitor_id_from_edid(edid: &[u8]) -> Option<String> {
         "m{:02x}{:02x}-{:04x}-{:08x}",
         edid[8], edid[9], prod, serial
     ))
+}
+
+pub(crate) fn output_identity_from_monitor_id_and_connector(
+    monitor_id: Option<&str>,
+    connector_name: &str,
+) -> String {
+    let connector_name = connector_name.trim();
+    let connector_name = if connector_name.is_empty() {
+        "unknown"
+    } else {
+        connector_name
+    };
+    match monitor_id.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(monitor_id) => format!("{monitor_id}@{connector_name}"),
+        None => format!("connector@{connector_name}"),
+    }
 }
 
 fn live_heads_from_drm(drm: &DrmDevice, heads: &[DrmHead]) -> Vec<LiveHead> {
@@ -514,6 +533,22 @@ mod tests {
         assert_eq!(
             monitor_id_from_edid(&edid),
             Some("m3412-abcd-12345678".to_string())
+        );
+    }
+
+    #[test]
+    fn output_identity_includes_connector_to_split_duplicate_edid() {
+        assert_eq!(
+            output_identity_from_monitor_id_and_connector(Some("m3412-abcd-12345678"), "DP-1"),
+            "m3412-abcd-12345678@DP-1"
+        );
+        assert_ne!(
+            output_identity_from_monitor_id_and_connector(Some("m3412-abcd-12345678"), "DP-1"),
+            output_identity_from_monitor_id_and_connector(Some("m3412-abcd-12345678"), "DP-2")
+        );
+        assert_eq!(
+            output_identity_from_monitor_id_and_connector(None, "HDMI-A-1"),
+            "connector@HDMI-A-1"
         );
     }
 

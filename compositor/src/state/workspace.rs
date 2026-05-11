@@ -174,15 +174,17 @@ impl WorkspaceLayoutState {
         output_name: &str,
         output_id: Option<&str>,
     ) -> Option<&WorkspaceMonitorLayoutState> {
-        self.workspace_state
-            .monitor_layout_for_output(output_name)
-            .or_else(|| {
-                let output_id = output_id?;
-                self.workspace_state
-                    .monitor_layouts
-                    .iter()
-                    .find(|entry| entry.output_id == output_id)
-            })
+        if let Some(output_id) = output_id.filter(|value| !value.is_empty()) {
+            if let Some(entry) = self
+                .workspace_state
+                .monitor_layouts
+                .iter()
+                .find(|entry| entry.output_id == output_id)
+            {
+                return Some(entry);
+            }
+        }
+        self.workspace_state.monitor_layout_for_output(output_name)
     }
 
     pub(crate) fn workspace_clamp_master_ratio(value: Option<f64>) -> f64 {
@@ -506,8 +508,18 @@ impl WorkspaceLayoutState {
             .workspace_state
             .monitor_tiles
             .iter_mut()
-            .find(|monitor| monitor.output_name == output_name)
+            .find(|monitor| {
+                if !output_id.is_empty() && !monitor.output_id.is_empty() {
+                    monitor.output_id == output_id
+                } else {
+                    monitor.output_name == output_name
+                }
+            })
         {
+            monitor.output_name = output_name.to_string();
+            if !output_id.is_empty() {
+                monitor.output_id = output_id.clone();
+            }
             monitor.entries.push(WorkspaceMonitorTileEntry {
                 window_id,
                 zone,
@@ -563,9 +575,13 @@ impl WorkspaceLayoutState {
             })
             .collect();
         entries.sort_by_key(|entry| entry.window_id);
-        self.workspace_state
-            .monitor_tiles
-            .retain(|monitor| monitor.output_name != output_name);
+        self.workspace_state.monitor_tiles.retain(|monitor| {
+            if !output_id.is_empty() && !monitor.output_id.is_empty() {
+                monitor.output_id != output_id
+            } else {
+                monitor.output_name != output_name
+            }
+        });
         if !entries.is_empty() {
             self.workspace_state
                 .monitor_tiles
