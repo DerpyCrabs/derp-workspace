@@ -2,11 +2,18 @@ use clap::Parser;
 use smithay_client_toolkit::{
     activation::{ActivationHandler, ActivationState, RequestData},
     compositor::{CompositorHandler, CompositorState},
+    data_device_manager::WritePipe,
     delegate_activation, delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer,
-    delegate_pointer_constraints, delegate_registry, delegate_relative_pointer, delegate_seat,
-    delegate_shm, delegate_touch, delegate_xdg_popup, delegate_xdg_shell, delegate_xdg_window,
+    delegate_pointer_constraints, delegate_primary_selection, delegate_registry,
+    delegate_relative_pointer, delegate_seat, delegate_shm, delegate_touch, delegate_xdg_popup,
+    delegate_xdg_shell, delegate_xdg_window,
     globals::ProvidesBoundGlobal,
     output::{OutputHandler, OutputState},
+    primary_selection::{
+        device::{PrimarySelectionDevice, PrimarySelectionDeviceHandler},
+        selection::{PrimarySelectionSource, PrimarySelectionSourceHandler},
+        PrimarySelectionManagerState,
+    },
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{
@@ -30,11 +37,14 @@ use smithay_client_toolkit::{
         Shm, ShmHandler,
     },
 };
-use std::fs;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::{
+    fs,
+    io::{Read, Write},
+};
 use wayland_client::{
     delegate_noop,
     globals::registry_queue_init,
@@ -80,6 +90,10 @@ use wayland_protocols::wp::{
         zwp_pointer_gestures_v1::ZwpPointerGesturesV1,
     },
     presentation_time::client::{wp_presentation::WpPresentation, wp_presentation_feedback},
+    primary_selection::zv1::client::{
+        zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1,
+        zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1,
+    },
     relative_pointer::zv1::client::zwp_relative_pointer_v1,
     tearing_control::v1::client::{
         wp_tearing_control_manager_v1::WpTearingControlManagerV1, wp_tearing_control_v1,
@@ -299,6 +313,10 @@ struct Args {
     xdg_popup_grab_probe: bool,
     #[arg(long)]
     xdg_popup_grab_status_json: Option<String>,
+    #[arg(long)]
+    primary_selection_text: Option<String>,
+    #[arg(long)]
+    primary_paste_status_json: Option<String>,
 }
 
 fn main() {
@@ -452,6 +470,15 @@ fn main() {
     } else {
         None
     };
+    let primary_selection_manager =
+        if args.primary_selection_text.is_some() || args.primary_paste_status_json.is_some() {
+            Some(
+                PrimarySelectionManagerState::bind(&globals, &qh)
+                    .expect("bind zwp_primary_selection_device_manager_v1"),
+            )
+        } else {
+            None
+        };
     let activation_state = ActivationState::bind(&globals, &qh).ok();
     let startup_activation_token = std::env::var("XDG_ACTIVATION_TOKEN").ok();
     if startup_activation_token.is_some() {
@@ -661,6 +688,16 @@ fn main() {
         xdg_popup_parent: None,
         xdg_popup_child: None,
         xdg_popup_status: PopupProbeStatus::default(),
+        primary_selection_manager,
+        primary_selection_device: None,
+        primary_selection_source: None,
+        primary_selection_text: args.primary_selection_text,
+        primary_selection_claim_count: 0,
+        primary_selection_drag_serial: None,
+        primary_selection_drag_start: None,
+        primary_paste_status_json: args.primary_paste_status_json,
+        primary_paste_count: 0,
+        primary_paste_pending: false,
     };
     state.write_touch_status();
 
@@ -683,6 +720,10 @@ fn main() {
                 .expect("roundtrip cursor shape setup");
             state.cursor_shape_ready = true;
             state.write_cursor_shape_status();
+        }
+        if state.primary_paste_pending {
+            state.primary_paste_pending = false;
+            state.request_primary_paste(&conn);
         }
     }
 }
@@ -905,6 +946,16 @@ struct TestClient {
     xdg_popup_parent: Option<PopupProbeSurface>,
     xdg_popup_child: Option<PopupProbeSurface>,
     xdg_popup_status: PopupProbeStatus,
+    primary_selection_manager: Option<PrimarySelectionManagerState>,
+    primary_selection_device: Option<PrimarySelectionDevice>,
+    primary_selection_source: Option<PrimarySelectionSource>,
+    primary_selection_text: Option<String>,
+    primary_selection_claim_count: u32,
+    primary_selection_drag_serial: Option<u32>,
+    primary_selection_drag_start: Option<(f64, f64)>,
+    primary_paste_status_json: Option<String>,
+    primary_paste_count: u32,
+    primary_paste_pending: bool,
 }
 
 struct PopupProbeSurface {
@@ -965,7 +1016,11 @@ struct TouchStatus {
 
 impl TestClient {
     fn popup_status_escape(value: &str) -> String {
-        value.replace('\\', "\\\\").replace('"', "\\\"")
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\r', "\\r")
+            .replace('\n', "\\n")
     }
 
     fn xdg_popup_open_depth(&self) -> u32 {
@@ -1279,6 +1334,12 @@ impl TestClient {
             self.no_border,
             self.solid_client,
         );
+        draw_primary_selection_text(
+            canvas,
+            self.width,
+            self.height,
+            self.primary_selection_text.as_deref(),
+        );
 
         self.window
             .wl_surface()
@@ -1386,6 +1447,110 @@ impl TestClient {
         self.cursor_shape_device = Some(manager.get_pointer(pointer, qh, ()));
         self.cursor_shape_ready = false;
         self.cursor_shape_ready_pending = true;
+    }
+
+    fn ensure_primary_selection_device(&mut self, qh: &QueueHandle<Self>, seat: &wl_seat::WlSeat) {
+        if self.primary_selection_device.is_some() {
+            return;
+        }
+        let Some(manager) = self.primary_selection_manager.as_ref() else {
+            return;
+        };
+        self.primary_selection_device = Some(manager.get_selection_device(qh, seat));
+    }
+
+    fn claim_primary_selection(&mut self, qh: &QueueHandle<Self>, serial: u32) {
+        let Some(text) = self.primary_selection_text.as_ref() else {
+            return;
+        };
+        let (Some(manager), Some(device)) = (
+            self.primary_selection_manager.as_ref(),
+            self.primary_selection_device.as_ref(),
+        ) else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        let source = manager.create_selection_source(
+            qh,
+            [
+                "text/plain;charset=utf-8",
+                "text/plain",
+                "STRING",
+                "COMPOUND_TEXT",
+            ],
+        );
+        source.set_selection(device, serial);
+        self.primary_selection_source = Some(source);
+        self.primary_selection_claim_count = self.primary_selection_claim_count.saturating_add(1);
+        self.window.set_title(format!(
+            "{} Selected {}",
+            self.base_title, self.primary_selection_claim_count
+        ));
+    }
+
+    fn request_primary_paste(&mut self, conn: &Connection) {
+        if self.primary_paste_status_json.is_none() {
+            return;
+        }
+        let Some(device) = self.primary_selection_device.as_ref() else {
+            self.write_primary_paste_debug("no_device");
+            return;
+        };
+        let Some(offer) = device.data().selection_offer() else {
+            self.write_primary_paste_debug("no_offer");
+            return;
+        };
+        let mime_type = offer.with_mime_types(|mimes| {
+            if mimes.iter().any(|mime| mime == "STRING") {
+                Some("STRING".to_string())
+            } else if mimes.iter().any(|mime| mime == "text/plain;charset=utf-8") {
+                Some("text/plain;charset=utf-8".to_string())
+            } else if mimes.iter().any(|mime| mime == "text/plain") {
+                Some("text/plain".to_string())
+            } else {
+                None
+            }
+        });
+        let Some(mime_type) = mime_type else {
+            self.write_primary_paste_debug("no_text_mime");
+            return;
+        };
+        let Ok(mut read_pipe) = offer.receive(mime_type) else {
+            self.write_primary_paste_debug("receive_failed");
+            return;
+        };
+        let _ = conn.flush();
+        self.primary_paste_count = self.primary_paste_count.saturating_add(1);
+        let count = self.primary_paste_count;
+        let path = self.primary_paste_status_json.clone().unwrap_or_default();
+        self.window
+            .set_title(format!("{} Pasted {}", self.base_title, count));
+        std::thread::spawn(move || {
+            let mut buffer = [0_u8; 4096];
+            let text = match read_pipe.read(&mut buffer) {
+                Ok(size) => String::from_utf8_lossy(&buffer[..size]).into_owned(),
+                Err(_) => String::new(),
+            };
+            let json = format!(
+                "{{\"paste_count\":{},\"text\":\"{}\"}}\n",
+                count,
+                TestClient::popup_status_escape(&text)
+            );
+            let _ = fs::write(path, json);
+        });
+    }
+
+    fn write_primary_paste_debug(&self, error: &str) {
+        let Some(path) = self.primary_paste_status_json.as_ref() else {
+            return;
+        };
+        let json = format!(
+            "{{\"paste_count\":{},\"text\":\"\",\"error\":\"{}\"}}\n",
+            self.primary_paste_count, error
+        );
+        let _ = fs::write(path, json);
     }
 
     fn write_cursor_shape_status(&self) {
@@ -3128,6 +3293,60 @@ fn put_pixel(canvas: &mut [u8], width: usize, x: usize, y: usize, rgba: [u8; 4])
     canvas[idx + 3] = rgba[3];
 }
 
+fn draw_primary_selection_text(canvas: &mut [u8], width: u32, height: u32, text: Option<&str>) {
+    let Some(text) = text else {
+        return;
+    };
+    if text.is_empty() {
+        return;
+    }
+    let x0 = 24usize;
+    let y0 = (height as usize / 2).saturating_sub(18);
+    let glyphs = text.chars().count().min(48);
+    let width_usize = width as usize;
+    let w = (glyphs * 9 + 16).min(width.saturating_sub(48) as usize);
+    fill_rect(canvas, width_usize, x0, y0, w, 36, [245, 245, 245, 255]);
+    fill_rect(canvas, width_usize, x0, y0, w, 2, [20, 20, 20, 255]);
+    fill_rect(canvas, width_usize, x0, y0 + 34, w, 2, [20, 20, 20, 255]);
+    for index in 0..glyphs {
+        let gx = x0 + 8 + index * 9;
+        let h = 12 + ((index * 7) % 15);
+        fill_rect(
+            canvas,
+            width_usize,
+            gx,
+            y0 + 18usize.saturating_sub(h / 2),
+            5,
+            h,
+            [25, 25, 25, 255],
+        );
+    }
+}
+
+fn fill_rect(
+    canvas: &mut [u8],
+    width: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    rgba: [u8; 4],
+) {
+    if width == 0 {
+        return;
+    }
+    let height = canvas.len() / width / 4;
+    let x1 = x.min(width);
+    let y1 = y.min(height);
+    let x2 = x.saturating_add(w).min(width);
+    let y2 = y.saturating_add(h).min(height);
+    for py in y1..y2 {
+        for px in x1..x2 {
+            put_pixel(canvas, width, px, py, rgba);
+        }
+    }
+}
+
 impl CompositorHandler for TestClient {
     fn scale_factor_changed(
         &mut self,
@@ -3514,6 +3733,7 @@ impl SeatHandler for TestClient {
         seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
+        self.ensure_primary_selection_device(qh, &seat);
         if capability == Capability::Keyboard && self.keyboard.is_none() {
             self.keyboard_seat = Some(seat.clone());
             let keyboard = self
@@ -3646,6 +3866,13 @@ impl PointerHandler for TestClient {
                     self.touch_status.pointer_press =
                         self.touch_status.pointer_press.saturating_add(1);
                     self.write_touch_status();
+                    if button == 0x110 && self.primary_selection_text.is_some() {
+                        self.primary_selection_drag_serial = Some(serial);
+                        self.primary_selection_drag_start = Some(event.position);
+                    }
+                    if button == 0x112 {
+                        self.primary_paste_pending = true;
+                    }
                     if self.xdg_popup_grab_probe && button == 0x110 {
                         let label = self.popup_surface_label(&event.surface);
                         self.xdg_popup_status.pointer_presses =
@@ -3674,11 +3901,64 @@ impl PointerHandler for TestClient {
                         self.window.move_(&seat, serial);
                     }
                 }
-                PointerEventKind::Release { serial, .. } => {
+                PointerEventKind::Release { serial, button, .. } => {
+                    if button == 0x110 {
+                        if self.primary_selection_drag_start.take().is_some() {
+                            let selection_serial =
+                                self.primary_selection_drag_serial.take().unwrap_or(serial);
+                            if self.primary_selection_source.is_none() {
+                                self.claim_primary_selection(qh, selection_serial);
+                                let _ = conn.flush();
+                            }
+                        }
+                    }
                     self.request_spawn_activation(qh, serial, seat, event.surface.clone());
                 }
                 _ => {}
             }
+        }
+    }
+}
+
+impl PrimarySelectionDeviceHandler for TestClient {
+    fn selection(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _primary_selection_device: &ZwpPrimarySelectionDeviceV1,
+    ) {
+    }
+}
+
+impl PrimarySelectionSourceHandler for TestClient {
+    fn send_request(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &ZwpPrimarySelectionSourceV1,
+        mime: String,
+        mut write_pipe: WritePipe,
+    ) {
+        if let Some(text) = self.primary_selection_text.as_ref() {
+            let _ = write_pipe.write_all(text.as_bytes());
+            let _ = write_pipe.flush();
+            self.window
+                .set_title(format!("{} Sent {}", self.base_title, mime));
+        }
+    }
+
+    fn cancelled(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        source: &ZwpPrimarySelectionSourceV1,
+    ) {
+        if self
+            .primary_selection_source
+            .as_ref()
+            .is_some_and(|current| current.inner() == source)
+        {
+            self.primary_selection_source = None;
         }
     }
 }
@@ -3955,6 +4235,7 @@ delegate_shm!(TestClient);
 delegate_pointer!(TestClient);
 delegate_touch!(TestClient);
 delegate_pointer_constraints!(TestClient);
+delegate_primary_selection!(TestClient);
 delegate_relative_pointer!(TestClient);
 delegate_xdg_shell!(TestClient);
 delegate_xdg_window!(TestClient);

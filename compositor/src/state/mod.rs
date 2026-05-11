@@ -76,6 +76,10 @@ use smithay::{
                 clear_data_device_selection, current_data_device_selection_userdata,
                 request_data_device_client_selection, set_data_device_selection, DataDeviceState,
             },
+            primary_selection::{
+                clear_primary_selection, current_primary_selection_userdata,
+                request_primary_client_selection, set_primary_selection, PrimarySelectionState,
+            },
             wlr_data_control::DataControlState,
             SelectionTarget,
         },
@@ -695,7 +699,9 @@ impl CompositorState {
             crate::render::capture_ext::ExtImageCaptureManagerState::new::<Self>(&dh);
         let mut seat_state = SeatState::new();
         let data_device_state = DataDeviceState::new::<Self>(&dh);
-        let data_control_state = DataControlState::new::<Self, _>(&dh, None, |_| true);
+        let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
+        let data_control_state =
+            DataControlState::new::<Self, _>(&dh, Some(&primary_selection_state), |_| true);
         let xwayland_shell_state = XWaylandShellState::new::<Self>(&dh);
         let chrome_bridge = options.chrome_bridge;
         let shell_to_cef = options.shell_to_cef;
@@ -970,6 +976,7 @@ impl CompositorState {
                 seat_state,
                 seat,
                 data_device_state,
+                primary_selection_state,
                 data_control_state,
                 keyboard_shortcuts_inhibit_state,
                 cursor_theme,

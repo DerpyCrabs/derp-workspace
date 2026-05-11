@@ -1,11 +1,13 @@
 import { execFile } from 'node:child_process'
-import { access } from 'node:fs/promises'
+import { access, readFile, rm, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import {
   activateTaskbarWindow,
   assert,
   assertRectMinSize,
+  BTN_MIDDLE,
   clickRect,
+  cleanupNativeWindows,
   closeTaskbarWindow,
   compositorWindowById,
   defineGroup,
@@ -14,6 +16,7 @@ import {
   getSnapshots,
   ensureXtermWindow,
   KEY,
+  NATIVE_APP_ID,
   outputForWindow,
   rightClickRect,
   runKeybind,
@@ -37,11 +40,43 @@ import {
   type Rect,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
+import { spawnNativeWindow } from '../lib/setup.ts'
+import { movePoint, pointerButton } from '../lib/user.ts'
 
 const XTERM_TITLE = 'Derp X11 Xterm'
 const V2RAYN_BIN = '/opt/v2rayn-bin/v2rayN'
 
 const execFileAsync = promisify(execFile)
+
+async function middleClickPoint(base: string, x: number, y: number) {
+  await movePoint(base, x, y)
+  await pointerButton(base, BTN_MIDDLE, 'press')
+  await pointerButton(base, BTN_MIDDLE, 'release')
+}
+
+async function readTrimmed(path: string) {
+  return (await readFile(path, 'utf8')).replace(/\r/g, '').trim()
+}
+
+async function waitForFileValue<T>(
+  description: string,
+  read: () => Promise<T | null>,
+  timeoutMs = 5000,
+  tick?: () => Promise<void>,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      await tick?.()
+    } catch {}
+    try {
+      const value = await read()
+      if (value) return value
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 40))
+  }
+  throw new Error(`${description}: timed out after ${timeoutMs}ms`)
+}
 
 function v2rayNWindow(shell: ShellSnapshot) {
   return shell.windows.find((window) => /v2rayn/i.test(`${window.title} ${window.app_id}`))
@@ -130,6 +165,18 @@ async function waitForV2rayNTrayButton(base: string) {
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('x11 xterm participates in shell taskbar and window actions', async ({ base, state }) => {
+    const initial = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+    await cleanupNativeWindows(
+      base,
+      new Set(
+        initial.windows
+          .filter((window) =>
+            !window.shell_hosted &&
+            (window.app_id === X11_XTERM_APP_ID || window.app_id === 'XTerm' || window.app_id === 'org.gnome.gedit'),
+          )
+          .map((window) => window.window_id),
+      ),
+    )
     const spawned = await ensureXtermWindow(base, state, XTERM_TITLE)
     const windowId = spawned.window.window_id
     const spawnedOutput = outputForWindow(spawned.snapshot, spawned.window)
@@ -247,6 +294,186 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await closeTaskbarWindow(base, shell, probe.window.window_id)
     await waitForWindowGone(base, probe.window.window_id, 2000)
+  })
+
+  test('primary selection middle-click paste from wayland native into x11 client', async ({ base, state }) => {
+    const expected = `Derp Wayland Primary ${Date.now()}`
+    const outPath = `/tmp/derp-primary-wayland-to-x11-${Date.now()}.txt`
+    await rm(outPath, { force: true }).catch(() => undefined)
+
+    const cleanupWindowIds = new Set<number>()
+    try {
+      const native = await spawnNativeWindow(base, state.knownWindowIds, {
+        title: 'Derp Primary Wayland Source',
+        token: 'primary-wayland-source',
+        strip: '#2d7f5e',
+        width: 520,
+        height: 260,
+        primarySelectionText: expected,
+      })
+      state.spawnedNativeWindowIds.add(native.window.window_id)
+      cleanupWindowIds.add(native.window.window_id)
+      const source = native.window
+      await clickRect(base, {
+        x: source.x,
+        y: source.y,
+        width: source.width,
+        height: source.height,
+        global_x: source.x,
+        global_y: source.y,
+      })
+      await waitForNativeFocus(base, source.window_id)
+      const y = source.y + Math.floor(source.height / 2)
+      await dragBetweenPoints(base, source.x + 36, y, source.x + Math.min(source.width - 36, 320), y, 18)
+      const selectedSource = await waitFor(
+        'wait for native primary selection claim',
+        async () => {
+          const snapshot = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          return snapshot.windows.find((window) =>
+            !window.shell_hosted &&
+            window.window_id === source.window_id &&
+            window.app_id === NATIVE_APP_ID &&
+            /^Derp Primary Wayland Source Selected [1-9]\d*$/.test(window.title),
+          ) ?? null
+        },
+        5000,
+        40,
+      )
+      const title = 'Derp X11 Primary Target'
+      const command = `stty raw -echo; dd bs=1 count=${expected.length} of=${shellQuote(outPath)} status=none; while :; do sleep 60; done`
+      const fullCommand = `xterm -T ${shellQuote(title)} -class ${shellQuote(X11_XTERM_APP_ID)} -geometry 80x12 -e sh -lc ${shellQuote(command)}`
+      await spawnCommand(base, fullCommand)
+      const xterm = await waitForSpawnedWindow(base, state.knownWindowIds, {
+        title,
+        appId: X11_XTERM_APP_ID,
+        command: fullCommand,
+        timeoutMs: 5000,
+      })
+      cleanupWindowIds.add(xterm.window.window_id)
+      const target = xterm.window
+      await waitForNativeFocus(base, target.window_id)
+      await middleClickPoint(base, target.x + 24, target.y + 24)
+
+      const actual = await waitForFileValue(
+        'wait for wayland primary paste in x11',
+        async () => {
+          try {
+            const text = await readTrimmed(outPath)
+            return text === expected ? text : null
+          } catch {
+            return null
+          }
+        },
+        10000,
+      )
+      assert(actual === expected, `expected x11 primary paste ${expected}, got ${actual}`)
+      await writeJsonArtifact('x11-primary-wayland-to-x11.json', { expected, actual, outPath, source: selectedSource, target })
+    } finally {
+      await cleanupNativeWindows(base, cleanupWindowIds)
+    }
+  })
+
+  test('primary selection middle-click paste from x11 into wayland native client', async ({ base, state }) => {
+    const expected = `Derp X11 Primary ${Date.now()}`
+    const statusPath = `/tmp/derp-primary-x11-to-wayland-${Date.now()}.json`
+    await rm(statusPath, { force: true }).catch(() => undefined)
+    await writeFile(statusPath, '{"paste_count":0,"text":""}\n')
+
+    const cleanupWindowIds = new Set<number>()
+    try {
+      const title = 'Derp X11 Primary Source'
+      const command = `printf '%s\\n' ${shellQuote(expected)}`
+      const fullCommand = `xterm -hold -T ${shellQuote(title)} -class ${shellQuote(X11_XTERM_APP_ID)} -geometry 80x12 -e sh -lc ${shellQuote(command)}`
+      await spawnCommand(base, fullCommand)
+      const xterm = await waitForSpawnedWindow(base, state.knownWindowIds, {
+        title,
+        appId: X11_XTERM_APP_ID,
+        command: fullCommand,
+        timeoutMs: 5000,
+      })
+      cleanupWindowIds.add(xterm.window.window_id)
+      const source = xterm.window
+      await waitForNativeFocus(base, source.window_id)
+      const sourceTextY = source.y + 7
+      await dragBetweenPoints(base, source.x + 2, sourceTextY, source.x + 4 + expected.length * 6, sourceTextY, 24)
+      const relayReadyPath = `/tmp/derp-primary-x11-relay-${Date.now()}.ready`
+      const relayTextPath = `/tmp/derp-primary-x11-relay-${Date.now()}.txt`
+      await rm(relayReadyPath, { force: true }).catch(() => undefined)
+      await rm(relayTextPath, { force: true }).catch(() => undefined)
+      const relayTitle = 'Derp X11 Primary Relay'
+      const relayCommand = `timeout 5 xclip -selection primary -o > ${shellQuote(relayTextPath)} && printf ready > ${shellQuote(relayReadyPath)}; while :; do sleep 60; done`
+      const relayFullCommand = `xterm -T ${shellQuote(relayTitle)} -class ${shellQuote(X11_XTERM_APP_ID)} -geometry 40x6 -e sh -lc ${shellQuote(relayCommand)}`
+      await spawnCommand(base, relayFullCommand)
+      const relay = await waitForSpawnedWindow(base, state.knownWindowIds, {
+        title: relayTitle,
+        appId: X11_XTERM_APP_ID,
+        command: relayFullCommand,
+        timeoutMs: 5000,
+      })
+      cleanupWindowIds.add(relay.window.window_id)
+      await waitFor(
+        'wait for x11 primary relay',
+        async () => {
+          try {
+            await access(relayReadyPath)
+            const text = await readTrimmed(relayTextPath)
+            return text === expected ? true : null
+          } catch {
+            return null
+          }
+        },
+        5000,
+        40,
+      )
+
+      const native = await spawnNativeWindow(base, state.knownWindowIds, {
+        title: 'Derp Primary Wayland Target',
+        token: 'primary-wayland-target',
+        strip: '#7f4db8',
+        width: 520,
+        height: 260,
+        primaryPasteStatusJson: statusPath,
+      })
+      state.spawnedNativeWindowIds.add(native.window.window_id)
+      cleanupWindowIds.add(native.window.window_id)
+      const target = native.window
+      let activationShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      await activateTaskbarWindow(base, activationShell, source.window_id)
+      await waitForNativeFocus(base, source.window_id)
+      activationShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      await activateTaskbarWindow(base, activationShell, target.window_id)
+      await waitForNativeFocus(base, target.window_id)
+      await middleClickPoint(base, target.x + Math.floor(target.width / 2), target.y + Math.floor(target.height / 2))
+
+      const pastedTarget = await waitFor(
+        'wait for x11 primary paste request in wayland',
+        async () => {
+          const snapshot = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          return snapshot.windows.find((window) =>
+            !window.shell_hosted &&
+            window.window_id === target.window_id &&
+            /^Derp Primary Wayland Target Pasted [1-9]\d*$/.test(window.title),
+          ) ?? null
+        },
+        5000,
+        40,
+      )
+      const pastedStatus = await waitForFileValue(
+        'wait for x11 primary paste status in wayland',
+        async () => {
+          const status = JSON.parse(await readFile(statusPath, 'utf8')) as { text?: string }
+          return status.text?.replace(/\r/g, '').trim() === expected ? status : null
+        },
+        5000,
+      )
+      assert(
+        pastedStatus.text?.replace(/\r/g, '').trim() === expected,
+        `expected wayland primary paste ${expected}, got ${pastedStatus.text}`,
+      )
+      await writeJsonArtifact('x11-primary-x11-to-wayland.json', { expected, pastedStatus, pastedTarget, source, target, statusPath })
+    } finally {
+      await cleanupNativeWindows(base, cleanupWindowIds)
+    }
   })
 
   test('v2rayN taskbar close hides to tray and restores on activation', async ({ base }) => {

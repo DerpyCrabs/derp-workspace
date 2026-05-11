@@ -375,47 +375,78 @@ impl XwmHandler for CompositorState {
         mime_type: String,
         fd: OwnedFd,
     ) {
-        if selection != SelectionTarget::Clipboard {
-            return;
-        }
-        if let Some(user_data) = current_data_device_selection_userdata(&self.input_routing.seat) {
-            if user_data.is_empty() || mime_type != "image/png" {
-                return;
+        match selection {
+            SelectionTarget::Clipboard => {
+                if let Some(user_data) =
+                    current_data_device_selection_userdata(&self.input_routing.seat)
+                {
+                    if user_data.is_empty() || mime_type != "image/png" {
+                        return;
+                    }
+                    let mut file = std::fs::File::from(fd);
+                    if let Err(error) = file.write_all(user_data.as_slice()) {
+                        tracing::warn!(%error, "clipboard image write failed");
+                    }
+                    return;
+                }
+                if let Err(error) =
+                    request_data_device_client_selection(&self.input_routing.seat, mime_type, fd)
+                {
+                    tracing::warn!(
+                        ?error,
+                        "failed to request current wayland clipboard for xwayland"
+                    );
+                }
             }
-            let mut file = std::fs::File::from(fd);
-            if let Err(error) = file.write_all(user_data.as_slice()) {
-                tracing::warn!(%error, "clipboard image write failed");
+            SelectionTarget::Primary => {
+                if let Err(error) =
+                    request_primary_client_selection(&self.input_routing.seat, mime_type, fd)
+                {
+                    tracing::warn!(
+                        ?error,
+                        "failed to request current wayland primary selection for xwayland"
+                    );
+                }
             }
-            return;
-        }
-        if let Err(error) =
-            request_data_device_client_selection(&self.input_routing.seat, mime_type, fd)
-        {
-            tracing::warn!(
-                ?error,
-                "failed to request current wayland clipboard for xwayland"
-            );
         }
     }
 
     fn new_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
-        if selection != SelectionTarget::Clipboard {
-            return;
+        match selection {
+            SelectionTarget::Clipboard => set_data_device_selection(
+                &self.core.display_handle,
+                &self.input_routing.seat,
+                mime_types,
+                Arc::new(Vec::new()),
+            ),
+            SelectionTarget::Primary => set_primary_selection(
+                &self.core.display_handle,
+                &self.input_routing.seat,
+                mime_types,
+                Arc::new(Vec::new()),
+            ),
         }
-        set_data_device_selection(
-            &self.core.display_handle,
-            &self.input_routing.seat,
-            mime_types,
-            Arc::new(Vec::new()),
-        );
     }
 
     fn cleared_selection(&mut self, _xwm: XwmId, selection: SelectionTarget) {
-        if selection != SelectionTarget::Clipboard {
-            return;
-        }
-        if current_data_device_selection_userdata(&self.input_routing.seat).is_some() {
-            clear_data_device_selection(&self.core.display_handle, &self.input_routing.seat);
+        match selection {
+            SelectionTarget::Clipboard => {
+                if current_data_device_selection_userdata(&self.input_routing.seat)
+                    .is_some_and(|user_data| user_data.is_empty())
+                {
+                    clear_data_device_selection(
+                        &self.core.display_handle,
+                        &self.input_routing.seat,
+                    );
+                }
+            }
+            SelectionTarget::Primary => {
+                if current_primary_selection_userdata(&self.input_routing.seat)
+                    .is_some_and(|user_data| user_data.is_empty())
+                {
+                    clear_primary_selection(&self.core.display_handle, &self.input_routing.seat);
+                }
+            }
         }
     }
 

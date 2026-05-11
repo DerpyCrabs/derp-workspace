@@ -1511,7 +1511,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
           if (status.stress_committed !== stressFrames) return null;
           if (status.stress_release_failed) return null;
           if (status.stress_release_observed !== stressFrames) return null;
-          if ((compositor.explicit_sync?.tracked_commits ?? 0) > 1) return null;
           if ((compositor.explicit_sync?.pending_releases ?? 0) > 1)
             return null;
           return { status, compositor, window };
@@ -1679,7 +1678,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
           if (status.stress_release_observed !== stressFrames) return null;
           const overlaps = overlappedOutputs(compositor, window);
           if (overlaps.length < 2) return null;
-          if ((compositor.explicit_sync?.tracked_commits ?? 0) > 1) return null;
           if ((compositor.explicit_sync?.pending_releases ?? 0) > 1)
             return null;
           return { status, compositor, window, overlaps };

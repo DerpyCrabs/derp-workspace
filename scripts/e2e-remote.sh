@@ -305,6 +305,9 @@ artifact_dir="${DERP_E2E_ARTIFACT_DIR:-$HOME/.local/state/derp/e2e/artifacts}"
 rm -rf "$artifact_dir"
 mkdir -p "$artifact_dir"
 pkill -u "$(id -un)" -x derp-test-client 2>/dev/null || true
+pkill -u "$(id -un)" -x xterm 2>/dev/null || true
+pkill -u "$(id -un)" -x gedit 2>/dev/null || true
+pkill -u "$(id -un)" -x file-roller 2>/dev/null || true
 pkill -u "$(id -un)" -f '[w]leird-' 2>/dev/null || true
 mapfile -t pids < <(pgrep -u "$(id -un)" -x compositor || true)
 if [[ ${#pids[@]} -eq 0 ]]; then
@@ -372,6 +375,30 @@ while (( SECONDS < deadline )); do
 done
 echo "e2e-remote: compositor did not publish a responsive shell HTTP base after restart." >&2
 exit 1
+REMOTE
+
+echo "=== clean leftover e2e clients ==="
+ssh_base bash -s <<'REMOTE'
+set -euo pipefail
+for pattern in xterm gedit file-roller derp-test-client; do
+  pkill -u "$(id -un)" -x "$pattern" 2>/dev/null || true
+done
+pkill -u "$(id -un)" -f '[w]leird-' 2>/dev/null || true
+deadline=$((SECONDS + 5))
+while (( SECONDS < deadline )); do
+  if ! pgrep -u "$(id -un)" -x xterm >/dev/null 2>&1 \
+    && ! pgrep -u "$(id -un)" -x gedit >/dev/null 2>&1 \
+    && ! pgrep -u "$(id -un)" -x file-roller >/dev/null 2>&1 \
+    && ! pgrep -u "$(id -un)" -x derp-test-client >/dev/null 2>&1 \
+    && ! pgrep -u "$(id -un)" -f '[w]leird-' >/dev/null 2>&1; then
+    exit 0
+  fi
+done
+pkill -KILL -u "$(id -un)" -x xterm 2>/dev/null || true
+pkill -KILL -u "$(id -un)" -x gedit 2>/dev/null || true
+pkill -KILL -u "$(id -un)" -x file-roller 2>/dev/null || true
+pkill -KILL -u "$(id -un)" -x derp-test-client 2>/dev/null || true
+pkill -KILL -u "$(id -un)" -f '[w]leird-' 2>/dev/null || true
 REMOTE
 
 echo "=== remote shell/e2e/run.mjs ==="

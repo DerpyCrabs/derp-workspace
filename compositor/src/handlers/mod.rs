@@ -32,6 +32,9 @@ use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerCons
 use smithay::wayland::selection::data_device::{
     set_data_device_focus, DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler,
 };
+use smithay::wayland::selection::primary_selection::{
+    set_primary_focus, PrimarySelectionHandler, PrimarySelectionState,
+};
 use smithay::wayland::selection::wlr_data_control::DataControlHandler;
 use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::tablet_manager::TabletSeatHandler;
@@ -39,7 +42,10 @@ use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
 };
 use smithay::wayland::xdg_toplevel_icon::{ToplevelIconCachedState, XdgToplevelIconHandler};
-use smithay::{delegate_data_control, delegate_data_device, delegate_output, delegate_seat};
+use smithay::{
+    delegate_data_control, delegate_data_device, delegate_output, delegate_primary_selection,
+    delegate_seat,
+};
 
 struct XdgToplevelDragAwareSource<S: Source> {
     inner: S,
@@ -308,7 +314,8 @@ impl SeatHandler for CompositorState {
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
         let dh = &self.core.display_handle;
         let client = focused.and_then(|s| dh.get_client(s.id()).ok());
-        set_data_device_focus(dh, seat, client);
+        set_data_device_focus(dh, seat, client.clone());
+        set_primary_focus(dh, seat, client);
 
         self.keyboard_on_focus_surface_changed(focused);
 
@@ -500,9 +507,6 @@ impl SelectionHandler for CompositorState {
         source: Option<SelectionSource>,
         _seat: Seat<Self>,
     ) {
-        if ty != SelectionTarget::Clipboard {
-            return;
-        }
         let Some((_, xwm)) = self.windows.x11_wm_slot.as_mut() else {
             return;
         };
@@ -519,9 +523,6 @@ impl SelectionHandler for CompositorState {
         _seat: Seat<Self>,
         user_data: &Self::SelectionUserData,
     ) {
-        if ty != SelectionTarget::Clipboard {
-            return;
-        }
         if user_data.is_empty() {
             let Some((_, xwm)) = self.windows.x11_wm_slot.as_mut() else {
                 return;
@@ -531,13 +532,19 @@ impl SelectionHandler for CompositorState {
             }
             return;
         }
-        if mime_type != "image/png" {
+        if ty != SelectionTarget::Clipboard || mime_type != "image/png" {
             return;
         }
         let mut file = std::fs::File::from(fd);
         if let Err(error) = file.write_all(user_data.as_slice()) {
             tracing::warn!(%error, "clipboard image write failed");
         }
+    }
+}
+
+impl PrimarySelectionHandler for CompositorState {
+    fn primary_selection_state(&mut self) -> &mut PrimarySelectionState {
+        &mut self.input_routing.primary_selection_state
     }
 }
 
@@ -625,6 +632,7 @@ impl WaylandDndGrabHandler for CompositorState {
 
 delegate_data_control!(crate::CompositorState);
 delegate_data_device!(crate::CompositorState);
+delegate_primary_selection!(crate::CompositorState);
 
 impl OutputHandler for CompositorState {}
 delegate_output!(crate::CompositorState);

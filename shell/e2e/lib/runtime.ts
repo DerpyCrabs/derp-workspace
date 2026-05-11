@@ -6,6 +6,7 @@ import { inflateSync } from 'node:zlib'
 
 export const BTN_LEFT = 0x110
 export const BTN_RIGHT = 0x111
+export const BTN_MIDDLE = 0x112
 export const NATIVE_APP_ID = 'derp.e2e.native'
 export const X11_XTERM_APP_ID = 'derp-x11-xterm'
 export const SHELL_TEST_APP_ID = 'derp.test-shell'
@@ -3174,6 +3175,8 @@ export function buildNativeSpawnCommand({
   touchStatusJson,
   xdgPopupGrabProbe = false,
   xdgPopupGrabStatusJson,
+  primarySelectionText,
+  primaryPasteStatusJson,
 }: {
   title: string
   appId?: string
@@ -3206,6 +3209,8 @@ export function buildNativeSpawnCommand({
   touchStatusJson?: string
   xdgPopupGrabProbe?: boolean
   xdgPopupGrabStatusJson?: string
+  primarySelectionText?: string
+  primaryPasteStatusJson?: string
 }): string {
   const parts = [
     nativeBin(),
@@ -3243,6 +3248,8 @@ export function buildNativeSpawnCommand({
   if (touchStatusJson) parts.push('--touch-status-json', shellQuote(touchStatusJson))
   if (xdgPopupGrabProbe) parts.push('--xdg-popup-grab-probe')
   if (xdgPopupGrabStatusJson) parts.push('--xdg-popup-grab-status-json', shellQuote(xdgPopupGrabStatusJson))
+  if (primarySelectionText) parts.push('--primary-selection-text', shellQuote(primarySelectionText))
+  if (primaryPasteStatusJson) parts.push('--primary-paste-status-json', shellQuote(primaryPasteStatusJson))
   if (spawnOnPressCommand) {
     parts.push('--spawn-on-press-command', shellQuote(spawnOnPressCommand))
   }
@@ -3292,6 +3299,8 @@ export async function spawnNativeWindow(
     touchStatusJson,
     xdgPopupGrabProbe,
     xdgPopupGrabStatusJson,
+    primarySelectionText,
+    primaryPasteStatusJson,
   }: {
     title: string
     appId?: string
@@ -3324,6 +3333,8 @@ export async function spawnNativeWindow(
     touchStatusJson?: string
     xdgPopupGrabProbe?: boolean
     xdgPopupGrabStatusJson?: string
+    primarySelectionText?: string
+    primaryPasteStatusJson?: string
   },
 ): Promise<NativeSpawnResult> {
   const command = buildNativeSpawnCommand({
@@ -3358,6 +3369,8 @@ export async function spawnNativeWindow(
     touchStatusJson,
     xdgPopupGrabProbe,
     xdgPopupGrabStatusJson,
+    primarySelectionText,
+    primaryPasteStatusJson,
   })
   await spawnCommand(base, command)
   return waitForSpawnedWindow(base, knownWindowIds, { title, appId, command })
