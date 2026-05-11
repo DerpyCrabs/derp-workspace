@@ -61,13 +61,7 @@ impl CompositorState {
                         .get_pointer()
                         .and_then(|pointer| pointer.current_focus())
                 });
-            let app_id = self
-                .logical_focused_window_id()
-                .or_else(|| self.keyboard_focused_window_id())
-                .and_then(|window_id| self.windows.window_registry.window_info(window_id))
-                .map(|info| info.app_id);
             let data = XdgActivationTokenData {
-                app_id,
                 surface,
                 ..Default::default()
             };

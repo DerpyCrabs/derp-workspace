@@ -143,12 +143,22 @@ impl CompositorState {
             })
     }
 
-    fn xdg_activation_client_token_is_valid(&self, data: &XdgActivationTokenData) -> bool {
+    fn xdg_activation_client_token_is_valid(
+        &self,
+        data: &XdgActivationTokenData,
+        require_current_serial: bool,
+    ) -> bool {
         let Some(client_id) = data.client_id.as_ref() else {
             return true;
         };
         let Some(surface) = data.surface.as_ref() else {
-            return false;
+            let Some((serial, seat)) = data.serial.as_ref() else {
+                return false;
+            };
+            if Seat::from_resource(seat) != Some(self.input_routing.seat.clone()) {
+                return false;
+            }
+            return !require_current_serial || self.xdg_activation_serial_is_current(*serial);
         };
         if surface
             .client()
@@ -164,18 +174,16 @@ impl CompositorState {
         data: &XdgActivationTokenData,
         target: &WindowInfo,
     ) -> bool {
-        if !self.xdg_activation_client_token_is_valid(data) {
+        if !self.xdg_activation_client_token_is_valid(data, false) {
             return false;
         }
-        if data.client_id.is_some() {
-            if let Some(app_id) = data
-                .app_id
-                .as_ref()
-                .filter(|app_id| !app_id.trim().is_empty())
-            {
-                if target.app_id != *app_id {
-                    return false;
-                }
+        if let Some(app_id) = data
+            .app_id
+            .as_ref()
+            .filter(|app_id| !app_id.trim().is_empty())
+        {
+            if target.app_id != *app_id {
+                return false;
             }
         }
         true
@@ -366,10 +374,10 @@ impl XdgActivationHandler for CompositorState {
         if !self.xdg_activation_serial_is_current(serial) {
             return false;
         }
-        if !self.xdg_activation_client_token_is_valid(&data) {
+        if !self.xdg_activation_client_token_is_valid(&data, true) {
             return false;
         }
-        data.surface.is_some()
+        true
     }
 
     fn request_activation(

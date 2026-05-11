@@ -3154,6 +3154,7 @@ export function buildNativeSpawnCommand({
   spawnOnPressCommand,
   activationAppId,
   activationTokenFile,
+  activationOmitSurface = false,
   requestTokenOnPointerEnter = false,
   fifoSmoke = false,
   presentationSmoke = false,
@@ -3185,6 +3186,7 @@ export function buildNativeSpawnCommand({
   spawnOnPressCommand?: string
   activationAppId?: string
   activationTokenFile?: string
+  activationOmitSurface?: boolean
   requestTokenOnPointerEnter?: boolean
   fifoSmoke?: boolean
   presentationSmoke?: boolean
@@ -3246,6 +3248,7 @@ export function buildNativeSpawnCommand({
   }
   if (activationAppId) parts.push('--activation-app-id', shellQuote(activationAppId))
   if (activationTokenFile) parts.push('--activation-token-file', shellQuote(activationTokenFile))
+  if (activationOmitSurface) parts.push('--activation-omit-surface')
   if (requestTokenOnPointerEnter) parts.push('--request-token-on-pointer-enter')
   return parts.join(' ')
 }
@@ -3269,6 +3272,7 @@ export async function spawnNativeWindow(
     spawnOnPressCommand,
     activationAppId,
     activationTokenFile,
+    activationOmitSurface,
     requestTokenOnPointerEnter,
     fifoSmoke,
     presentationSmoke,
@@ -3300,6 +3304,7 @@ export async function spawnNativeWindow(
     spawnOnPressCommand?: string
     activationAppId?: string
     activationTokenFile?: string
+    activationOmitSurface?: boolean
     requestTokenOnPointerEnter?: boolean
     fifoSmoke?: boolean
     presentationSmoke?: boolean
@@ -3333,6 +3338,7 @@ export async function spawnNativeWindow(
     spawnOnPressCommand,
     activationAppId,
     activationTokenFile,
+    activationOmitSurface,
     requestTokenOnPointerEnter,
     fifoSmoke,
     presentationSmoke,

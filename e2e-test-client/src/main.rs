@@ -224,6 +224,8 @@ struct Args {
     #[arg(long)]
     activation_token_file: Option<String>,
     #[arg(long, default_value_t = false)]
+    activation_omit_surface: bool,
+    #[arg(long, default_value_t = false)]
     request_token_on_pointer_enter: bool,
     #[arg(long, default_value_t = false)]
     fifo_smoke: bool,
@@ -595,6 +597,7 @@ fn main() {
         spawn_on_press_command: args.spawn_on_press_command,
         activation_app_id: args.activation_app_id,
         activation_token_file: args.activation_token_file,
+        activation_omit_surface: args.activation_omit_surface,
         request_token_on_pointer_enter: args.request_token_on_pointer_enter,
         spawn_on_press_requested: false,
         move_on_header_press: args.move_on_header_press,
@@ -838,6 +841,7 @@ struct TestClient {
     spawn_on_press_command: Option<String>,
     activation_app_id: Option<String>,
     activation_token_file: Option<String>,
+    activation_omit_surface: bool,
     request_token_on_pointer_enter: bool,
     spawn_on_press_requested: bool,
     move_on_header_press: bool,
@@ -1503,7 +1507,7 @@ impl TestClient {
                         .unwrap_or_else(|| self.app_id.clone()),
                 ),
                 seat_and_serial: Some((seat, serial)),
-                surface: Some(surface),
+                surface: (!self.activation_omit_surface).then_some(surface),
             },
         );
     }
