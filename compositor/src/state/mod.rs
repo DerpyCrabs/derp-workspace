@@ -3534,6 +3534,7 @@ impl CompositorState {
 mod core;
 mod focus_stack;
 mod native_window_ops;
+mod osk_runtime;
 mod output_layout_runtime;
 mod render_workspace;
 mod screenshot_requests;

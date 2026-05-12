@@ -20,6 +20,10 @@ const PR_SET_PDEATHSIG: libc::c_int = 1;
 pub fn spawn_shell_command_line(cmd: &str) -> io::Result<Child> {
     let mut command = std::process::Command::new("/bin/sh");
     command.arg("-c").arg(cmd);
+    spawn_process_group(command)
+}
+
+pub fn spawn_process_group(mut command: std::process::Command) -> io::Result<Child> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

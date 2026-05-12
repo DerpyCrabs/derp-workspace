@@ -5,11 +5,14 @@ import type { DesktopApplicationsController } from '@/features/desktop/desktopAp
 import { Select } from '@/host/Select'
 import {
   DEFAULT_SHELL_KEYBOARD_SETTINGS,
+  DEFAULT_SHELL_OSK_SETTINGS,
   keyboardLayoutEntriesToCsv,
   keyboardVariantEntriesToCsv,
   loadShellKeyboardSettings,
+  loadShellOskSettings,
   mergeKeyboardLayoutAndVariantCsv,
   saveShellKeyboardSettings,
+  saveShellOskSettings,
 } from './keyboardSettings'
 import {
   BUILTIN_HOTKEY_ACTIONS,
@@ -45,6 +48,7 @@ const HOTKEY_SELECT_TRIGGER_CLASS =
 
 const ENABLED_OPTIONS = ['yes', 'no'] as const
 const ACTION_OPTIONS: HotkeyAction[] = ['builtin', 'launch', 'scratchpad']
+const OSK_PROVIDER_OPTIONS = ['squeekboard'] as const
 
 function updateHotkeyBinding(settings: HotkeySettings, index: number, next: HotkeyBinding): HotkeySettings {
   return { bindings: settings.bindings.map((binding, rowIndex) => (rowIndex === index ? next : binding)) }
@@ -99,6 +103,11 @@ export function SettingsKeyboardPage(props: {
   const [err, setErr] = createSignal<string | null>(null)
   const [saveErr, setSaveErr] = createSignal<string | null>(null)
   const [savedAt, setSavedAt] = createSignal<number | null>(null)
+  const [oskEnabled, setOskEnabled] = createSignal(DEFAULT_SHELL_OSK_SETTINGS.enabled)
+  const [oskProvider, setOskProvider] = createSignal(DEFAULT_SHELL_OSK_SETTINGS.provider)
+  const [oskSaveBusy, setOskSaveBusy] = createSignal(false)
+  const [oskErr, setOskErr] = createSignal<string | null>(null)
+  const [oskSavedAt, setOskSavedAt] = createSignal<number | null>(null)
   const [hotkeys, setHotkeys] = createSignal<HotkeySettings>({ bindings: [] })
   const [hotkeysBusy, setHotkeysBusy] = createSignal(false)
   const [hotkeysSaveBusy, setHotkeysSaveBusy] = createSignal(false)
@@ -120,6 +129,9 @@ export function SettingsKeyboardPage(props: {
       setVariantCsv(keyboardVariantEntriesToCsv(settings.layouts))
       setRepeatRate(settings.repeat_rate)
       setRepeatDelayMs(settings.repeat_delay_ms)
+      const osk = await loadShellOskSettings(base)
+      setOskEnabled(osk.enabled)
+      setOskProvider(osk.provider)
     } catch (error) {
       setErr(error instanceof Error ? error.message : String(error))
     } finally {
@@ -205,6 +217,34 @@ export function SettingsKeyboardPage(props: {
       setHotkeysErr(error instanceof Error ? error.message : String(error))
     } finally {
       setHotkeysSaveBusy(false)
+    }
+  }
+
+  async function saveOsk() {
+    const base = shellHttpBase()
+    if (!base) {
+      setOskErr('Needs cef_host control server to save on-screen keyboard settings.')
+      return
+    }
+    setOskSaveBusy(true)
+    setOskErr(null)
+    setOskSavedAt(null)
+    try {
+      await saveShellOskSettings(
+        {
+          enabled: oskEnabled(),
+          provider: oskProvider(),
+        },
+        base,
+      )
+      setOskSavedAt(Date.now())
+      const osk = await loadShellOskSettings(base)
+      setOskEnabled(osk.enabled)
+      setOskProvider(osk.provider)
+    } catch (error) {
+      setOskErr(error instanceof Error ? error.message : String(error))
+    } finally {
+      setOskSaveBusy(false)
     }
   }
 
@@ -338,6 +378,63 @@ export function SettingsKeyboardPage(props: {
         </Show>
         <Show when={saveErr()}>
           <p class="mt-3 text-[0.8rem] text-(--shell-warning-text)">{saveErr()}</p>
+        </Show>
+      </div>
+      <div class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded-lg px-3 py-3" data-settings-osk>
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p class="text-[0.72rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">
+              On-screen keyboard
+            </p>
+            <p class="mt-1 text-[0.75rem] text-(--shell-text-dim)">
+              Provider is launched by the compositor session.
+            </p>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,10rem)_minmax(0,1fr)]">
+          <label class="space-y-1 text-xs text-(--shell-text-muted)">
+            <span>Enabled</span>
+            <Select
+              options={ENABLED_OPTIONS}
+              value={oskEnabled() ? 'yes' : 'no'}
+              onChange={(value) => setOskEnabled(value === 'yes')}
+              itemLabel={(value) => (value === 'yes' ? 'On' : 'Off')}
+              equals={(a, b) => a === b}
+              triggerClass={HOTKEY_SELECT_TRIGGER_CLASS}
+              triggerAttrs={{ 'data-settings-osk-enabled': '' }}
+              optionAttrs={(value) => ({ 'data-settings-osk-enabled-option': String(value) })}
+            />
+          </label>
+          <label class="space-y-1 text-xs text-(--shell-text-muted)">
+            <span>Provider</span>
+            <Select
+              options={OSK_PROVIDER_OPTIONS}
+              value={oskProvider()}
+              onChange={(value) => setOskProvider(value === 'squeekboard' ? 'squeekboard' : DEFAULT_SHELL_OSK_SETTINGS.provider)}
+              itemLabel={(value) => (value === 'squeekboard' ? 'Squeekboard' : String(value))}
+              equals={(a, b) => a === b}
+              triggerClass={HOTKEY_SELECT_TRIGGER_CLASS}
+              triggerAttrs={{ 'data-settings-osk-provider': '' }}
+              optionAttrs={(value) => ({ 'data-settings-osk-provider-option': String(value) })}
+            />
+          </label>
+        </div>
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            data-settings-osk-save
+            class="border border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default"
+            disabled={oskSaveBusy() || !shellHttpBase()}
+            onClick={() => void saveOsk()}
+          >
+            {oskSaveBusy() ? 'Saving…' : 'Apply on-screen keyboard'}
+          </button>
+          <Show when={oskSavedAt()}>
+            <span class="text-[0.76rem] text-(--shell-text-dim)">Applied just now.</span>
+          </Show>
+        </div>
+        <Show when={oskErr()}>
+          <p class="mt-3 text-[0.8rem] text-(--shell-warning-text)">{oskErr()}</p>
         </Show>
       </div>
       <div class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded-lg px-3 py-3" data-settings-hotkeys>

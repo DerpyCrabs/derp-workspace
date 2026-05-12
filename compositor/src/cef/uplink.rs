@@ -82,6 +82,13 @@ impl UplinkToCompositor {
         self.run_result(move |s| s.apply_hotkey_settings(settings))
     }
 
+    pub fn settings_osk_apply(
+        &self,
+        settings: crate::session::settings_config::OskSettingsFile,
+    ) -> Result<(), String> {
+        self.run_result(move |s| s.apply_osk_settings(settings))
+    }
+
     pub fn settings_cursor_apply(
         &self,
         settings: crate::session::settings_config::CursorSettingsFile,

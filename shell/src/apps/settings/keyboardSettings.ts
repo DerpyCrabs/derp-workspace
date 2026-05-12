@@ -11,10 +11,20 @@ export type ShellKeyboardSettings = {
   repeat_delay_ms: number
 }
 
+export type ShellOskSettings = {
+  enabled: boolean
+  provider: 'squeekboard'
+}
+
 export const DEFAULT_SHELL_KEYBOARD_SETTINGS: ShellKeyboardSettings = {
   layouts: [],
   repeat_rate: 25,
   repeat_delay_ms: 200,
+}
+
+export const DEFAULT_SHELL_OSK_SETTINGS: ShellOskSettings = {
+  enabled: true,
+  provider: 'squeekboard',
 }
 
 function asString(value: unknown): string {
@@ -59,8 +69,23 @@ export function sanitizeShellKeyboardSettings(value: unknown): ShellKeyboardSett
   }
 }
 
+export function sanitizeShellOskSettings(value: unknown): ShellOskSettings {
+  if (!value || typeof value !== 'object') {
+    return DEFAULT_SHELL_OSK_SETTINGS
+  }
+  const row = value as Record<string, unknown>
+  return {
+    enabled: typeof row.enabled === 'boolean' ? row.enabled : DEFAULT_SHELL_OSK_SETTINGS.enabled,
+    provider: row.provider === 'squeekboard' ? 'squeekboard' : DEFAULT_SHELL_OSK_SETTINGS.provider,
+  }
+}
+
 export async function loadShellKeyboardSettings(base: string | null): Promise<ShellKeyboardSettings> {
   return sanitizeShellKeyboardSettings(await getShellJson('/settings_keyboard', base))
+}
+
+export async function loadShellOskSettings(base: string | null): Promise<ShellOskSettings> {
+  return sanitizeShellOskSettings(await getShellJson('/settings_osk', base))
 }
 
 export async function saveShellKeyboardSettings(
@@ -68,6 +93,13 @@ export async function saveShellKeyboardSettings(
   base: string | null,
 ): Promise<void> {
   await postShellJson('/settings_keyboard', settings, base)
+}
+
+export async function saveShellOskSettings(
+  settings: ShellOskSettings,
+  base: string | null,
+): Promise<void> {
+  await postShellJson('/settings_osk', settings, base)
 }
 
 export function parseKeyboardLayoutCsv(value: string): ShellKeyboardLayoutEntry[] {

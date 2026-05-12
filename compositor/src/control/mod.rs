@@ -835,7 +835,7 @@ fn schema_json() -> Value {
             { "method": "window.move_monitor", "params": { "window_id": "u32", "direction": "left|right" } },
             { "method": "layout.set_monitor", "params": { "output_name": "string", "layout": "manual-snap|master-stack|columns|grid|custom-auto", "params": "object" } },
             { "method": "workspace.mutate", "params": { "mutation": "WorkspaceMutation json" } },
-            { "method": "settings.set", "params": { "section": "theme|keyboard|default_applications|files|scratchpads|notifications", "value": "object" } },
+            { "method": "settings.set", "params": { "section": "theme|keyboard|default_applications|files|scratchpads|notifications|osk", "value": "object" } },
             { "method": "palette.category.upsert", "params": { "owner": "identifier", "id": "identifier", "label": "string", "order": "i32?" } },
             { "method": "palette.category.remove", "params": { "owner": "identifier", "id": "identifier" } },
             { "method": "palette.action.upsert", "params": { "owner": "identifier", "id": "identifier", "category_id": "identifier", "label": "string", "run": "control|transaction|spawn" } },
@@ -1412,6 +1412,13 @@ impl CompositorState {
                 self.notifications_set_enabled(settings.enabled)?;
                 crate::session::settings_config::write_notifications_settings(settings)?;
             }
+            "osk" => {
+                let settings = serde_json::from_value::<
+                    crate::session::settings_config::OskSettingsFile,
+                >(value)
+                .map_err(|e| format!("invalid osk settings: {e}"))?;
+                self.apply_osk_settings(settings)?;
+            }
             other => return Err(format!("unknown settings section {other}")),
         }
         self.session_services.bump_control_settings_revision();
@@ -1428,6 +1435,7 @@ fn control_settings_value() -> Result<Value, String> {
         "files": serde_json::from_str::<Value>(&crate::session::settings_config::read_files_settings_json()?).map_err(|e| e.to_string())?,
         "scratchpads": serde_json::from_str::<Value>(&crate::session::settings_config::read_scratchpad_settings_json()?).map_err(|e| e.to_string())?,
         "notifications": serde_json::to_value(crate::session::settings_config::read_notifications_settings()).map_err(|e| e.to_string())?,
+        "osk": serde_json::to_value(crate::session::settings_config::read_osk_settings()).map_err(|e| e.to_string())?,
     }))
 }
 

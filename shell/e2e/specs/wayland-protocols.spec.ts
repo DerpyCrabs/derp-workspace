@@ -146,6 +146,11 @@ type VirtualKeyboardProbeStatus = {
   sequence: string;
 };
 
+type OskSettings = {
+  enabled: boolean;
+  provider: "squeekboard";
+};
+
 type KeyboardStatus = {
   enter: number;
   leave: number;
@@ -259,6 +264,52 @@ async function waitForStatusJson<T>(
     }
     throw error;
   }
+}
+
+async function runLocalShell(command: string): Promise<TestRunCommandResult> {
+  try {
+    const { stdout, stderr } = await execFileAsync("sh", ["-lc", command], {
+      timeout: 5000,
+    });
+    return { status: 0, stdout, stderr };
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException & {
+      code?: number;
+      stdout?: string;
+      stderr?: string;
+    };
+    return {
+      status: typeof err.code === "number" ? err.code : null,
+      stdout: err.stdout ?? "",
+      stderr: err.stderr ?? err.message,
+    };
+  }
+}
+
+async function squeekboardProcessEnvs(): Promise<Array<{ pid: string; env: string }>> {
+  const pids = await runLocalShell("pgrep -u \"$(id -un)\" -x squeekboard || true");
+  return Promise.all(
+    pids.stdout
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(async (pid) => {
+        const env = await runLocalShell(`tr '\\0' '\\n' < /proc/${shellQuote(pid)}/environ`);
+        return { pid, env: env.stdout };
+      }),
+  );
+}
+
+async function waitForSqueekboardStopped(): Promise<void> {
+  await waitFor(
+    "wait for squeekboard stop",
+    async () => {
+      const envs = await squeekboardProcessEnvs();
+      return envs.length === 0 ? true : null;
+    },
+    5000,
+    100,
+  );
 }
 
 async function signalExplicitSyncControl(socketPath: string): Promise<void> {
@@ -794,6 +845,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     state,
   }) => {
     const stamp = Date.now();
+    const originalOsk = await getJson<OskSettings>(base, "/settings_osk");
     const textStatusPath = path.join(
       artifactDir(),
       `text-input-status-${stamp}.json`,
@@ -802,29 +854,36 @@ export default defineGroup(import.meta.url, ({ test }) => {
       artifactDir(),
       `input-method-status-${stamp}.json`,
     );
-    const inputMethod = await spawnNativeWindow(base, state.knownWindowIds, {
-      title: `Derp Input Method ${stamp}`,
-      appId: "derp.e2e.input.method",
-      token: `input-method-${stamp}`,
-      strip: "yellow",
-      width: 320,
-      height: 180,
-      inputMethodProbe: true,
-      inputMethodStatusJson: inputMethodStatusPath,
+    await postJson(base, "/settings_osk", {
+      enabled: false,
+      provider: "squeekboard",
     });
-    state.spawnedNativeWindowIds.add(inputMethod.window.window_id);
-    const textClient = await spawnNativeWindow(base, state.knownWindowIds, {
-      title: `Derp Text Input ${stamp}`,
-      appId: "derp.e2e.text.input",
-      token: `text-input-${stamp}`,
-      strip: "green",
-      width: 420,
-      height: 240,
-      textInputProbe: true,
-      textInputStatusJson: textStatusPath,
-    });
-    state.spawnedNativeWindowIds.add(textClient.window.window_id);
+    await waitForSqueekboardStopped();
+    let inputMethod: Awaited<ReturnType<typeof spawnNativeWindow>> | null = null;
+    let textClient: Awaited<ReturnType<typeof spawnNativeWindow>> | null = null;
     try {
+      inputMethod = await spawnNativeWindow(base, state.knownWindowIds, {
+        title: `Derp Input Method ${stamp}`,
+        appId: "derp.e2e.input.method",
+        token: `input-method-${stamp}`,
+        strip: "yellow",
+        width: 320,
+        height: 180,
+        inputMethodProbe: true,
+        inputMethodStatusJson: inputMethodStatusPath,
+      });
+      state.spawnedNativeWindowIds.add(inputMethod.window.window_id);
+      textClient = await spawnNativeWindow(base, state.knownWindowIds, {
+        title: `Derp Text Input ${stamp}`,
+        appId: "derp.e2e.text.input",
+        token: `text-input-${stamp}`,
+        strip: "green",
+        width: 420,
+        height: 240,
+        textInputProbe: true,
+        textInputStatusJson: textStatusPath,
+      });
+      state.spawnedNativeWindowIds.add(textClient.window.window_id);
       await waitForNativeFocus(base, textClient.window.window_id);
       const compositor = await getJson<CompositorSnapshot>(
         base,
@@ -884,10 +943,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
         ),
       });
     } finally {
-      await closeWindow(base, textClient.window.window_id);
-      await waitForWindowGone(base, textClient.window.window_id, 5000);
-      await closeWindow(base, inputMethod.window.window_id);
-      await waitForWindowGone(base, inputMethod.window.window_id, 5000);
+      if (textClient) {
+        await closeWindow(base, textClient.window.window_id);
+        await waitForWindowGone(base, textClient.window.window_id, 5000);
+      }
+      if (inputMethod) {
+        await closeWindow(base, inputMethod.window.window_id);
+        await waitForWindowGone(base, inputMethod.window.window_id, 5000);
+      }
+      await postJson(base, "/settings_osk", originalOsk);
     }
   });
 
@@ -1014,6 +1078,85 @@ export default defineGroup(import.meta.url, ({ test }) => {
     } finally {
       await closeWindow(base, native.window.window_id);
       await waitForWindowGone(base, native.window.window_id, 5000);
+    }
+  });
+
+  test("settings-controlled squeekboard starts and stops in the Derp session", async ({
+    base,
+  }) => {
+    const command = await runLocalShell("command -v squeekboard");
+    assert(command.status === 0, `missing squeekboard: ${command.stderr}`);
+    const original = await getJson<OskSettings>(base, "/settings_osk");
+    const expectedDisplay = `WAYLAND_DISPLAY=wayland-d${process.getuid?.() ?? ""}`;
+    try {
+      await postJson(base, "/settings_osk", {
+        enabled: false,
+        provider: "squeekboard",
+      });
+      const stopped = await waitFor(
+        "wait for squeekboard stop",
+        async () => {
+          const envs = await squeekboardProcessEnvs();
+          return envs.length === 0 ? envs : null;
+        },
+        5000,
+        100,
+      );
+
+      await postJson(base, "/settings_osk", {
+        enabled: true,
+        provider: "squeekboard",
+      });
+      const started = await waitFor(
+        "wait for squeekboard session env",
+        async () => {
+          const envs = await squeekboardProcessEnvs();
+          return envs.find((entry) => entry.env.includes(expectedDisplay)) ?? null;
+        },
+        5000,
+        100,
+      );
+      assert(
+        started.env.includes("XDG_RUNTIME_DIR=/run/user/"),
+        `squeekboard missing runtime env: ${started.env}`,
+      );
+
+      const busPrefix = `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus`;
+      const shown = await waitFor(
+        "wait for squeekboard dbus show",
+        async () => {
+          const result = await runLocalShell(
+            `${busPrefix} busctl --user call sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b true`,
+          );
+          return result.status === 0 ? result : null;
+        },
+        5000,
+        100,
+      );
+      const compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      const output = compositor.outputs[0];
+      assert(output, "missing output for squeekboard screenshot");
+      const screenshot = await captureScreenshotRect(base, {
+        x: output.x,
+        y: output.y,
+        width: output.width,
+        height: output.height,
+      });
+      const hidden = await runLocalShell(
+        `${busPrefix} busctl --user call sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b false`,
+      );
+      await writeJsonArtifact("squeekboard-settings-runtime.json", {
+        stopped,
+        started: { pid: started.pid, env: started.env },
+        shown,
+        hidden,
+        screenshot,
+      });
+    } finally {
+      await postJson(base, "/settings_osk", original);
     }
   });
 

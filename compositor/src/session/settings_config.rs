@@ -112,6 +112,13 @@ pub struct NotificationsSettingsFile {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct OskSettingsFile {
+    pub enabled: bool,
+    pub provider: String,
+}
+
 impl Default for DefaultApplicationsFile {
     fn default() -> Self {
         Self {
@@ -138,6 +145,15 @@ impl Default for FilesSettingsFile {
 impl Default for NotificationsSettingsFile {
     fn default() -> Self {
         Self { enabled: true }
+    }
+}
+
+impl Default for OskSettingsFile {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            provider: "squeekboard".into(),
+        }
     }
 }
 
@@ -277,6 +293,7 @@ pub struct SettingsFile {
     pub default_applications: DefaultApplicationsFile,
     pub files: FilesSettingsFile,
     pub notifications: NotificationsSettingsFile,
+    pub osk: OskSettingsFile,
     pub scratchpads: ScratchpadSettingsFile,
 }
 
@@ -291,6 +308,7 @@ impl Default for SettingsFile {
             default_applications: DefaultApplicationsFile::default(),
             files: FilesSettingsFile::default(),
             notifications: NotificationsSettingsFile::default(),
+            osk: OskSettingsFile::default(),
             scratchpads: ScratchpadSettingsFile::default(),
         }
     }
@@ -418,6 +436,17 @@ pub fn sanitize_keyboard_settings(keyboard: KeyboardSettingsFile) -> KeyboardSet
         layouts,
         repeat_rate: keyboard.repeat_rate.clamp(1, 60),
         repeat_delay_ms: keyboard.repeat_delay_ms.clamp(100, 1000),
+    }
+}
+
+pub fn sanitize_osk_settings(osk: OskSettingsFile) -> OskSettingsFile {
+    OskSettingsFile {
+        enabled: osk.enabled,
+        provider: if osk.provider == "squeekboard" {
+            osk.provider
+        } else {
+            OskSettingsFile::default().provider
+        },
     }
 }
 
@@ -1052,6 +1081,7 @@ fn read_settings_file_from_path(path: &Path) -> SettingsFile {
                 sanitize_default_applications_settings(cfg.default_applications);
             cfg.files = sanitize_files_settings(cfg.files);
             cfg.notifications = sanitize_notifications_settings(cfg.notifications);
+            cfg.osk = sanitize_osk_settings(cfg.osk);
             cfg.scratchpads = sanitize_scratchpad_settings(cfg.scratchpads);
             if cfg.version == 0 {
                 cfg.version = 1;
@@ -1131,6 +1161,41 @@ pub fn write_notifications_settings(settings: NotificationsSettingsFile) -> Resu
     }
     cfg.version = 1;
     cfg.notifications = notifications;
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&path, format!("{json}\n")).map_err(|e| {
+        tracing::warn!(
+            target: "derp_settings_config",
+            ?e,
+            path = %path.display(),
+            "write settings config"
+        );
+        e.to_string()
+    })
+}
+
+pub fn read_osk_settings() -> OskSettingsFile {
+    let Some(path) = settings_config_path() else {
+        return OskSettingsFile::default();
+    };
+    read_settings_file_from_path(&path).osk
+}
+
+pub fn read_osk_settings_json() -> Result<String, String> {
+    serde_json::to_string(&read_osk_settings()).map_err(|e| e.to_string())
+}
+
+pub fn write_osk_settings(settings: OskSettingsFile) -> Result<(), String> {
+    let Some(path) = settings_config_path() else {
+        return Err("missing config dir".into());
+    };
+    ensure_parent_dir(&path)?;
+    let mut cfg = read_settings_file_from_path(&path);
+    let osk = sanitize_osk_settings(settings);
+    if cfg.version == 1 && cfg.osk == osk {
+        return Ok(());
+    }
+    cfg.version = 1;
+    cfg.osk = osk;
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     std::fs::write(&path, format!("{json}\n")).map_err(|e| {
         tracing::warn!(
@@ -1325,11 +1390,12 @@ mod tests {
 
     use super::{
         normalize_hotkey_chord, read_cursor_settings, read_hotkey_settings, read_keyboard_settings,
-        read_theme_settings, sanitize_cursor_settings, sanitize_hotkey_settings_for_write,
-        sanitize_keyboard_settings, sanitize_theme_settings, settings_config_path,
-        write_cursor_settings, write_hotkey_settings, write_keyboard_settings,
-        write_theme_settings, CursorSettingsFile, HotkeyActionFile, HotkeyBindingFile,
-        HotkeySettingsFile, KeyboardLayoutEntryFile, KeyboardSettingsFile, ThemeSettingsFile,
+        read_osk_settings, read_theme_settings, sanitize_cursor_settings,
+        sanitize_hotkey_settings_for_write, sanitize_keyboard_settings, sanitize_osk_settings,
+        sanitize_theme_settings, settings_config_path, write_cursor_settings,
+        write_hotkey_settings, write_keyboard_settings, write_osk_settings, write_theme_settings,
+        CursorSettingsFile, HotkeyActionFile, HotkeyBindingFile, HotkeySettingsFile,
+        KeyboardLayoutEntryFile, KeyboardSettingsFile, OskSettingsFile, ThemeSettingsFile,
     };
 
     fn env_lock() -> &'static Mutex<()> {
@@ -1486,6 +1552,55 @@ mod tests {
                 repeat_delay_ms: 1000,
             }
         );
+    }
+
+    #[test]
+    fn sanitize_osk_settings_defaults_unknown_provider() {
+        assert_eq!(
+            sanitize_osk_settings(OskSettingsFile {
+                enabled: false,
+                provider: "other".into(),
+            }),
+            OskSettingsFile {
+                enabled: false,
+                provider: "squeekboard".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn read_and_write_osk_settings_round_trip() {
+        let _guard = env_lock().lock().unwrap();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "derp-settings-config-osk-test-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("main")
+        ));
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var("DERP_SETTINGS_CONFIG", &path);
+
+        write_osk_settings(OskSettingsFile {
+            enabled: false,
+            provider: "squeekboard".into(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            read_osk_settings(),
+            OskSettingsFile {
+                enabled: false,
+                provider: "squeekboard".into(),
+            }
+        );
+
+        let raw = std::fs::read_to_string(settings_config_path().unwrap()).unwrap();
+        assert!(raw.contains("\"osk\""));
+        assert!(raw.contains("\"enabled\": false"));
+        assert!(raw.contains("\"provider\": \"squeekboard\""));
+
+        let _ = std::fs::remove_file(&path);
+        std::env::remove_var("DERP_SETTINGS_CONFIG");
     }
 
     #[test]

@@ -128,6 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("XWayland disabled by configuration");
         xwayland::spawn_pending_sidecar(&mut data);
     }
+    data.state.start_osk_from_settings();
 
     let loop_stop = data.state.loop_signal();
     let event_loop_stop_flag = data.state.event_loop_stop_flag();
@@ -183,6 +184,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    data.state.stop_osk();
     compositor::sidecar::terminate_sidecar(&mut data.command_child);
 
     cef_shutdown.store(true, Ordering::SeqCst);

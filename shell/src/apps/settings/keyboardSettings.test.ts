@@ -4,6 +4,7 @@ import {
   keyboardVariantEntriesToCsv,
   mergeKeyboardLayoutAndVariantCsv,
   sanitizeShellKeyboardSettings,
+  sanitizeShellOskSettings,
 } from './keyboardSettings'
 
 describe('keyboardSettings', () => {
@@ -32,5 +33,16 @@ describe('keyboardSettings', () => {
     ])
     expect(keyboardLayoutEntriesToCsv(layouts)).toBe('us, de')
     expect(keyboardVariantEntriesToCsv(layouts)).toBe(', nodeadkeys')
+  })
+
+  it('sanitizes osk settings', () => {
+    expect(sanitizeShellOskSettings({ enabled: false, provider: 'other' })).toEqual({
+      enabled: false,
+      provider: 'squeekboard',
+    })
+    expect(sanitizeShellOskSettings(null)).toEqual({
+      enabled: true,
+      provider: 'squeekboard',
+    })
   })
 })

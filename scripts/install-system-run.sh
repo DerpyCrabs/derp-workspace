@@ -36,6 +36,7 @@ ensure_runtime_packages() {
   command -v xclip >/dev/null 2>&1 || missing+=(xclip)
   command -v wl-copy >/dev/null 2>&1 || missing+=(wl-copy)
   command -v wl-paste >/dev/null 2>&1 || missing+=(wl-paste)
+  command -v squeekboard >/dev/null 2>&1 || missing+=(squeekboard)
   [[ ${#missing[@]} -eq 0 ]] && return
   if command -v apt-get >/dev/null 2>&1; then
     for cmd in "${missing[@]}"; do
@@ -43,6 +44,7 @@ ensure_runtime_packages() {
         xterm) packages+=(xterm) ;;
         xclip) packages+=(xclip) ;;
         wl-copy|wl-paste) packages+=(wl-clipboard) ;;
+        squeekboard) packages+=(squeekboard) ;;
       esac
     done
     mapfile -t packages < <(printf '%s\n' "${packages[@]}" | awk '!seen[$0]++')
@@ -57,6 +59,7 @@ ensure_runtime_packages() {
         xterm) packages+=(xterm) ;;
         xclip) packages+=(xclip) ;;
         wl-copy|wl-paste) packages+=(wl-clipboard) ;;
+        squeekboard) packages+=(squeekboard) ;;
       esac
     done
     mapfile -t packages < <(printf '%s\n' "${packages[@]}" | awk '!seen[$0]++')
@@ -65,7 +68,7 @@ ensure_runtime_packages() {
     return
   fi
   echo "install-system: missing runtime commands: ${missing[*]}" >&2
-  echo "install-system: install xterm, xclip, and wl-clipboard on the remote host, then re-run." >&2
+  echo "install-system: install xterm, xclip, wl-clipboard, and squeekboard on the remote host, then re-run." >&2
   exit 1
 }
 

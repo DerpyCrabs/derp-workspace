@@ -2,6 +2,8 @@ use super::*;
 
 pub(crate) struct SessionServicesState {
     pub(crate) vt_session: Option<LibSeatSession>,
+    pub(crate) osk_child: Option<std::process::Child>,
+    pub(crate) osk_monitor_active: bool,
     e2e_last_session_power_action: Option<String>,
     e2e_last_session_power_requested_at_ms: Option<u128>,
     pub(crate) control_event_hub: crate::control::ControlEventHub,
@@ -14,6 +16,8 @@ impl SessionServicesState {
     pub(crate) fn new() -> Self {
         Self {
             vt_session: None,
+            osk_child: None,
+            osk_monitor_active: false,
             e2e_last_session_power_action: None,
             e2e_last_session_power_requested_at_ms: None,
             control_event_hub: crate::control::ControlEventHub::default(),

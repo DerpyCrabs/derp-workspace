@@ -79,6 +79,10 @@ if ! command -v curl >/dev/null 2>&1; then
   echo "remote-verify: missing runtime command: curl" >&2
   exit 1
 fi
+if ! command -v squeekboard >/dev/null 2>&1; then
+  echo "remote-verify: missing runtime command: squeekboard" >&2
+  exit 1
+fi
 uid="$(id -u)"
 if [[ -S "/run/user/$uid/bus" ]] && command -v busctl >/dev/null 2>&1; then
   export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus"
