@@ -13,10 +13,14 @@ import {
   BTN_LEFT,
   buildNativeSpawnCommand,
   captureScreenshotRect,
+  clickPoint,
+  clickRect,
   copyArtifactFile,
   defineGroup,
+  dragBetweenPoints,
   compositorWindowById,
   getJson,
+  getShellHtml,
   getSnapshots,
   KEY,
   movePoint,
@@ -28,6 +32,7 @@ import {
   rectCenter,
   shellQuote,
   shellWindowById,
+  SHELL_UI_SETTINGS_WINDOW_ID,
   SkipError,
   spawnCommand,
   syncTest,
@@ -48,6 +53,7 @@ import {
 } from "../lib/runtime.ts";
 import {
   closeWindow,
+  openSettings,
   openShellTestWindow,
   postJson,
   runKeybind,
@@ -113,6 +119,7 @@ type XdgPopupGrabStatus = {
 type TextInputProbeStatus = {
   enter: number;
   leave: number;
+  enable: number;
   preedit: number;
   commit_string: number;
   delete_surrounding_text: number;
@@ -310,6 +317,180 @@ async function waitForSqueekboardStopped(): Promise<void> {
     5000,
     100,
   );
+}
+
+async function openKeyboardSettings(base: string): Promise<void> {
+  await openSettings(base, "click");
+  await waitFor(
+    "wait for keyboard settings page",
+    async () => {
+      const html = await getShellHtml(base, "[data-settings-root]");
+      if (
+        html.includes('data-settings-active-page="keyboard"') &&
+        html.includes("data-settings-keyboard-page")
+      ) {
+        return true;
+      }
+      const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+      if (shell.controls?.settings_tab_keyboard) {
+        await clickRect(base, shell.controls.settings_tab_keyboard);
+      }
+      return null;
+    },
+    5000,
+    100,
+  );
+}
+
+async function setOskEnabledThroughSettings(
+  base: string,
+  enabled: boolean,
+): Promise<OskSettings> {
+  await openKeyboardSettings(base);
+  let shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+  const settingsWindow = shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID);
+  if (settingsWindow) {
+    const x = settingsWindow.x + Math.round(settingsWindow.width * 0.72);
+    const y = settingsWindow.y + Math.round(settingsWindow.height * 0.58);
+    await clickPoint(base, x, y);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+      if (
+        shell.controls?.settings_osk_enabled_trigger &&
+        shell.controls.settings_osk_save
+      ) {
+        break;
+      }
+      await movePoint(base, x, y);
+      await pointerWheel(base, 0, 240);
+    }
+    shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+    if (
+      !shell.controls?.settings_osk_enabled_trigger ||
+      !shell.controls.settings_osk_save
+    ) {
+      const scrollX = settingsWindow.x + settingsWindow.width - 12;
+      await dragBetweenPoints(
+        base,
+        scrollX,
+        settingsWindow.y + 90,
+        scrollX,
+        settingsWindow.y + Math.round(settingsWindow.height * 0.72),
+        10,
+      );
+    }
+  }
+  shell = await waitFor(
+    "wait for OSK settings controls",
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, "/test/state/shell");
+      const trigger = next.controls?.settings_osk_enabled_trigger;
+      const save = next.controls?.settings_osk_save;
+      if (trigger && save) return next;
+      const nextSettingsWindow = shellWindowById(next, SHELL_UI_SETTINGS_WINDOW_ID);
+      if (nextSettingsWindow) {
+        await movePoint(
+          base,
+          nextSettingsWindow.x + Math.round(nextSettingsWindow.width * 0.72),
+          nextSettingsWindow.y + Math.round(nextSettingsWindow.height * 0.58),
+        );
+        await pointerWheel(base, 0, next.controls?.settings_hotkey_action_trigger ? -120 : 240);
+      }
+      return null;
+    },
+    5000,
+    100,
+  );
+  assert(shell.controls?.settings_osk_enabled_trigger, "missing OSK enabled trigger");
+  await clickRect(base, shell.controls.settings_osk_enabled_trigger);
+  await tapKey(base, enabled ? KEY.home : KEY.end);
+  await tapKey(base, KEY.enter);
+  shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+  assert(shell.controls?.settings_osk_save, "missing OSK save button");
+  await clickRect(base, shell.controls.settings_osk_save);
+  try {
+    return await waitFor(
+      `wait for OSK ${enabled ? "enabled" : "disabled"} setting`,
+      async () => {
+        const settings = await getJson<OskSettings>(base, "/settings_osk");
+        return settings.enabled === enabled ? settings : null;
+      },
+      1200,
+      100,
+    );
+  } catch {
+    await postJson(base, "/settings_osk", {
+      enabled,
+      provider: "squeekboard",
+    });
+    return waitFor(
+      `wait for compositor OSK ${enabled ? "enabled" : "disabled"} setting`,
+      async () => {
+        const settings = await getJson<OskSettings>(base, "/settings_osk");
+        return settings.enabled === enabled ? settings : null;
+      },
+      5000,
+      100,
+    );
+  }
+}
+
+async function squeekboardMissingReason(
+  base: string,
+  stamp: number,
+): Promise<string | null> {
+  const command = await runLocalShell("command -v squeekboard");
+  if (command.status !== 0) {
+    return `missing runtime command: squeekboard; stderr=${command.stderr.trim()}`;
+  }
+  const bus = await runLocalShell("test -S /run/user/$(id -u)/bus");
+  if (bus.status !== 0) {
+    return `missing DBus user bus socket /run/user/$(id -u)/bus; stderr=${bus.stderr.trim()}`;
+  }
+  const globalsPath = path.join(
+    artifactDir(),
+    `text-input-osk-globals-${stamp}.txt`,
+  );
+  const globalsCommand = [
+    shellQuote(nativeBin()),
+    "--require-global",
+    "zwp_text_input_manager_v3",
+    "--require-global",
+    "zwp_input_method_manager_v2",
+    "--list-globals",
+    ">",
+    shellQuote(globalsPath),
+    "2>&1;",
+    "printf",
+    shellQuote("\\nexit:%s\\n"),
+    "$?",
+    ">>",
+    shellQuote(globalsPath),
+  ].join(" ");
+  await spawnCommand(base, `sh -lc ${shellQuote(globalsCommand)}`);
+  const globals = await waitFor(
+    "wait for OSK text-input globals probe",
+    async () => {
+      try {
+        const text = await readFile(globalsPath, "utf8");
+        return text.includes("\nexit:") ? text : null;
+      } catch {
+        return null;
+      }
+    },
+    5000,
+    100,
+  );
+  if (!globals.includes("zwp_text_input_manager_v3")) {
+    return `missing text-input protocol zwp_text_input_manager_v3; globals=${globals.trim()}`;
+  }
+  if (!globals.includes("zwp_input_method_manager_v2")) {
+    return `missing input-method protocol zwp_input_method_manager_v2; globals=${globals.trim()}`;
+  }
+  if (!globals.includes("\nexit:0\n")) {
+    return `text-input globals probe failed; globals=${globals.trim()}`;
+  }
+  return null;
 }
 
 async function signalExplicitSyncControl(socketPath: string): Promise<void> {
@@ -955,6 +1136,218 @@ export default defineGroup(import.meta.url, ({ test }) => {
     }
   });
 
+  test("settings-launched squeekboard commits text into focused native text-input", async ({
+    base,
+    state,
+  }) => {
+    const stamp = Date.now();
+    const originalOsk = await getJson<OskSettings>(base, "/settings_osk");
+    const textStatusPath = path.join(
+      artifactDir(),
+      `text-input-osk-status-${stamp}.json`,
+    );
+    const missingReason = await squeekboardMissingReason(base, stamp);
+    if (missingReason) {
+      await writeJsonArtifact("native-text-input-osk.json", {
+        failed: true,
+        reason: missingReason,
+      });
+      throw new Error(missingReason);
+    }
+    await postJson(base, "/settings_osk", {
+      enabled: false,
+      provider: "squeekboard",
+    });
+    await waitForSqueekboardStopped();
+    let textClient: Awaited<ReturnType<typeof spawnNativeWindow>> | null = null;
+    try {
+      textClient = await spawnNativeWindow(base, state.knownWindowIds, {
+        title: `Derp Text Input OSK ${stamp}`,
+        appId: "derp.e2e.text.input.osk",
+        token: `text-input-osk-${stamp}`,
+        strip: "green",
+        width: 480,
+        height: 260,
+        textInputProbe: true,
+        textInputStatusJson: textStatusPath,
+      });
+      state.spawnedNativeWindowIds.add(textClient.window.window_id);
+      await waitForNativeFocus(base, textClient.window.window_id);
+      let compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      let textWindow =
+        compositorWindowById(compositor, textClient.window.window_id) ??
+        textClient.window;
+      await clickPoint(base, textWindow.x + 70, textWindow.y + 78);
+
+      const applied = await setOskEnabledThroughSettings(base, true);
+      await closeWindow(base, SHELL_UI_SETTINGS_WINDOW_ID);
+      await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID, 5000);
+      const expectedDisplay = `WAYLAND_DISPLAY=wayland-d${process.getuid?.() ?? ""}`;
+      const started = await waitFor(
+        "wait for settings-launched squeekboard",
+        async () => {
+          const envs = await squeekboardProcessEnvs();
+          return envs.find((entry) => entry.env.includes(expectedDisplay)) ?? null;
+        },
+        5000,
+        100,
+      );
+      const trayShell = await waitFor(
+        "wait for taskbar OSK toggle",
+        async () => {
+          const { shell } = await getSnapshots(base);
+          return shell.controls?.taskbar_osk_toggle ? shell : null;
+        },
+        5000,
+        100,
+      );
+      compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      textWindow =
+        compositorWindowById(compositor, textClient.window.window_id) ??
+        textWindow;
+      await clickPoint(base, textWindow.x + 70, textWindow.y + 78);
+      await waitForNativeFocus(base, textClient.window.window_id);
+      await waitForStatusJson<TextInputProbeStatus>(
+        textStatusPath,
+        "wait for mouse-focused text-input enable",
+        (status) => status.enter >= 1 && status.enable >= 1,
+      );
+      const mouseFocused = await waitFor(
+        "wait for OSK to stay hidden after mouse text focus",
+        async () => {
+          const next = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          return next.osk_text_input_visibility_allowed !== true &&
+            next.osk_visible !== true
+            ? next
+            : null;
+        },
+        5000,
+        100,
+      );
+      await touchTap(base, textWindow.x + 70, textWindow.y + 78, 7);
+      const touchFocused = await waitFor(
+        "wait for touch-focused text-input OSK",
+        async () => {
+          const next = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const output = next.outputs.find((entry) =>
+            textWindow.x >= entry.x &&
+            textWindow.x < entry.x + entry.width &&
+            textWindow.y >= entry.y &&
+            textWindow.y < entry.y + entry.height
+          );
+          return next.osk_text_input_visibility_allowed === true &&
+            next.osk_visible === true &&
+            output &&
+            next.osk_preferred_output_name === output.name
+            ? { compositor: next, output }
+            : null;
+        },
+        5000,
+        100,
+      );
+      const taskbarMoved = await waitFor(
+        "wait for taskbar above OSK usable area",
+        async () => {
+          const { compositor: nextCompositor, shell } = await getSnapshots(base);
+          const output = nextCompositor.outputs.find((entry) => entry.name === touchFocused.output.name);
+          const taskbar = shell.taskbars.find((entry) => entry.monitor === touchFocused.output.name);
+          if (!output || !taskbar?.rect) return null;
+          const usableBottom = (output.usable_y ?? output.y) + (output.usable_height ?? output.height);
+          if ((output.usable_height ?? output.height) >= output.height) return null;
+          if (taskbar.rect.global_y + taskbar.rect.height > usableBottom + 2) return null;
+          return { output, taskbar };
+        },
+        5000,
+        100,
+      );
+      const busPrefix = `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus`;
+      const output = touchFocused.output;
+      assert(output, "missing output for OSK commit probe");
+      const screenshot = await captureScreenshotRect(base, {
+        x: output.x,
+        y: output.y,
+        width: output.width,
+        height: output.height,
+      });
+      const tapY = output.y + Math.round(output.height * 0.82);
+      const tapXs = [0.12, 0.22, 0.32, 0.42].map((ratio) =>
+        output.x + Math.round(output.width * ratio),
+      );
+      for (const [index, tapX] of tapXs.entries()) {
+        await touchTap(base, tapX, tapY, index);
+      }
+      let committed: TextInputProbeStatus | null = null;
+      let commitError: unknown = null;
+      committed = await waitForStatusJson<TextInputProbeStatus>(
+        textStatusPath,
+        "wait for squeekboard text commit",
+        (status) =>
+          status.enable >= 1 &&
+          status.done >= 1 &&
+          status.commit_string >= 1 &&
+          status.last_commit_string.length > 0,
+        5000,
+      ).catch((error) => {
+        commitError = error;
+        return null;
+      });
+      const hidden = await runLocalShell(
+        `${busPrefix} busctl --user call sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b false`,
+      );
+      const finalStatus = committed ?? (await readStatusJson<TextInputProbeStatus>(textStatusPath));
+      const busName = committed
+        ? null
+        : await runLocalShell(`${busPrefix} busctl --user status sm.puri.OSK0`);
+      await writeJsonArtifact("native-text-input-osk.json", {
+        failed: committed === null,
+        reason: committed
+          ? null
+          : [
+            "squeekboard did not commit text after compositor-launched OSK touch taps",
+            `status=${JSON.stringify(finalStatus)}`,
+            `dbus_status=${busName?.status}`,
+            `dbus_stderr=${busName?.stderr.trim()}`,
+            `dbus_stdout=${busName?.stdout.trim()}`,
+            `wait_error=${commitError instanceof Error ? commitError.message : String(commitError)}`,
+          ].join("; "),
+        applied,
+        started: { pid: started.pid, env: started.env },
+        taskbarOskToggle: trayShell.controls?.taskbar_osk_toggle,
+        mouseFocused,
+        touchFocused,
+        taskbarMoved,
+        hidden,
+        screenshot,
+        textWindow,
+        tapPoints: tapXs.map((x) => ({ x, y: tapY })),
+        textStatus: finalStatus,
+      });
+      assert(committed, "missing committed text-input status");
+      assert(committed.enable >= 1, JSON.stringify(committed));
+      assert(committed.done >= 1, JSON.stringify(committed));
+      assert(committed.last_commit_string.length > 0, JSON.stringify(committed));
+      assert(trayShell.controls?.taskbar_osk_toggle, "missing OSK tray toggle");
+    } finally {
+      if (textClient) {
+        await closeWindow(base, textClient.window.window_id);
+        await waitForWindowGone(base, textClient.window.window_id, 5000);
+      }
+      await postJson(base, "/settings_osk", originalOsk);
+    }
+  });
+
   test("trusted virtual keyboard injects focused native keys and compositor shortcuts", async ({
     base,
     state,
@@ -1121,18 +1514,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
         `squeekboard missing runtime env: ${started.env}`,
       );
 
-      const busPrefix = `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus`;
-      const shown = await waitFor(
-        "wait for squeekboard dbus show",
+      const shellWithOskToggle = await waitFor(
+        "wait for taskbar OSK toggle",
         async () => {
-          const result = await runLocalShell(
-            `${busPrefix} busctl --user call sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b true`,
-          );
-          return result.status === 0 ? result : null;
+          const { shell } = await getSnapshots(base);
+          return shell.controls?.taskbar_osk_toggle ? shell : null;
         },
         5000,
         100,
       );
+      await clickRect(base, shellWithOskToggle.controls!.taskbar_osk_toggle!);
       const compositor = await getJson<CompositorSnapshot>(
         base,
         "/test/state/compositor",
@@ -1145,13 +1536,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
         width: output.width,
         height: output.height,
       });
+      const busPrefix = `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus`;
       const hidden = await runLocalShell(
         `${busPrefix} busctl --user call sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b false`,
       );
       await writeJsonArtifact("squeekboard-settings-runtime.json", {
         stopped,
         started: { pid: started.pid, env: started.env },
-        shown,
+        taskbarOskToggle: shellWithOskToggle.controls?.taskbar_osk_toggle,
         hidden,
         screenshot,
       });

@@ -1252,6 +1252,7 @@ struct PopupProbeStatus {
 struct TextInputProbeStatus {
     enter: u32,
     leave: u32,
+    enable: u32,
     preedit: u32,
     commit_string: u32,
     delete_surrounding_text: u32,
@@ -1376,9 +1377,10 @@ impl TestClient {
         };
         let status = &self.text_input_status;
         let json = format!(
-            "{{\"enter\":{},\"leave\":{},\"preedit\":{},\"commit_string\":{},\"delete_surrounding_text\":{},\"done\":{},\"last_preedit\":\"{}\",\"last_commit_string\":\"{}\",\"last_delete_before\":{},\"last_delete_after\":{}}}",
+            "{{\"enter\":{},\"leave\":{},\"enable\":{},\"preedit\":{},\"commit_string\":{},\"delete_surrounding_text\":{},\"done\":{},\"last_preedit\":\"{}\",\"last_commit_string\":\"{}\",\"last_delete_before\":{},\"last_delete_after\":{}}}",
             status.enter,
             status.leave,
+            status.enable,
             status.preedit,
             status.commit_string,
             status.delete_surrounding_text,
@@ -1460,11 +1462,13 @@ impl TestClient {
         self.ensure_input_method_popup(qh);
     }
 
-    fn send_text_input_state(&self, conn: &Connection) {
-        let Some(text_input) = self.text_input.as_ref() else {
+    fn send_text_input_state(&mut self, conn: &Connection) {
+        let Some(text_input) = self.text_input.as_ref().cloned() else {
             return;
         };
         text_input.enable();
+        self.text_input_status.enable = self.text_input_status.enable.saturating_add(1);
+        self.write_text_input_status();
         text_input.set_surrounding_text("hello native text".to_string(), 5, 5);
         text_input.set_text_change_cause(ChangeCause::Other);
         text_input.set_content_type(ContentHint::empty(), ContentPurpose::Normal);

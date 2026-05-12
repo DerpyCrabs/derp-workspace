@@ -343,6 +343,26 @@ function queryLargestRect(cache: QueryCache, selector: string, origin: CanvasOri
   return best
 }
 
+function queryLargestHitRect(cache: QueryCache, selector: string, origin: CanvasOrigin): E2eRectSnapshot | null {
+  let best: E2eRectSnapshot | null = null
+  let bestArea = -1
+  for (const el of cache.queryAll(selector)) {
+    const clientRect = el.getBoundingClientRect()
+    const cx = clientRect.left + clientRect.width / 2
+    const cy = clientRect.top + clientRect.height / 2
+    const hit = el.ownerDocument.elementFromPoint(cx, cy)
+    if (!hit || (hit !== el && !el.contains(hit))) continue
+    const rect = snapshotRect(el, origin)
+    if (!rect) continue
+    const area = rect.width * rect.height
+    if (area > bestArea) {
+      best = rect
+      bestArea = area
+    }
+  }
+  return best
+}
+
 export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin) {
   const fileBrowserListStateEl = queryWithin(root, '[data-file-browser-list-state]')
   const fileBrowserActivePathEl = queryWithin(root, '[data-file-browser-active-path]')
@@ -981,6 +1001,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       taskbar_settings_toggle: queryRect(cache, '[data-shell-settings-toggle]', args.origin),
       taskbar_debug_toggle: queryRect(cache, '[data-shell-debug-toggle]', args.origin),
       taskbar_volume_toggle: queryRect(cache, '[data-shell-volume-toggle]', args.origin),
+      taskbar_osk_toggle: queryRect(cache, '[data-shell-osk-toggle]', args.origin),
       taskbar_battery_indicator: queryRect(cache, '[data-shell-battery-indicator]', args.origin),
       taskbar_power_toggle: queryRect(cache, '[data-shell-power-toggle]', args.origin),
       volume_menu_panel: volumeMenuRect('[data-shell-volume-menu-panel]'),
@@ -1025,6 +1046,18 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
         '[data-settings-notification-history]',
         args.origin,
       ),
+      settings_osk_enabled_trigger: queryRect(cache, '[data-settings-osk-enabled]', args.origin),
+      settings_osk_enabled_on_option: queryRect(
+        cache,
+        '[data-settings-osk-enabled-option="yes"]',
+        args.origin,
+      ),
+      settings_osk_enabled_off_option: queryRect(
+        cache,
+        '[data-settings-osk-enabled-option="no"]',
+        args.origin,
+      ),
+      settings_osk_save: queryRect(cache, '[data-settings-osk-save]', args.origin),
       settings_scratchpads_page: queryRect(cache, '[data-settings-scratchpads-page]', args.origin),
       settings_scratchpad_window_inspector: queryRect(
         cache,
@@ -1033,19 +1066,19 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       ),
       settings_scratchpad_list: queryRect(cache, '[data-settings-scratchpad-list]', args.origin),
       settings_scratchpad_save: queryRect(cache, '[data-settings-scratchpad-save]', args.origin),
-      settings_hotkey_enabled_trigger: queryLargestRect(cache, '[data-settings-hotkey-enabled]', args.origin),
+      settings_hotkey_enabled_trigger: queryLargestHitRect(cache, '[data-settings-hotkey-enabled]', args.origin),
       settings_hotkey_enabled_off_option: queryRect(
         cache,
         '[data-settings-hotkey-enabled-option="no"]',
         args.origin,
       ),
-      settings_hotkey_action_trigger: queryLargestRect(cache, '[data-settings-hotkey-action]', args.origin),
+      settings_hotkey_action_trigger: queryLargestHitRect(cache, '[data-settings-hotkey-action]', args.origin),
       settings_hotkey_action_scratchpad_option: queryRect(
         cache,
         '[data-settings-hotkey-action-option="scratchpad"]',
         args.origin,
       ),
-      settings_hotkey_builtin_trigger: queryLargestRect(cache, '[data-settings-hotkey-builtin]', args.origin),
+      settings_hotkey_builtin_trigger: queryLargestHitRect(cache, '[data-settings-hotkey-builtin]', args.origin),
       settings_hotkey_builtin_close_option: queryRect(
         cache,
         '[data-settings-hotkey-builtin-option="close"]',

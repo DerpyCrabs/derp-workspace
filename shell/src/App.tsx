@@ -58,6 +58,7 @@ import { createFloatingLayerStore } from "@/features/floating/floatingLayers";
 import { createShellOverlayRegistry } from "@/features/floating/shellOverlay";
 import { spawnViaShellHttp } from "@/features/bridge/shellBridge";
 import { shellHttpBase } from "@/features/bridge/shellHttp";
+import { loadShellOskSettings } from "@/apps/settings/keyboardSettings";
 import {
   shellMoveLog,
   shellWireSend,
@@ -279,6 +280,7 @@ function App() {
   const [keyboardLayoutLabel, setKeyboardLayoutLabel] = createSignal<
     string | null
   >(null);
+  const [oskEnabled, setOskEnabled] = createSignal(false);
   const [volumeOverlay, setVolumeOverlay] = createSignal<{
     linear: number;
     muted: boolean;
@@ -305,6 +307,26 @@ function App() {
   const taskbarAutoHide = createMemo(
     () => outputTopology()?.taskbarAutoHide ?? false,
   );
+
+  createEffect(() => {
+    const base = shellHttpBase();
+    if (!base) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const next = await loadShellOskSettings(base);
+        if (!cancelled) setOskEnabled(next.enabled);
+      } catch {}
+    };
+    void refresh();
+    const interval = window.setInterval(() => {
+      void refresh();
+    }, 2000);
+    onCleanup(() => {
+      cancelled = true;
+      window.clearInterval(interval);
+    });
+  });
   const nativeDragPreviewAsset = createNativeDragPreviewRuntime(
     nativeDragPreview,
     shellWireSend,
@@ -1778,6 +1800,7 @@ function App() {
     taskbarRowsForScreen: workspaceLayoutBridge.taskbarRowsForScreen,
     focusedTaskbarWindowId,
     keyboardLayoutLabel,
+    oskEnabled,
     settingsHudFrameVisible,
     trayReservedPx,
     sniTrayItems,

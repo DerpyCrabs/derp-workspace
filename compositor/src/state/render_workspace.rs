@@ -86,10 +86,7 @@ impl CompositorState {
         let Some(output_geo) = self.output_topology.space.output_geometry(output) else {
             return false;
         };
-        let Some(layer_usable) = self
-            .output_topology
-            .layer_usable_area_global_for_output(output)
-        else {
+        let Some(layer_usable) = self.effective_layer_usable_area_global_for_output(output) else {
             return false;
         };
         if layer_usable != output_geo {

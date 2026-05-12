@@ -228,6 +228,9 @@ impl DrmHead {
                         for el in &shell_render.move_proxy {
                             render_elements.push(DesktopStack::ShellDma(el));
                         }
+                        for el in &shell_render.shell_ui_overlay {
+                            render_elements.push(DesktopStack::ShellDma(el));
+                        }
                         if let Some(ref el) = shell_render.dmabuf {
                             render_elements.push(DesktopStack::ShellDma(el));
                         }
@@ -280,6 +283,9 @@ impl DrmHead {
                 }
             } else {
                 for el in &shell_render.move_proxy {
+                    render_elements.push(DesktopStack::ShellDma(el));
+                }
+                for el in &shell_render.shell_ui_overlay {
                     render_elements.push(DesktopStack::ShellDma(el));
                 }
                 let tagged = derp_space_render::derp_space_render_elements_with_window_ids(

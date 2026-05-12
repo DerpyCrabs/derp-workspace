@@ -29,6 +29,7 @@ type ShellSurfaceRuntimeOptions = {
   taskbarRowsForScreen: (screen: LayoutScreen) => TaskbarWindowRow[]
   focusedTaskbarWindowId: Accessor<number | null>
   keyboardLayoutLabel: Accessor<string | null>
+  oskEnabled: Accessor<boolean>
   settingsHudFrameVisible: Accessor<boolean>
   trayReservedPx: Accessor<number>
   sniTrayItems: Accessor<TaskbarSniItem[]>
@@ -45,7 +46,7 @@ type ShellSurfaceRuntimeOptions = {
   openDebugShellWindow: () => void
   openTraySniMenu: (notifierId: string, requestSerial: number, clientX: number, clientY: number) => void
   shellWireSend: (
-    op: 'minimize' | 'sni_tray_activate' | 'sni_tray_open_menu',
+    op: 'minimize' | 'osk_toggle_visible' | 'sni_tray_activate' | 'sni_tray_open_menu',
     arg?: number | string,
     arg2?: number | string,
     arg3?: number,
@@ -108,6 +109,10 @@ export function createShellSurfaceRuntime(options: ShellSurfaceRuntimeOptions) {
         taskbarRowsForScreen={options.taskbarRowsForScreen}
         focusedWindowId={options.focusedTaskbarWindowId}
         keyboardLayoutLabel={options.keyboardLayoutLabel}
+        oskEnabled={options.oskEnabled}
+        onOskToggle={() => {
+          options.shellWireSend('osk_toggle_visible')
+        }}
         settingsHudFrameVisible={options.settingsHudFrameVisible}
         onSettingsPanelToggle={toggleSettingsShellWindow}
         onDebugPanelToggle={toggleDebugShellWindow}

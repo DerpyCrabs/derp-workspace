@@ -138,8 +138,11 @@ async function assertRoundedCsdTransparentOutside(
     width: window.width * scaleX,
     height: window.height * scaleY,
   }
-  const radius = Math.min(64, Math.max(18, Math.min(window.width, window.height) / 9))
-  const edgeTolerance = 1
+  const radiusLogical = Math.min(64, Math.max(18, Math.min(window.width, window.height) / 9))
+  const radiusX = radiusLogical * scaleX
+  const radiusY = radiusLogical * scaleY
+  const edgeToleranceX = scaleX
+  const edgeToleranceY = scaleY
   const cursorHotspot = cursor
     ? {
         x: (cursor.x - capture.x) * scaleX,
@@ -188,12 +191,12 @@ async function assertRoundedCsdTransparentOutside(
     if (px + 0.5 >= windowPixels.x + windowPixels.width) return colorAt(png.width - 1, py)
     if (py + 0.5 < windowPixels.y) return colorAt(px, 0)
     if (py + 0.5 >= windowPixels.y + windowPixels.height) return colorAt(px, png.height - 1)
-    const left = localX < radius
-    const top = localY < radius
+    const left = localX < radiusX
+    const top = localY < radiusY
     const edgeX = left ? 0 : png.width - 1
     const edgeY = top ? 0 : png.height - 1
-    const nearestHorizontal = top ? localY : window.height - localY
-    const nearestVertical = left ? localX : window.width - localX
+    const nearestHorizontal = top ? localY : windowPixels.height - localY
+    const nearestVertical = left ? localX : windowPixels.width - localX
     if (nearestHorizontal <= nearestVertical) return colorAt(px, edgeY)
     return colorAt(edgeX, py)
   }
@@ -207,21 +210,23 @@ async function assertRoundedCsdTransparentOutside(
       const localX = x - windowPixels.x
       const localY = y - windowPixels.y
       let shouldBeClear =
-        x < windowPixels.x - edgeTolerance ||
-        y < windowPixels.y - edgeTolerance ||
-        x >= windowPixels.x + windowPixels.width + edgeTolerance ||
-        y >= windowPixels.y + windowPixels.height + edgeTolerance
+        x < windowPixels.x - edgeToleranceX ||
+        y < windowPixels.y - edgeToleranceY ||
+        x >= windowPixels.x + windowPixels.width + edgeToleranceX ||
+        y >= windowPixels.y + windowPixels.height + edgeToleranceY
       if (!shouldBeClear) {
-        const left = localX < radius
-        const right = localX >= windowPixels.width - radius
-        const top = localY < radius
-        const bottom = localY >= windowPixels.height - radius
+        const left = localX < radiusX
+        const right = localX >= windowPixels.width - radiusX
+        const top = localY < radiusY
+        const bottom = localY >= windowPixels.height - radiusY
         if ((left || right) && (top || bottom)) {
-          const cx = left ? radius : windowPixels.width - radius
-          const cy = top ? radius : windowPixels.height - radius
+          const cx = left ? radiusX : windowPixels.width - radiusX
+          const cy = top ? radiusY : windowPixels.height - radiusY
           const dx = localX - cx
           const dy = localY - cy
-          shouldBeClear = dx * dx + dy * dy > (radius + 2) * (radius + 2)
+          const outerX = radiusX + 2 * scaleX
+          const outerY = radiusY + 2 * scaleY
+          shouldBeClear = (dx * dx) / (outerX * outerX) + (dy * dy) / (outerY * outerY) > 1
         }
       }
       if (!shouldBeClear) continue

@@ -91,7 +91,7 @@ use smithay::{
             xdg::{SurfaceCachedState, ToplevelSurface, XdgShellState, XdgToplevelSurfaceData},
         },
         shm::ShmState,
-        text_input::TextInputManagerState,
+        text_input::{TextInputManagerState, TextInputSeat},
         viewporter::ViewporterState,
         xdg_activation::{XdgActivationState, XdgActivationTokenData},
         xdg_foreign::{XdgForeignHandler, XdgForeignState},
@@ -2849,9 +2849,7 @@ impl CompositorState {
         output: &Output,
         titlebar_h: i32,
     ) -> Option<Rectangle<i32, Logical>> {
-        let g = self
-            .output_topology
-            .layer_usable_area_global_for_output(output)?;
+        let g = self.effective_layer_usable_area_global_for_output(output)?;
         let th = titlebar_h.max(0);
         if self.output_topology.taskbar_auto_hide {
             return Some(Rectangle::new(

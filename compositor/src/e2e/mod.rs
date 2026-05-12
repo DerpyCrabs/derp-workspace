@@ -220,6 +220,9 @@ struct E2eCompositorSnapshot {
     focused_shell_ui_window_id: Option<u32>,
     session_power_action: Option<String>,
     session_power_requested_at_ms: Option<u128>,
+    osk_visible: Option<bool>,
+    osk_text_input_visibility_allowed: bool,
+    osk_preferred_output_name: Option<String>,
     shell_keyboard_focus: bool,
     screenshot_selection_active: bool,
     shell_context_menu_visible: bool,
@@ -613,8 +616,7 @@ impl CompositorState {
                 let (last_flip_mode, last_flip_fallback_reason) =
                     self.output_flip_state(output.name().as_str());
                 let usable = self
-                    .output_topology
-                    .layer_usable_area_global_for_output(&output)
+                    .effective_layer_usable_area_global_for_output(&output)
                     .unwrap_or(geometry);
                 Some(E2eOutputSnapshot {
                     name: output.name(),
@@ -820,6 +822,11 @@ impl CompositorState {
             session_power_requested_at_ms: self
                 .session_services
                 .last_session_power_requested_at_ms(),
+            osk_visible: self.session_services.osk_visible,
+            osk_text_input_visibility_allowed: self
+                .session_services
+                .osk_text_input_visibility_allowed,
+            osk_preferred_output_name: self.session_services.osk_preferred_output_name.clone(),
             shell_keyboard_focus: self.shell_keyboard_capture_active(),
             screenshot_selection_active: self.capture.screenshot_selection_active(),
             shell_context_menu_visible: self.shell_osr.shell_exclusion_overlay_open

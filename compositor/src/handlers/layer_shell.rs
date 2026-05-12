@@ -34,13 +34,9 @@ impl CompositorState {
     }
 
     fn arrange_layer_output_and_refresh_usable_area(&mut self, output: &smithay::output::Output) {
-        let before = self
-            .output_topology
-            .layer_usable_area_global_for_output(output);
+        let before = self.effective_layer_usable_area_global_for_output(output);
         self.arrange_layer_output(output);
-        let after = self
-            .output_topology
-            .layer_usable_area_global_for_output(output);
+        let after = self.effective_layer_usable_area_global_for_output(output);
         if before != after {
             self.refresh_usable_area_dependent_window_layouts();
         }
@@ -74,6 +70,9 @@ impl WlrLayerShellHandler for CompositorState {
         };
         let layer_surface = DesktopLayerSurface::new(surface, namespace);
         let _ = layer_map_for_output(&output).map_layer(&layer_surface);
+        if CompositorState::osk_layer_namespace(layer_surface.namespace()) {
+            self.register_osk_layer_surface(layer_surface.clone());
+        }
         self.arrange_layer_output_and_refresh_usable_area(&output);
     }
 
@@ -95,17 +94,14 @@ impl WlrLayerShellHandler for CompositorState {
             let Some(layer) = layer else {
                 continue;
             };
-            let before = self
-                .output_topology
-                .layer_usable_area_global_for_output(output);
+            let before = self.effective_layer_usable_area_global_for_output(output);
             layer_map_for_output(output).unmap_layer(&layer);
-            let after = self
-                .output_topology
-                .layer_usable_area_global_for_output(output);
+            let after = self.effective_layer_usable_area_global_for_output(output);
             if before != after {
                 self.refresh_usable_area_dependent_window_layouts();
             }
         }
+        self.unregister_osk_layer_surface(surface.wl_surface());
     }
 }
 

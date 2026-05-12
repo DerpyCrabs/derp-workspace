@@ -175,16 +175,20 @@ function cloneExclusionRectArray(rects: readonly ShellExclusionRect[]): ShellExc
 function taskbarExclusionRect(screen: LayoutScreen, size: number, autoHide: boolean): ShellExclusionRect {
   const side = screen.taskbar_side
   const thickness = autoHide ? 2 : size
+  const x = screen.usable_x ?? screen.x
+  const y = screen.usable_y ?? screen.y
+  const w = screen.usable_width ?? screen.width
+  const h = screen.usable_height ?? screen.height
   if (side === 'top') {
-    return { x: screen.x, y: screen.y, w: screen.width, h: thickness }
+    return { x, y, w, h: thickness }
   }
   if (side === 'left') {
-    return { x: screen.x, y: screen.y, w: thickness, h: screen.height }
+    return { x, y, w: thickness, h }
   }
   if (side === 'right') {
-    return { x: screen.x + screen.width - thickness, y: screen.y, w: thickness, h: screen.height }
+    return { x: x + w - thickness, y, w: thickness, h }
   }
-  return { x: screen.x, y: screen.y + screen.height - thickness, w: screen.width, h: thickness }
+  return { x, y: y + h - thickness, w, h: thickness }
 }
 
 export function registerShellExclusionElement(

@@ -467,6 +467,7 @@ impl CompositorState {
             .shell_output_layout_message_with_revision(
                 bump_revision,
                 self.shell_osr.shell_window_physical_px,
+                self.session_services.osk_visible == Some(true),
             )
     }
 

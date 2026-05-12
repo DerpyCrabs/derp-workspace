@@ -1,6 +1,7 @@
 import AppWindow from 'lucide-solid/icons/app-window'
 import Bug from 'lucide-solid/icons/bug'
 import LayoutGrid from 'lucide-solid/icons/layout-grid'
+import Keyboard from 'lucide-solid/icons/keyboard'
 import Power from 'lucide-solid/icons/power'
 import Volume1 from 'lucide-solid/icons/volume-1'
 import Volume2 from 'lucide-solid/icons/volume-2'
@@ -81,6 +82,8 @@ export type TaskbarProps = {
   windows: TaskbarWindowRow[]
   focusedWindowId: number | null
   keyboardLayoutLabel: string | null
+  oskEnabled: boolean
+  onOskToggle: () => void
   settingsPanelOpen: boolean
   onSettingsPanelToggle: () => void
   debugPanelOpen: boolean
@@ -641,6 +644,25 @@ export function Taskbar(props: TaskbarProps) {
             >
               {keyboardIndicator(props.keyboardLayoutLabel!)}
             </span>
+          </Show>
+          <Show when={props.oskEnabled}>
+            <button
+              type="button"
+              class="inline-flex cursor-pointer items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
+              classList={{
+                'h-full w-9 border-l border-(--shell-border)': props.orientation === 'horizontal',
+                'h-9 w-full border-t border-(--shell-border)': props.orientation === 'vertical',
+              }}
+              data-shell-osk-toggle
+              aria-label="Toggle on-screen keyboard"
+              title="On-screen keyboard"
+              onPointerDown={(e) => {
+                e.preventDefault()
+                props.onOskToggle()
+              }}
+            >
+              <Keyboard class="h-4 w-4" stroke-width={2} />
+            </button>
           </Show>
           <div
             data-shell-tray-strip

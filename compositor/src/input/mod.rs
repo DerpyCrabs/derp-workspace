@@ -1031,6 +1031,7 @@ impl CompositorState {
                 surface_origin,
             } => {
                 let serial = SERIAL_COUNTER.next_serial();
+                self.allow_osk_for_touch_text_input_at(pos);
                 self.focus_native_window_for_touch(pos, serial);
                 if let Some(touch) = self.input_routing.seat.get_touch() {
                     touch.down(
@@ -1452,6 +1453,7 @@ impl CompositorState {
                 }
                 match elem {
                     DerpSpaceElem::Wayland(window) => {
+                        self.disallow_osk_for_pointer_text_input();
                         let window_id = self
                             .windows
                             .window_registry
@@ -1485,6 +1487,7 @@ impl CompositorState {
                     DerpSpaceElem::X11(x11) => {
                         if let Some(surf) = x11.wl_surface() {
                             if !x11.is_override_redirect() {
+                                self.disallow_osk_for_pointer_text_input();
                                 let window_id =
                                     self.windows.window_registry.window_id_for_wl_surface(&surf);
                                 self.output_topology.space.elements().for_each(|e| {

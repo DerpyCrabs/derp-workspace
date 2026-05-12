@@ -5,6 +5,7 @@ use std::sync::{Mutex, OnceLock};
 use smithay::{
     backend::allocator::{Buffer, Fourcc},
     backend::renderer::{
+        element::Id,
         gles::{GlesError, GlesRenderer},
         utils::CommitCounter,
         Bind, Frame, ImportDma, Offscreen, Renderer,
@@ -36,6 +37,7 @@ pub(crate) struct CachedShellElement<K> {
 #[derive(Default)]
 pub(crate) struct ShellOutputRenderElements {
     pub dmabuf: Option<ShellDmaElement>,
+    pub shell_ui_overlay: Vec<ShellDmaElement>,
     pub move_proxy: Vec<ShellDmaElement>,
     pub force_full_damage: bool,
 }
@@ -805,6 +807,9 @@ pub fn compositor_shell_render_elements(
             )?;
             render.dmabuf = element;
             render.force_full_damage |= force_full_damage;
+            if let Some(shell) = render.dmabuf.as_ref() {
+                render.shell_ui_overlay = build_shell_ui_overlay_elements(state, output, shell);
+            }
         } else if cache
             .main
             .as_ref()
@@ -830,6 +835,28 @@ pub fn compositor_shell_render_elements(
         .shell_render_cache_by_output
         .insert(output_name, cache);
     Ok(render)
+}
+
+fn build_shell_ui_overlay_elements(
+    state: &CompositorState,
+    output: &Output,
+    shell: &ShellDmaElement,
+) -> Vec<ShellDmaElement> {
+    let Some(output_geo) = state.output_topology.space.output_geometry(output) else {
+        return Vec::new();
+    };
+    let scale = Scale::from(output.current_scale().fractional_scale());
+    state
+        .shell_osr
+        .shell_exclusion_global
+        .iter()
+        .chain(state.shell_osr.shell_exclusion_floating.iter())
+        .filter_map(|rect| rect.intersection(output_geo))
+        .filter_map(|rect| {
+            let local = Rectangle::new(rect.loc - output_geo.loc, rect.size);
+            shell.cropped_to_logical_rect(Id::new(), local, scale)
+        })
+        .collect()
 }
 
 #[cfg(test)]

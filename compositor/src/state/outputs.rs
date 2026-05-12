@@ -97,6 +97,47 @@ impl OutputTopologyState {
         ))
     }
 
+    fn osk_adjusted_usable_area_global_for_output(
+        &self,
+        output: &Output,
+        base: Rectangle<i32, Logical>,
+    ) -> Rectangle<i32, Logical> {
+        let Some(output_geo) = self.space.output_geometry(output) else {
+            return base;
+        };
+        let map = layer_map_for_output(output);
+        let mut usable = base;
+        for layer in map.layers() {
+            let namespace = layer.namespace().to_ascii_lowercase();
+            if !namespace.contains("squeekboard") {
+                continue;
+            }
+            let Some(geo) = map.layer_geometry(layer) else {
+                continue;
+            };
+            if geo.size.w <= 0 || geo.size.h <= 0 {
+                continue;
+            }
+            let global = Rectangle::new(output_geo.loc + geo.loc, geo.size);
+            let Some(overlap) = global.intersection(output_geo) else {
+                continue;
+            };
+            if overlap.size.w < output_geo.size.w / 2 {
+                continue;
+            }
+            if overlap.loc.y > output_geo.loc.y + output_geo.size.h / 2 {
+                let bottom = output_geo.loc.y + output_geo.size.h;
+                let reserve = bottom.saturating_sub(overlap.loc.y).max(0);
+                usable.size.h = usable.size.h.saturating_sub(reserve).max(1);
+            } else if overlap.loc.y <= output_geo.loc.y {
+                let reserve = overlap.size.h.max(0);
+                usable.loc.y = usable.loc.y.saturating_add(reserve);
+                usable.size.h = usable.size.h.saturating_sub(reserve).max(1);
+            }
+        }
+        usable
+    }
+
     pub(crate) fn wayland_scale_for_shell_ui(shell_ui_scale: f64) -> Scale {
         if (shell_ui_scale - 1.0).abs() < f64::EPSILON {
             return Scale::Integer(1);
@@ -375,6 +416,7 @@ impl OutputTopologyState {
         &mut self,
         bump_revision: bool,
         shell_window_physical_px: (i32, i32),
+        osk_visible: bool,
     ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
         self.workspace_logical_bounds()?;
         let revision = if bump_revision {
@@ -396,7 +438,16 @@ impl OutputTopologyState {
                 let refresh_milli_hz = u32::try_from(mode.refresh.max(1)).unwrap_or(1);
                 let (vrr_supported, vrr_enabled) = self.output_vrr_state(o.name().as_str());
                 let taskbar_side = self.taskbar_side_for_output_name(o.name().as_str());
-                let usable = self.layer_usable_area_global_for_output(o).unwrap_or(g);
+                let usable = self
+                    .layer_usable_area_global_for_output(o)
+                    .map(|base| {
+                        if osk_visible {
+                            self.osk_adjusted_usable_area_global_for_output(o, base)
+                        } else {
+                            base
+                        }
+                    })
+                    .unwrap_or(g);
                 Some(shell_wire::OutputLayoutScreen {
                     name: o.name(),
                     identity: Self::shell_output_identity(o),

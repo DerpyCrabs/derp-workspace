@@ -397,6 +397,39 @@ impl ShellDmaElement {
         self
     }
 
+    pub(crate) fn cropped_to_logical_rect(
+        &self,
+        id: Id,
+        rect: Rectangle<i32, Logical>,
+        scale: Scale<f64>,
+    ) -> Option<Self> {
+        if rect.size.w <= 0 || rect.size.h <= 0 {
+            return None;
+        }
+        let full = Rectangle::new(Point::from((0, 0)), self.dst_logical_size);
+        let rect = rect.intersection(full)?;
+        let sx = self.buffer_src.size.w / self.dst_logical_size.w as f64;
+        let sy = self.buffer_src.size.h / self.dst_logical_size.h as f64;
+        let buffer_src = Rectangle::new(
+            Point::from((
+                self.buffer_src.loc.x + rect.loc.x as f64 * sx,
+                self.buffer_src.loc.y + rect.loc.y as f64 * sy,
+            )),
+            Size::from((rect.size.w as f64 * sx, rect.size.h as f64 * sy)),
+        );
+        Some(Self {
+            id,
+            context_id: self.context_id.clone(),
+            location: rect.loc.to_f64().to_physical(scale),
+            dst_logical_size: rect.size,
+            texture: self.texture.clone(),
+            buffer_src,
+            commit: self.commit,
+            damage_phys: None,
+            alpha: self.alpha,
+        })
+    }
+
     fn physical_size(&self, scale: Scale<f64>) -> Size<i32, Physical> {
         let logical_size = self.dst_logical_size;
         ((logical_size.to_f64().to_physical(scale).to_point() + self.location).to_i32_round()

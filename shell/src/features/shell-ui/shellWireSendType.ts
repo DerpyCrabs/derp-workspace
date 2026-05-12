@@ -15,6 +15,7 @@ export type ShellCompositorWireOp =
   | 'resize_shell_grab_begin'
   | 'resize_shell_grab_end'
   | 'taskbar_activate'
+  | 'osk_toggle_visible'
   | 'activate_window'
   | 'shell_focus_ui_window'
   | 'shell_blur_ui_window'

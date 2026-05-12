@@ -189,6 +189,9 @@ export interface CompositorSnapshot {
   shell_keyboard_focus?: boolean
   session_power_action?: string | null
   session_power_requested_at_ms?: number | null
+  osk_visible?: boolean | null
+  osk_text_input_visibility_allowed?: boolean
+  osk_preferred_output_name?: string | null
   shell_move_visual?: CompositorInteractionVisualSnapshot | null
   shell_move_proxy_window_id?: number | null
   shell_move_proxy_global?: CompositorWorkspaceRect | null
@@ -327,6 +330,7 @@ export interface ShellControls {
   taskbar_settings_toggle?: Rect | null
   taskbar_debug_toggle?: Rect | null
   taskbar_volume_toggle?: Rect | null
+  taskbar_osk_toggle?: Rect | null
   taskbar_power_toggle?: Rect | null
   volume_menu_panel?: Rect | null
   volume_output_select?: Rect | null
@@ -362,6 +366,10 @@ export interface ShellControls {
   settings_notifications_enable?: Rect | null
   settings_notifications_disable?: Rect | null
   settings_notifications_history_first?: Rect | null
+  settings_osk_enabled_trigger?: Rect | null
+  settings_osk_enabled_on_option?: Rect | null
+  settings_osk_enabled_off_option?: Rect | null
+  settings_osk_save?: Rect | null
   settings_scratchpads_page?: Rect | null
   settings_scratchpad_window_inspector?: Rect | null
   settings_scratchpad_list?: Rect | null

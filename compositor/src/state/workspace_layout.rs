@@ -155,9 +155,7 @@ impl CompositorState {
         &self,
         output: &Output,
     ) -> Option<Rectangle<i32, Logical>> {
-        let geo = self
-            .output_topology
-            .layer_usable_area_global_for_output(output)?;
+        let geo = self.effective_layer_usable_area_global_for_output(output)?;
         if self.output_topology.taskbar_auto_hide {
             return Some(Rectangle::new(
                 geo.loc,

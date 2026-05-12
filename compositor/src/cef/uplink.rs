@@ -192,6 +192,12 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn osk_toggle_visible(&self) {
+        self.run(move |s| {
+            s.toggle_osk_visible_from_shell();
+        });
+    }
+
     pub fn shell_activate_window(&self, window_id: u32) {
         self.run(move |s| {
             s.window_op_focus(window_id);

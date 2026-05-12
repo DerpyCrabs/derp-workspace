@@ -29,6 +29,8 @@ type ShellSurfaceLayersProps = {
   taskbarRowsForScreen: (screen: LayoutScreen) => TaskbarWindowRow[]
   focusedWindowId: Accessor<number | null>
   keyboardLayoutLabel: Accessor<string | null>
+  oskEnabled: Accessor<boolean>
+  onOskToggle: () => void
   settingsHudFrameVisible: Accessor<boolean>
   onSettingsPanelToggle: () => void
   onDebugPanelToggle: () => void
@@ -249,6 +251,8 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
                     keyboardLayoutLabel={
                       props.isPrimaryTaskbarScreen(currentScreen()) ? props.keyboardLayoutLabel() : null
                     }
+                    oskEnabled={props.isPrimaryTaskbarScreen(currentScreen()) && props.oskEnabled()}
+                    onOskToggle={props.onOskToggle}
                     settingsPanelOpen={props.settingsHudFrameVisible()}
                     onSettingsPanelToggle={props.onSettingsPanelToggle}
                     debugPanelOpen={props.debugHudFrameVisible()}
@@ -269,10 +273,14 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
 }
 
 function taskbarRectForScreen(screen: LayoutScreen, side: LayoutScreen['taskbar_side'], size: number) {
-  if (side === 'top') return { x: screen.x, y: screen.y, width: screen.width, height: size }
-  if (side === 'left') return { x: screen.x, y: screen.y, width: size, height: screen.height }
-  if (side === 'right') return { x: screen.x + screen.width - size, y: screen.y, width: size, height: screen.height }
-  return { x: screen.x, y: screen.y + screen.height - size, width: screen.width, height: size }
+  const ux = screen.usable_x ?? screen.x
+  const uy = screen.usable_y ?? screen.y
+  const uw = screen.usable_width ?? screen.width
+  const uh = screen.usable_height ?? screen.height
+  if (side === 'top') return { x: ux, y: uy, width: uw, height: size }
+  if (side === 'left') return { x: ux, y: uy, width: size, height: uh }
+  if (side === 'right') return { x: ux + uw - size, y: uy, width: size, height: uh }
+  return { x: ux, y: uy + uh - size, width: uw, height: size }
 }
 
 function taskbarTriggerRectForScreen(screen: LayoutScreen, side: LayoutScreen['taskbar_side']) {
