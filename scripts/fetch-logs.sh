@@ -109,7 +109,7 @@ head_arg=""
 [[ "$HEAD" == 1 ]] && head_arg="--head"
 
 # shellcheck disable=SC2086
-exec ssh "${SSH_TTY[@]}" "${REMOTE_USER}@${REMOTE_HOST}" bash -s <<EOF
+exec ssh ${SSH_TTY[@]+"${SSH_TTY[@]}"} "${REMOTE_USER}@${REMOTE_HOST}" bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
 export LIST_DERP_LOGS_INTERNAL=1

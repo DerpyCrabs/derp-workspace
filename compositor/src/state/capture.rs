@@ -236,7 +236,8 @@ impl CaptureState {
     }
 
     pub(crate) fn capture_needs_full_damage(&self) -> bool {
-        self.active_image_copy_capture_sessions > 0
+        self.screenshot_request.is_some()
+            || self.active_image_copy_capture_sessions > 0
             || self.capture_force_full_damage_frames > 0
             || !self.pending_screencopy_copies.is_empty()
             || !self.pending_image_copy_captures.is_empty()

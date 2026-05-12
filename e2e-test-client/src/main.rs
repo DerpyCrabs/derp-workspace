@@ -98,6 +98,10 @@ use wayland_protocols::wp::{
     tearing_control::v1::client::{
         wp_tearing_control_manager_v1::WpTearingControlManagerV1, wp_tearing_control_v1,
     },
+    text_input::zv3::client::{
+        zwp_text_input_manager_v3::ZwpTextInputManagerV3,
+        zwp_text_input_v3::{self, ChangeCause, ContentHint, ContentPurpose, ZwpTextInputV3},
+    },
 };
 use wayland_protocols::xdg::decoration::zv1::client::{
     zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
@@ -115,6 +119,12 @@ use wayland_protocols::xdg::toplevel_icon::v1::client::{
 use wayland_protocols_misc::server_decoration::client::{
     org_kde_kwin_server_decoration::{Mode as KdeServerDecorationMode, OrgKdeKwinServerDecoration},
     org_kde_kwin_server_decoration_manager::OrgKdeKwinServerDecorationManager,
+};
+use wayland_protocols_misc::zwp_input_method_v2::client::{
+    zwp_input_method_keyboard_grab_v2::{self, ZwpInputMethodKeyboardGrabV2},
+    zwp_input_method_manager_v2::ZwpInputMethodManagerV2,
+    zwp_input_method_v2::{self, ZwpInputMethodV2},
+    zwp_input_popup_surface_v2::{self, ZwpInputPopupSurfaceV2},
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{Layer as WlrLayer, ZwlrLayerShellV1},
@@ -317,6 +327,14 @@ struct Args {
     primary_selection_text: Option<String>,
     #[arg(long)]
     primary_paste_status_json: Option<String>,
+    #[arg(long, default_value_t = false)]
+    text_input_probe: bool,
+    #[arg(long)]
+    text_input_status_json: Option<String>,
+    #[arg(long, default_value_t = false)]
+    input_method_probe: bool,
+    #[arg(long)]
+    input_method_status_json: Option<String>,
 }
 
 fn main() {
@@ -479,6 +497,24 @@ fn main() {
         } else {
             None
         };
+    let text_input_manager = if args.text_input_probe {
+        Some(
+            globals
+                .bind::<ZwpTextInputManagerV3, _, _>(&qh, 1..=1, ())
+                .expect("bind zwp_text_input_manager_v3"),
+        )
+    } else {
+        None
+    };
+    let input_method_manager = if args.input_method_probe {
+        Some(
+            globals
+                .bind::<ZwpInputMethodManagerV2, _, _>(&qh, 1..=1, ())
+                .expect("bind zwp_input_method_manager_v2"),
+        )
+    } else {
+        None
+    };
     let activation_state = ActivationState::bind(&globals, &qh).ok();
     let startup_activation_token = std::env::var("XDG_ACTIVATION_TOKEN").ok();
     if startup_activation_token.is_some() {
@@ -698,8 +734,24 @@ fn main() {
         primary_paste_status_json: args.primary_paste_status_json,
         primary_paste_count: 0,
         primary_paste_pending: false,
+        text_input_manager,
+        text_input: None,
+        text_input_status_json: args.text_input_status_json,
+        text_input_status: TextInputProbeStatus::default(),
+        input_method_manager,
+        input_method: None,
+        input_method_keyboard_grab: None,
+        input_method_popup_surface: None,
+        input_method_popup_role: None,
+        input_method_popup_buffer: None,
+        input_method_status_json: args.input_method_status_json,
+        input_method_status: InputMethodProbeStatus::default(),
+        input_method_response_sent: false,
+        input_method_serial: 0,
     };
     state.write_touch_status();
+    state.write_text_input_status();
+    state.write_input_method_status();
 
     while !state.exit {
         event_queue
@@ -956,6 +1008,20 @@ struct TestClient {
     primary_paste_status_json: Option<String>,
     primary_paste_count: u32,
     primary_paste_pending: bool,
+    text_input_manager: Option<ZwpTextInputManagerV3>,
+    text_input: Option<ZwpTextInputV3>,
+    text_input_status_json: Option<String>,
+    text_input_status: TextInputProbeStatus,
+    input_method_manager: Option<ZwpInputMethodManagerV2>,
+    input_method: Option<ZwpInputMethodV2>,
+    input_method_keyboard_grab: Option<ZwpInputMethodKeyboardGrabV2>,
+    input_method_popup_surface: Option<wl_surface::WlSurface>,
+    input_method_popup_role: Option<ZwpInputPopupSurfaceV2>,
+    input_method_popup_buffer: Option<Buffer>,
+    input_method_status_json: Option<String>,
+    input_method_status: InputMethodProbeStatus,
+    input_method_response_sent: bool,
+    input_method_serial: u32,
 }
 
 struct PopupProbeSurface {
@@ -979,6 +1045,39 @@ struct PopupProbeStatus {
     keyboard_enter_surface: String,
     last_pointer_surface: String,
     last_press_surface: String,
+}
+
+#[derive(Default)]
+struct TextInputProbeStatus {
+    enter: u32,
+    leave: u32,
+    preedit: u32,
+    commit_string: u32,
+    delete_surrounding_text: u32,
+    done: u32,
+    last_preedit: String,
+    last_commit_string: String,
+    last_delete_before: u32,
+    last_delete_after: u32,
+}
+
+#[derive(Default)]
+struct InputMethodProbeStatus {
+    activate: u32,
+    deactivate: u32,
+    surrounding_text: u32,
+    text_change_cause: u32,
+    content_type: u32,
+    done: u32,
+    unavailable: u32,
+    popup_configure: u32,
+    popup_done: u32,
+    keyboard_key: u32,
+    last_surrounding_text: String,
+    last_cursor: u32,
+    last_anchor: u32,
+    last_popup_width: i32,
+    last_popup_height: i32,
 }
 
 #[derive(Default)]
@@ -1048,6 +1147,165 @@ impl TestClient {
             Self::popup_status_escape(&status.last_press_surface),
         );
         let _ = std::fs::write(path, json);
+    }
+
+    fn json_escape(value: &str) -> String {
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\r', "\\r")
+            .replace('\n', "\\n")
+    }
+
+    fn write_text_input_status(&self) {
+        let Some(path) = self.text_input_status_json.as_ref() else {
+            return;
+        };
+        let status = &self.text_input_status;
+        let json = format!(
+            "{{\"enter\":{},\"leave\":{},\"preedit\":{},\"commit_string\":{},\"delete_surrounding_text\":{},\"done\":{},\"last_preedit\":\"{}\",\"last_commit_string\":\"{}\",\"last_delete_before\":{},\"last_delete_after\":{}}}",
+            status.enter,
+            status.leave,
+            status.preedit,
+            status.commit_string,
+            status.delete_surrounding_text,
+            status.done,
+            Self::json_escape(&status.last_preedit),
+            Self::json_escape(&status.last_commit_string),
+            status.last_delete_before,
+            status.last_delete_after,
+        );
+        let _ = std::fs::write(path, json);
+    }
+
+    fn write_input_method_status(&self) {
+        let Some(path) = self.input_method_status_json.as_ref() else {
+            return;
+        };
+        let status = &self.input_method_status;
+        let json = format!(
+            "{{\"activate\":{},\"deactivate\":{},\"surrounding_text\":{},\"text_change_cause\":{},\"content_type\":{},\"done\":{},\"unavailable\":{},\"popup_configure\":{},\"popup_done\":{},\"keyboard_key\":{},\"last_surrounding_text\":\"{}\",\"last_cursor\":{},\"last_anchor\":{},\"last_popup_width\":{},\"last_popup_height\":{}}}",
+            status.activate,
+            status.deactivate,
+            status.surrounding_text,
+            status.text_change_cause,
+            status.content_type,
+            status.done,
+            status.unavailable,
+            status.popup_configure,
+            status.popup_done,
+            status.keyboard_key,
+            Self::json_escape(&status.last_surrounding_text),
+            status.last_cursor,
+            status.last_anchor,
+            status.last_popup_width,
+            status.last_popup_height,
+        );
+        let _ = std::fs::write(path, json);
+    }
+
+    fn ensure_text_input_probe(&mut self, qh: &QueueHandle<Self>, seat: &wl_seat::WlSeat) {
+        if self.text_input.is_some() {
+            return;
+        }
+        let Some(manager) = self.text_input_manager.as_ref() else {
+            return;
+        };
+        self.text_input = Some(manager.get_text_input(seat, qh, ()));
+    }
+
+    fn ensure_input_method_probe(&mut self, qh: &QueueHandle<Self>, seat: &wl_seat::WlSeat) {
+        if self.input_method.is_some() {
+            return;
+        }
+        let Some(manager) = self.input_method_manager.as_ref() else {
+            return;
+        };
+        let input_method = manager.get_input_method(seat, qh, ());
+        let keyboard_grab = input_method.grab_keyboard(qh, ());
+        self.input_method = Some(input_method);
+        self.input_method_keyboard_grab = Some(keyboard_grab);
+        self.ensure_input_method_popup(qh);
+    }
+
+    fn send_text_input_state(&self, conn: &Connection) {
+        let Some(text_input) = self.text_input.as_ref() else {
+            return;
+        };
+        text_input.enable();
+        text_input.set_surrounding_text("hello native text".to_string(), 5, 5);
+        text_input.set_text_change_cause(ChangeCause::Other);
+        text_input.set_content_type(ContentHint::empty(), ContentPurpose::Normal);
+        text_input.set_cursor_rectangle(36, 58, 14, 24);
+        text_input.commit();
+        let _ = conn.flush();
+    }
+
+    fn draw_input_method_popup(&mut self) {
+        let Some(surface) = self.input_method_popup_surface.as_ref() else {
+            return;
+        };
+        let popup_width = 180;
+        let popup_height = 42;
+        let (buffer, canvas) = self
+            .pool
+            .create_buffer(
+                popup_width,
+                popup_height,
+                popup_width * 4,
+                wayland_client::protocol::wl_shm::Format::Argb8888,
+            )
+            .expect("create input method popup buffer");
+        for y in 0..popup_height as usize {
+            for x in 0..popup_width as usize {
+                let color = if x < 3
+                    || y < 3
+                    || x + 4 > popup_width as usize
+                    || y + 4 > popup_height as usize
+                {
+                    [30, 30, 30, 255]
+                } else {
+                    [244, 235, 120, 255]
+                };
+                put_pixel(canvas, popup_width as usize, x, y, color);
+            }
+        }
+        surface.attach(Some(buffer.wl_buffer()), 0, 0);
+        surface.damage_buffer(0, 0, popup_width, popup_height);
+        surface.commit();
+        self.input_method_popup_buffer = Some(buffer);
+    }
+
+    fn ensure_input_method_popup(&mut self, qh: &QueueHandle<Self>) {
+        if self.input_method_popup_role.is_some() {
+            return;
+        }
+        let Some(input_method) = self.input_method.as_ref() else {
+            return;
+        };
+        let surface = self._compositor_state.create_surface(qh);
+        let popup = input_method.get_input_popup_surface(&surface, qh, ());
+        self.input_method_popup_surface = Some(surface);
+        self.input_method_popup_role = Some(popup);
+        self.draw_input_method_popup();
+    }
+
+    fn send_input_method_response(&mut self, conn: &Connection) {
+        if self.input_method_response_sent {
+            return;
+        }
+        if self.input_method_status.surrounding_text == 0 {
+            return;
+        }
+        let Some(input_method) = self.input_method.as_ref() else {
+            return;
+        };
+        input_method.set_preedit_string("preedit".to_string(), 2, 2);
+        input_method.commit_string("commit".to_string());
+        input_method.delete_surrounding_text(2, 1);
+        input_method.commit(self.input_method_serial);
+        let _ = conn.flush();
+        self.input_method_response_sent = true;
     }
 
     fn popup_surface_label(&self, surface: &wl_surface::WlSurface) -> &'static str {
@@ -2274,7 +2532,7 @@ impl ExplicitSyncDmabufClient {
 impl CompositorHandler for ExplicitSyncDmabufClient {
     fn scale_factor_changed(
         &mut self,
-        _conn: &Connection,
+        conn: &Connection,
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _new_factor: i32,
@@ -2283,7 +2541,7 @@ impl CompositorHandler for ExplicitSyncDmabufClient {
 
     fn transform_changed(
         &mut self,
-        _conn: &Connection,
+        conn: &Connection,
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _new_transform: wl_output::Transform,
@@ -2292,7 +2550,7 @@ impl CompositorHandler for ExplicitSyncDmabufClient {
 
     fn frame(
         &mut self,
-        _conn: &Connection,
+        conn: &Connection,
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _time: u32,
@@ -2325,7 +2583,7 @@ impl WindowHandler for ExplicitSyncDmabufClient {
 
     fn configure(
         &mut self,
-        _conn: &Connection,
+        conn: &Connection,
         qh: &QueueHandle<Self>,
         _window: &Window,
         _configure: WindowConfigure,
@@ -3741,6 +3999,8 @@ impl SeatHandler for TestClient {
                 .get_keyboard(qh, &seat, None)
                 .expect("create keyboard");
             self.keyboard = Some(keyboard);
+            self.ensure_text_input_probe(qh, &seat);
+            self.ensure_input_method_probe(qh, &seat);
         }
         if capability == Capability::Pointer && self.pointer.is_none() {
             self.pointer_seat = Some(seat.clone());
@@ -4225,6 +4485,180 @@ impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, ()> for TestClie
                 state.update_status_title();
             }
             _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZwpTextInputManagerV3, ()> for TestClient {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpTextInputManagerV3,
+        _event: wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpTextInputV3, ()> for TestClient {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwpTextInputV3,
+        event: zwp_text_input_v3::Event,
+        _data: &(),
+        conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_text_input_v3::Event::Enter { .. } => {
+                state.text_input_status.enter = state.text_input_status.enter.saturating_add(1);
+                state.send_text_input_state(conn);
+            }
+            zwp_text_input_v3::Event::Leave { .. } => {
+                state.text_input_status.leave = state.text_input_status.leave.saturating_add(1);
+            }
+            zwp_text_input_v3::Event::PreeditString {
+                text,
+                cursor_begin: _,
+                cursor_end: _,
+            } => {
+                state.text_input_status.preedit = state.text_input_status.preedit.saturating_add(1);
+                state.text_input_status.last_preedit = text.unwrap_or_default();
+            }
+            zwp_text_input_v3::Event::CommitString { text } => {
+                state.text_input_status.commit_string =
+                    state.text_input_status.commit_string.saturating_add(1);
+                state.text_input_status.last_commit_string = text.unwrap_or_default();
+            }
+            zwp_text_input_v3::Event::DeleteSurroundingText {
+                before_length,
+                after_length,
+            } => {
+                state.text_input_status.delete_surrounding_text = state
+                    .text_input_status
+                    .delete_surrounding_text
+                    .saturating_add(1);
+                state.text_input_status.last_delete_before = before_length;
+                state.text_input_status.last_delete_after = after_length;
+            }
+            zwp_text_input_v3::Event::Done { .. } => {
+                state.text_input_status.done = state.text_input_status.done.saturating_add(1);
+            }
+            _ => {}
+        }
+        state.write_text_input_status();
+    }
+}
+
+impl Dispatch<ZwpInputMethodManagerV2, ()> for TestClient {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpInputMethodManagerV2,
+        _event: wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpInputMethodV2, ()> for TestClient {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwpInputMethodV2,
+        event: zwp_input_method_v2::Event,
+        _data: &(),
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_input_method_v2::Event::Activate => {
+                state.input_method_status.activate =
+                    state.input_method_status.activate.saturating_add(1);
+                state.ensure_input_method_popup(qh);
+                let _ = conn.flush();
+            }
+            zwp_input_method_v2::Event::Deactivate => {
+                state.input_method_status.deactivate =
+                    state.input_method_status.deactivate.saturating_add(1);
+            }
+            zwp_input_method_v2::Event::SurroundingText {
+                text,
+                cursor,
+                anchor,
+            } => {
+                state.input_method_status.surrounding_text =
+                    state.input_method_status.surrounding_text.saturating_add(1);
+                state.input_method_status.last_surrounding_text = text;
+                state.input_method_status.last_cursor = cursor;
+                state.input_method_status.last_anchor = anchor;
+            }
+            zwp_input_method_v2::Event::TextChangeCause { .. } => {
+                state.input_method_status.text_change_cause = state
+                    .input_method_status
+                    .text_change_cause
+                    .saturating_add(1);
+            }
+            zwp_input_method_v2::Event::ContentType { .. } => {
+                state.input_method_status.content_type =
+                    state.input_method_status.content_type.saturating_add(1);
+            }
+            zwp_input_method_v2::Event::Done => {
+                state.input_method_status.done = state.input_method_status.done.saturating_add(1);
+                state.input_method_serial = state.input_method_serial.wrapping_add(1);
+                state.send_input_method_response(conn);
+            }
+            zwp_input_method_v2::Event::Unavailable => {
+                state.input_method_status.unavailable =
+                    state.input_method_status.unavailable.saturating_add(1);
+            }
+            _ => {}
+        }
+        state.write_input_method_status();
+    }
+}
+
+impl Dispatch<ZwpInputPopupSurfaceV2, ()> for TestClient {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwpInputPopupSurfaceV2,
+        event: zwp_input_popup_surface_v2::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_input_popup_surface_v2::Event::TextInputRectangle {
+                x: _,
+                y: _,
+                width,
+                height,
+            } => {
+                state.input_method_status.popup_configure =
+                    state.input_method_status.popup_configure.saturating_add(1);
+                state.input_method_status.last_popup_width = width;
+                state.input_method_status.last_popup_height = height;
+            }
+            _ => {}
+        }
+        state.write_input_method_status();
+    }
+}
+
+impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for TestClient {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwpInputMethodKeyboardGrabV2,
+        event: zwp_input_method_keyboard_grab_v2::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let zwp_input_method_keyboard_grab_v2::Event::Key { .. } = event {
+            state.input_method_status.keyboard_key =
+                state.input_method_status.keyboard_key.saturating_add(1);
+            state.write_input_method_status();
         }
     }
 }

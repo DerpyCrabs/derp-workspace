@@ -66,6 +66,7 @@ use smithay::{
         foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState},
         fractional_scale::{FractionalScaleHandler, FractionalScaleManagerState},
         idle_inhibit::IdleInhibitManagerState,
+        input_method::InputMethodManagerState,
         keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState,
         output::OutputManagerState,
         presentation::{
@@ -89,6 +90,7 @@ use smithay::{
             xdg::{SurfaceCachedState, ToplevelSurface, XdgShellState, XdgToplevelSurfaceData},
         },
         shm::ShmState,
+        text_input::TextInputManagerState,
         viewporter::ViewporterState,
         xdg_activation::{XdgActivationState, XdgActivationTokenData},
         xdg_foreign::{XdgForeignHandler, XdgForeignState},
@@ -471,6 +473,8 @@ pub struct CompositorState {
     pub viewporter_state: ViewporterState,
     pub cursor_shape_manager_state: CursorShapeManagerState,
     pub shm_state: ShmState,
+    pub(crate) _text_input_manager_state: TextInputManagerState,
+    pub(crate) _input_method_manager_state: InputMethodManagerState,
     pub layer_shell_state: WlrLayerShellState,
     pub(crate) _idle_inhibit_manager_state: IdleInhibitManagerState,
     pub popups: PopupManager,
@@ -702,6 +706,8 @@ impl CompositorState {
         let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
         let data_control_state =
             DataControlState::new::<Self, _>(&dh, Some(&primary_selection_state), |_| true);
+        let text_input_manager_state = TextInputManagerState::new::<Self>(&dh);
+        let input_method_manager_state = InputMethodManagerState::new::<Self, _>(&dh, |_| true);
         let xwayland_shell_state = XWaylandShellState::new::<Self>(&dh);
         let chrome_bridge = options.chrome_bridge;
         let shell_to_cef = options.shell_to_cef;
@@ -884,6 +890,8 @@ impl CompositorState {
             viewporter_state,
             cursor_shape_manager_state,
             shm_state,
+            _text_input_manager_state: text_input_manager_state,
+            _input_method_manager_state: input_method_manager_state,
             layer_shell_state,
             _idle_inhibit_manager_state: idle_inhibit_manager_state,
             popups,

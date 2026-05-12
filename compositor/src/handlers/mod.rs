@@ -15,10 +15,12 @@ use crate::{
     CompositorState,
 };
 
+use smithay::delegate_input_method_manager;
 use smithay::delegate_layer_shell;
 use smithay::delegate_pointer_constraints;
 use smithay::delegate_pointer_gestures;
 use smithay::delegate_relative_pointer;
+use smithay::delegate_text_input_manager;
 use smithay::input::{
     dnd::{DnDGrab, DndAction, DndGrabHandler, DndTarget, GrabType, Source, SourceMetadata},
     pointer::Focus,
@@ -26,7 +28,8 @@ use smithay::input::{
 };
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
-use smithay::utils::{IsAlive, Logical, Point, Serial};
+use smithay::utils::{IsAlive, Logical, Point, Rectangle, Serial};
+use smithay::wayland::input_method::{InputMethodHandler, PopupSurface as InputMethodPopupSurface};
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraintsHandler};
 use smithay::wayland::selection::data_device::{
@@ -358,8 +361,56 @@ impl SeatHandler for CompositorState {
 }
 
 delegate_seat!(crate::CompositorState);
+delegate_text_input_manager!(crate::CompositorState);
+delegate_input_method_manager!(crate::CompositorState);
 
 impl TabletSeatHandler for CompositorState {}
+
+impl InputMethodHandler for CompositorState {
+    fn new_popup(&mut self, surface: InputMethodPopupSurface) {
+        let _ = self
+            .popups
+            .track_popup(smithay::desktop::PopupKind::InputMethod(surface));
+        self.windows.wayland_commit_needs_render = true;
+    }
+
+    fn dismiss_popup(&mut self, surface: InputMethodPopupSurface) {
+        let popup = smithay::desktop::PopupKind::InputMethod(surface);
+        if let Ok(root) = smithay::desktop::find_popup_root_surface(&popup) {
+            let _ = smithay::desktop::PopupManager::dismiss_popup(&root, &popup);
+        }
+        self.popups.cleanup();
+        self.windows.wayland_commit_needs_render = true;
+    }
+
+    fn popup_repositioned(&mut self, _surface: InputMethodPopupSurface) {
+        self.windows.wayland_commit_needs_render = true;
+    }
+
+    fn parent_geometry(&self, parent: &WlSurface) -> Rectangle<i32, Logical> {
+        let root = self
+            .popups
+            .find_popup(parent)
+            .and_then(|popup| smithay::desktop::find_popup_root_surface(&popup).ok())
+            .unwrap_or_else(|| parent.clone());
+        self.output_topology
+            .space
+            .elements()
+            .find_map(|elem| match elem {
+                crate::derp_space::DerpSpaceElem::Wayland(window)
+                    if window
+                        .toplevel()
+                        .is_some_and(|top| top.wl_surface() == &root) =>
+                {
+                    self.output_topology.space.element_geometry(
+                        &crate::derp_space::DerpSpaceElem::Wayland(window.clone()),
+                    )
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+}
 
 impl XdgActivationHandler for CompositorState {
     fn activation_state(&mut self) -> &mut XdgActivationState {

@@ -3177,6 +3177,10 @@ export function buildNativeSpawnCommand({
   xdgPopupGrabStatusJson,
   primarySelectionText,
   primaryPasteStatusJson,
+  textInputProbe = false,
+  textInputStatusJson,
+  inputMethodProbe = false,
+  inputMethodStatusJson,
 }: {
   title: string
   appId?: string
@@ -3211,6 +3215,10 @@ export function buildNativeSpawnCommand({
   xdgPopupGrabStatusJson?: string
   primarySelectionText?: string
   primaryPasteStatusJson?: string
+  textInputProbe?: boolean
+  textInputStatusJson?: string
+  inputMethodProbe?: boolean
+  inputMethodStatusJson?: string
 }): string {
   const parts = [
     nativeBin(),
@@ -3250,6 +3258,10 @@ export function buildNativeSpawnCommand({
   if (xdgPopupGrabStatusJson) parts.push('--xdg-popup-grab-status-json', shellQuote(xdgPopupGrabStatusJson))
   if (primarySelectionText) parts.push('--primary-selection-text', shellQuote(primarySelectionText))
   if (primaryPasteStatusJson) parts.push('--primary-paste-status-json', shellQuote(primaryPasteStatusJson))
+  if (textInputProbe) parts.push('--text-input-probe')
+  if (textInputStatusJson) parts.push('--text-input-status-json', shellQuote(textInputStatusJson))
+  if (inputMethodProbe) parts.push('--input-method-probe')
+  if (inputMethodStatusJson) parts.push('--input-method-status-json', shellQuote(inputMethodStatusJson))
   if (spawnOnPressCommand) {
     parts.push('--spawn-on-press-command', shellQuote(spawnOnPressCommand))
   }
@@ -3301,6 +3313,10 @@ export async function spawnNativeWindow(
     xdgPopupGrabStatusJson,
     primarySelectionText,
     primaryPasteStatusJson,
+    textInputProbe,
+    textInputStatusJson,
+    inputMethodProbe,
+    inputMethodStatusJson,
   }: {
     title: string
     appId?: string
@@ -3335,6 +3351,10 @@ export async function spawnNativeWindow(
     xdgPopupGrabStatusJson?: string
     primarySelectionText?: string
     primaryPasteStatusJson?: string
+    textInputProbe?: boolean
+    textInputStatusJson?: string
+    inputMethodProbe?: boolean
+    inputMethodStatusJson?: string
   },
 ): Promise<NativeSpawnResult> {
   const command = buildNativeSpawnCommand({
@@ -3371,6 +3391,10 @@ export async function spawnNativeWindow(
     xdgPopupGrabStatusJson,
     primarySelectionText,
     primaryPasteStatusJson,
+    textInputProbe,
+    textInputStatusJson,
+    inputMethodProbe,
+    inputMethodStatusJson,
   })
   await spawnCommand(base, command)
   return waitForSpawnedWindow(base, knownWindowIds, { title, appId, command })

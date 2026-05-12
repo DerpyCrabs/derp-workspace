@@ -108,6 +108,36 @@ type XdgPopupGrabStatus = {
   last_press_surface: string;
 };
 
+type TextInputProbeStatus = {
+  enter: number;
+  leave: number;
+  preedit: number;
+  commit_string: number;
+  delete_surrounding_text: number;
+  done: number;
+  last_preedit: string;
+  last_commit_string: string;
+  last_delete_before: number;
+  last_delete_after: number;
+};
+
+type InputMethodProbeStatus = {
+  activate: number;
+  deactivate: number;
+  surrounding_text: number;
+  text_change_cause: number;
+  content_type: number;
+  done: number;
+  unavailable: number;
+  popup_configure: number;
+  keyboard_key: number;
+  last_surrounding_text: string;
+  last_cursor: number;
+  last_anchor: number;
+  last_popup_width: number;
+  last_popup_height: number;
+};
+
 type TouchStatus = {
   device_ready: boolean;
   down: number;
@@ -702,6 +732,108 @@ export default defineGroup(import.meta.url, ({ test }) => {
     } finally {
       await closeWindow(base, native.window.window_id);
       await waitForWindowGone(base, native.window.window_id, 5000);
+    }
+  });
+
+  test("native text-input v3 routes through input-method v2", async ({
+    base,
+    state,
+  }) => {
+    const stamp = Date.now();
+    const textStatusPath = path.join(
+      artifactDir(),
+      `text-input-status-${stamp}.json`,
+    );
+    const inputMethodStatusPath = path.join(
+      artifactDir(),
+      `input-method-status-${stamp}.json`,
+    );
+    const inputMethod = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Input Method ${stamp}`,
+      appId: "derp.e2e.input.method",
+      token: `input-method-${stamp}`,
+      strip: "yellow",
+      width: 320,
+      height: 180,
+      inputMethodProbe: true,
+      inputMethodStatusJson: inputMethodStatusPath,
+    });
+    state.spawnedNativeWindowIds.add(inputMethod.window.window_id);
+    const textClient = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Text Input ${stamp}`,
+      appId: "derp.e2e.text.input",
+      token: `text-input-${stamp}`,
+      strip: "green",
+      width: 420,
+      height: 240,
+      textInputProbe: true,
+      textInputStatusJson: textStatusPath,
+    });
+    state.spawnedNativeWindowIds.add(textClient.window.window_id);
+    try {
+      await waitForNativeFocus(base, textClient.window.window_id);
+      const compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      const textWindow =
+        compositorWindowById(compositor, textClient.window.window_id) ??
+        textClient.window;
+      await movePoint(base, textWindow.x + 64, textWindow.y + 72);
+      await pointerButton(base, BTN_LEFT, "press");
+      await pointerButton(base, BTN_LEFT, "release");
+      await waitForStatusJson<TextInputProbeStatus>(
+        textStatusPath,
+        "wait for text-input events",
+        (status) =>
+          status.enter >= 1 &&
+          status.preedit >= 1 &&
+          status.commit_string >= 1 &&
+          status.delete_surrounding_text >= 1 &&
+          status.last_preedit === "preedit" &&
+          status.last_commit_string === "commit" &&
+          status.last_delete_before === 2 &&
+          status.last_delete_after === 1,
+      );
+      await waitForStatusJson<InputMethodProbeStatus>(
+        inputMethodStatusPath,
+        "wait for input-method activation and state",
+        (status) =>
+          status.activate >= 1 &&
+          status.surrounding_text >= 1 &&
+          status.done >= 1 &&
+          status.last_surrounding_text === "hello native text" &&
+          status.last_cursor === 5 &&
+          status.last_anchor === 5 &&
+          status.popup_configure >= 1 &&
+          status.last_popup_width === 14 &&
+          status.last_popup_height === 24,
+      );
+      const shellWindow = await openShellTestWindow(base, state);
+      await waitForStatusJson<TextInputProbeStatus>(
+        textStatusPath,
+        "wait for text-input leave",
+        (status) => status.leave >= 1,
+      );
+      await waitForStatusJson<InputMethodProbeStatus>(
+        inputMethodStatusPath,
+        "wait for input-method deactivate",
+        (status) => status.deactivate >= 1,
+      );
+      await closeWindow(base, shellWindow.window.window_id);
+      await waitForWindowGone(base, shellWindow.window.window_id, 5000);
+      await writeJsonArtifact("native-text-input.json", {
+        textWindow,
+        textStatus: await readStatusJson<TextInputProbeStatus>(textStatusPath),
+        inputMethodStatus: await readStatusJson<InputMethodProbeStatus>(
+          inputMethodStatusPath,
+        ),
+      });
+    } finally {
+      await closeWindow(base, textClient.window.window_id);
+      await waitForWindowGone(base, textClient.window.window_id, 5000);
+      await closeWindow(base, inputMethod.window.window_id);
+      await waitForWindowGone(base, inputMethod.window.window_id, 5000);
     }
   });
 
