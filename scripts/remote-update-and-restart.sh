@@ -140,11 +140,11 @@ if [[ "$SKIP_REMOTE_INSTALL" -eq 0 ]]; then
   if [[ "$QUICK_SHELL" -eq 1 ]]; then
     remote_install_parts+=(--shell-only)
   fi
-  remote_install_parts+=("${forward[@]}")
+  remote_install_parts+=(${forward[@]+"${forward[@]}"})
 fi
 
 remote_install_args=""
-for a in "${remote_install_parts[@]}"; do
+for a in ${remote_install_parts[@]+"${remote_install_parts[@]}"}; do
   remote_install_args+=$(printf '%q' "$a")" "
 done
 

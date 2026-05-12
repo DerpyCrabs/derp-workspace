@@ -41,7 +41,7 @@ if [[ -t 0 ]] && [[ -t 1 ]]; then
 fi
 
 # shellcheck disable=SC2086
-exec ssh "${SSH_TTY[@]}" "${REMOTE_USER}@${REMOTE_HOST}" bash -s <<EOF
+exec ssh ${SSH_TTY[@]+"${SSH_TTY[@]}"} "${REMOTE_USER}@${REMOTE_HOST}" bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
 if [[ ${STASH_FLAG} -eq 1 ]] && git rev-parse --git-dir >/dev/null 2>&1; then
