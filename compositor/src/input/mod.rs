@@ -11,8 +11,8 @@ use smithay::{
             GestureEndEvent as BackendGestureEndEvent,
             GesturePinchUpdateEvent as BackendGesturePinchUpdateEvent,
             GestureSwipeUpdateEvent as BackendGestureSwipeUpdateEvent, InputEvent, KeyState,
-            KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, TouchEvent,
-            TouchSlot,
+            KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
+            TouchEvent, TouchSlot,
         },
         session::Session,
     },
@@ -104,6 +104,202 @@ fn vt_number_from_fkey(sym: u32) -> Option<i32> {
 }
 
 impl CompositorState {
+    pub(crate) fn keyboard_input_from_source(
+        &mut self,
+        source: &'static str,
+        keycode: Keycode,
+        key_state: KeyState,
+        serial: Serial,
+        time: u32,
+        loop_handle: &LoopHandle<CalloopData>,
+    ) -> Result<(), String> {
+        let Some(keyboard) = self.input_routing.seat.get_keyboard() else {
+            return Err("keyboard is unavailable".to_string());
+        };
+        let is_autorepeat =
+            key_state == KeyState::Pressed && keyboard.pressed_keys().contains(&keycode);
+        let keyboard_grabbed = keyboard.is_grabbed();
+        let lh_kbd = loop_handle.clone();
+        keyboard.input::<(), _>(
+            self,
+            keycode,
+            key_state,
+            serial,
+            time,
+            move |state, mods, keysym| {
+                let raw_sym = keysym.modified_sym().raw();
+                let is_super = keysym_is_super(&keysym);
+                let is_alt = keysym_is_alt(&keysym);
+                if is_super {
+                    let next = key_state == KeyState::Pressed;
+                    if state.input_routing.shell_super_held != next {
+                        state.input_routing.shell_super_held = next;
+                        if state.input_routing.shell_move_window_id.is_some()
+                            || state.input_routing.shell_resize_window_id.is_some()
+                        {
+                            state.shell_send_interaction_state();
+                        }
+                    }
+                }
+                if state.screenshot_selection_active() {
+                    if key_state == KeyState::Released && is_super {
+                        state.input_routing.programs_menu_super_armed = false;
+                        state.input_routing.programs_menu_super_chord = false;
+                    }
+                    if matches!(raw_sym, keysyms::KEY_Escape) && key_state == KeyState::Pressed {
+                        state.cancel_screenshot_selection_mode();
+                    }
+                    return FilterResult::Intercept(());
+                }
+                if keyboard_grabbed {
+                    return FilterResult::Forward;
+                }
+                if key_state == KeyState::Pressed {
+                    if mods.ctrl && mods.alt {
+                        if let (Some(vt), Some(ref mut sess)) = (
+                            vt_number_from_fkey(raw_sym),
+                            state.session_services.vt_session.as_mut(),
+                        ) {
+                            if let Err(e) = sess.change_vt(vt) {
+                                tracing::warn!(?e, vt, "VT switch (Ctrl+Alt+F) failed");
+                            }
+                            return FilterResult::Intercept(());
+                        }
+                    }
+                    if mods.ctrl
+                        && mods.shift
+                        && matches!(raw_sym, keysyms::KEY_q | keysyms::KEY_Q)
+                        && !state.input_routing.seat.keyboard_shortcuts_inhibited()
+                    {
+                        state.stop_event_loop();
+                        return FilterResult::Intercept(());
+                    }
+                }
+                match crate::controls::volume::try_volume_key(&keysym, key_state) {
+                    None => {}
+                    Some(crate::controls::volume::VolumeKeyIntercept::ReleaseOnly) => {
+                        return FilterResult::Intercept(());
+                    }
+                    Some(crate::controls::volume::VolumeKeyIntercept::PressHud {
+                        volume_linear_percent_x100,
+                        muted,
+                        state_known,
+                    }) => {
+                        state.shell_send_to_cef(
+                            shell_wire::DecodedCompositorToShellMessage::VolumeOverlay {
+                                volume_linear_percent_x100,
+                                muted,
+                                state_known,
+                            },
+                        );
+                        return FilterResult::Intercept(());
+                    }
+                }
+                if key_state == KeyState::Pressed
+                    && matches!(raw_sym, keysyms::KEY_Escape)
+                    && state.shell_osr.shell_exclusion_overlay_open
+                    && state.shell_cef_active()
+                {
+                    state.shell_dismiss_context_menu_from_compositor();
+                    return FilterResult::Intercept(());
+                }
+                if key_state == KeyState::Pressed {
+                    if is_super && !state.input_routing.seat.keyboard_shortcuts_inhibited() {
+                        if state.input_routing.shell_move_window_id.is_some()
+                            || state.input_routing.shell_resize_window_id.is_some()
+                        {
+                            return FilterResult::Intercept(());
+                        }
+                        state.programs_menu_prepare_super_press();
+                        return FilterResult::Intercept(());
+                    }
+                    if matches!(raw_sym, keysyms::KEY_Tab)
+                        && mods.alt
+                        && !state.input_routing.seat.keyboard_shortcuts_inhibited()
+                    {
+                        if !is_autorepeat {
+                            state.shell_window_switcher_cycle(mods.shift);
+                        }
+                        return FilterResult::Intercept(());
+                    }
+                    if state.input_routing.programs_menu_super_armed
+                        && !is_super
+                        && !state.input_routing.seat.keyboard_shortcuts_inhibited()
+                    {
+                        if let Some(action) = state
+                            .super_hotkey_action_for_chord(raw_sym, mods.ctrl, mods.alt, mods.shift)
+                        {
+                            state.input_routing.programs_menu_super_chord = true;
+                            if state.shell_cef_active() {
+                                state.handle_super_hotkey_action(action);
+                            }
+                            return FilterResult::Intercept(());
+                        }
+                        state.input_routing.programs_menu_super_chord = true;
+                        return FilterResult::Intercept(());
+                    }
+                } else if key_state == KeyState::Released
+                    && is_super
+                    && !state.input_routing.seat.keyboard_shortcuts_inhibited()
+                {
+                    let armed = state.input_routing.programs_menu_super_armed;
+                    let chord = state.input_routing.programs_menu_super_chord;
+                    state.input_routing.programs_menu_super_armed = false;
+                    state.input_routing.programs_menu_super_chord = false;
+                    if armed && !chord {
+                        if state.shell_cef_active() {
+                            state.programs_menu_toggle_from_super(serial);
+                        } else {
+                            tracing::warn!(
+                                target: "derp_shell_menu",
+                                source,
+                                "queue pending launcher toggle until shell load success"
+                            );
+                            state.input_routing.programs_menu_super_pending_toggle = true;
+                        }
+                        return FilterResult::Intercept(());
+                    }
+                }
+                if state.shell_window_switcher_open() {
+                    if key_state == KeyState::Released && is_alt {
+                        state.shell_window_switcher_commit();
+                        return FilterResult::Intercept(());
+                    }
+                    if key_state == KeyState::Pressed && matches!(raw_sym, keysyms::KEY_Escape) {
+                        state.shell_window_switcher_cancel();
+                        return FilterResult::Intercept(());
+                    }
+                    return FilterResult::Intercept(());
+                }
+                if state.shell_keyboard_capture_active()
+                    && state.shell_cef_active()
+                    && state.shell_osr.shell_has_frame
+                {
+                    if key_state == KeyState::Pressed && is_autorepeat {
+                        return FilterResult::Intercept(());
+                    }
+                    if key_state == KeyState::Released {
+                        if state.input_routing.shell_cef_repeat_keycode == Some(keycode) {
+                            state.shell_cef_repeat_clear(&lh_kbd);
+                        }
+                        state.shell_ipc_forward_keyboard_to_cef(key_state, mods, &keysym, false);
+                        state.shell_ipc_refresh_pointer_modifiers();
+                        return FilterResult::Intercept(());
+                    }
+                    state.shell_ipc_forward_keyboard_to_cef(key_state, mods, &keysym, false);
+                    state.shell_ipc_refresh_pointer_modifiers();
+                    if CompositorState::shell_cef_sym_should_autorepeat(raw_sym) {
+                        let sr = keysym.modified_sym().raw();
+                        state.shell_cef_repeat_arm(&lh_kbd, keycode, sr);
+                    }
+                    return FilterResult::Intercept(());
+                }
+                FilterResult::Forward
+            },
+        );
+        Ok(())
+    }
+
     fn pointer_cursor_touch_repaint(&mut self) {
         self.shell_osr.shell_exclusion_zones_need_full_damage = true;
         self.capture.capture_force_full_damage_frames =
@@ -1365,196 +1561,13 @@ impl CompositorState {
                 let time = Event::time_msec(&event);
                 let key_state = event.state();
                 let keycode = event.key_code();
-                let keyboard = self.input_routing.seat.get_keyboard().unwrap();
-                let is_autorepeat =
-                    key_state == KeyState::Pressed && keyboard.pressed_keys().contains(&keycode);
-                let keyboard_grabbed = keyboard.is_grabbed();
-
-                let lh_kbd = loop_handle.clone();
-                keyboard.input::<(), _>(
-                    self,
+                let _ = self.keyboard_input_from_source(
+                    "libinput",
                     keycode,
                     key_state,
                     serial,
                     time,
-                    move |state, mods, keysym| {
-                        let raw_sym = keysym.modified_sym().raw();
-                        let is_super = keysym_is_super(&keysym);
-                        let is_alt = keysym_is_alt(&keysym);
-                        if is_super {
-                            let next = key_state == KeyState::Pressed;
-                            if state.input_routing.shell_super_held != next {
-                                state.input_routing.shell_super_held = next;
-                                if state.input_routing.shell_move_window_id.is_some()
-                                    || state.input_routing.shell_resize_window_id.is_some()
-                                {
-                                    state.shell_send_interaction_state();
-                                }
-                            }
-                        }
-                        if state.screenshot_selection_active() {
-                            if key_state == KeyState::Released && is_super {
-                                state.input_routing.programs_menu_super_armed = false;
-                                state.input_routing.programs_menu_super_chord = false;
-                            }
-                            if matches!(raw_sym, keysyms::KEY_Escape)
-                                && key_state == KeyState::Pressed
-                            {
-                                state.cancel_screenshot_selection_mode();
-                            }
-                            return FilterResult::Intercept(());
-                        }
-                        if keyboard_grabbed {
-                            return FilterResult::Forward;
-                        }
-                        if key_state == KeyState::Pressed {
-                            if mods.ctrl && mods.alt {
-                                if let (Some(vt), Some(ref mut sess)) = (
-                                    vt_number_from_fkey(raw_sym),
-                                    state.session_services.vt_session.as_mut(),
-                                ) {
-                                    if let Err(e) = sess.change_vt(vt) {
-                                        tracing::warn!(?e, vt, "VT switch (Ctrl+Alt+F) failed");
-                                    }
-                                    return FilterResult::Intercept(());
-                                }
-                            }
-                            if mods.ctrl
-                                && mods.shift
-                                && matches!(raw_sym, keysyms::KEY_q | keysyms::KEY_Q)
-                                && !state.input_routing.seat.keyboard_shortcuts_inhibited()
-                            {
-                                state.stop_event_loop();
-                                return FilterResult::Intercept(());
-                            }
-                        }
-                        match crate::controls::volume::try_volume_key(&keysym, key_state) {
-                            None => {}
-                            Some(crate::controls::volume::VolumeKeyIntercept::ReleaseOnly) => {
-                                return FilterResult::Intercept(());
-                            }
-                            Some(crate::controls::volume::VolumeKeyIntercept::PressHud {
-                                volume_linear_percent_x100,
-                                muted,
-                                state_known,
-                            }) => {
-                                state.shell_send_to_cef(
-                                    shell_wire::DecodedCompositorToShellMessage::VolumeOverlay {
-                                        volume_linear_percent_x100,
-                                        muted,
-                                        state_known,
-                                    },
-                                );
-                                return FilterResult::Intercept(());
-                            }
-                        }
-                        if key_state == KeyState::Pressed
-                            && matches!(raw_sym, keysyms::KEY_Escape)
-                            && state.shell_osr.shell_exclusion_overlay_open
-                            && state.shell_cef_active()
-                        {
-                            state.shell_dismiss_context_menu_from_compositor();
-                            return FilterResult::Intercept(());
-                        }
-                        if key_state == KeyState::Pressed {
-                            if is_super && !state.input_routing.seat.keyboard_shortcuts_inhibited()
-                            {
-                                if state.input_routing.shell_move_window_id.is_some()
-                                    || state.input_routing.shell_resize_window_id.is_some()
-                                {
-                                    return FilterResult::Intercept(());
-                                }
-                                state.programs_menu_prepare_super_press();
-                                return FilterResult::Intercept(());
-                            }
-                            if matches!(raw_sym, keysyms::KEY_Tab)
-                                && mods.alt
-                                && !state.input_routing.seat.keyboard_shortcuts_inhibited()
-                            {
-                                if !is_autorepeat {
-                                    state.shell_window_switcher_cycle(mods.shift);
-                                }
-                                return FilterResult::Intercept(());
-                            }
-                            if state.input_routing.programs_menu_super_armed
-                                && !is_super
-                                && !state.input_routing.seat.keyboard_shortcuts_inhibited()
-                            {
-                                if let Some(action) = state.super_hotkey_action_for_chord(
-                                    raw_sym, mods.ctrl, mods.alt, mods.shift,
-                                ) {
-                                    state.input_routing.programs_menu_super_chord = true;
-                                    if state.shell_cef_active() {
-                                        state.handle_super_hotkey_action(action);
-                                    }
-                                    return FilterResult::Intercept(());
-                                }
-                                state.input_routing.programs_menu_super_chord = true;
-                                return FilterResult::Intercept(());
-                            }
-                        } else if key_state == KeyState::Released
-                            && is_super
-                            && !state.input_routing.seat.keyboard_shortcuts_inhibited()
-                        {
-                            let armed = state.input_routing.programs_menu_super_armed;
-                            let chord = state.input_routing.programs_menu_super_chord;
-                            state.input_routing.programs_menu_super_armed = false;
-                            state.input_routing.programs_menu_super_chord = false;
-                            if armed && !chord {
-                                if state.shell_cef_active() {
-                                    state.programs_menu_toggle_from_super(serial);
-                                } else {
-                                    tracing::warn!(
-                                        target: "derp_shell_menu",
-                                        source = "libinput",
-                                        "queue pending launcher toggle until shell load success"
-                                    );
-                                    state.input_routing.programs_menu_super_pending_toggle = true;
-                                }
-                                return FilterResult::Intercept(());
-                            }
-                        }
-                        if state.shell_window_switcher_open() {
-                            if key_state == KeyState::Released && is_alt {
-                                state.shell_window_switcher_commit();
-                                return FilterResult::Intercept(());
-                            }
-                            if key_state == KeyState::Pressed
-                                && matches!(raw_sym, keysyms::KEY_Escape)
-                            {
-                                state.shell_window_switcher_cancel();
-                                return FilterResult::Intercept(());
-                            }
-                            return FilterResult::Intercept(());
-                        }
-                        if state.shell_keyboard_capture_active()
-                            && state.shell_cef_active()
-                            && state.shell_osr.shell_has_frame
-                        {
-                            if key_state == KeyState::Pressed && is_autorepeat {
-                                return FilterResult::Intercept(());
-                            }
-                            if key_state == KeyState::Released {
-                                if state.input_routing.shell_cef_repeat_keycode == Some(keycode) {
-                                    state.shell_cef_repeat_clear(&lh_kbd);
-                                }
-                                state.shell_ipc_forward_keyboard_to_cef(
-                                    key_state, mods, &keysym, false,
-                                );
-                                state.shell_ipc_refresh_pointer_modifiers();
-                                return FilterResult::Intercept(());
-                            }
-                            state
-                                .shell_ipc_forward_keyboard_to_cef(key_state, mods, &keysym, false);
-                            state.shell_ipc_refresh_pointer_modifiers();
-                            if CompositorState::shell_cef_sym_should_autorepeat(raw_sym) {
-                                let sr = keysym.modified_sym().raw();
-                                state.shell_cef_repeat_arm(&lh_kbd, keycode, sr);
-                            }
-                            return FilterResult::Intercept(());
-                        }
-                        FilterResult::Forward
-                    },
+                    loop_handle,
                 );
             }
             InputEvent::PointerMotion { event, .. } => {

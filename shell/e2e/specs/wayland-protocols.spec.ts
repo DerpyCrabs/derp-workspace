@@ -38,6 +38,8 @@ import {
   touchUp,
   waitFor,
   waitForNativeFocus,
+  waitForProgramsMenuClosed,
+  waitForProgramsMenuOpen,
   waitForSpawnedWindow,
   waitForWindowGone,
   writeJsonArtifact,
@@ -136,6 +138,23 @@ type InputMethodProbeStatus = {
   last_anchor: number;
   last_popup_width: number;
   last_popup_height: number;
+};
+
+type VirtualKeyboardProbeStatus = {
+  ready: boolean;
+  sent: boolean;
+  sequence: string;
+};
+
+type KeyboardStatus = {
+  enter: number;
+  leave: number;
+  press: number;
+  release: number;
+  modifiers: number;
+  last_raw_code: number;
+  last_keysym: string;
+  last_utf8: string;
 };
 
 type TouchStatus = {
@@ -834,6 +853,132 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await waitForWindowGone(base, textClient.window.window_id, 5000);
       await closeWindow(base, inputMethod.window.window_id);
       await waitForWindowGone(base, inputMethod.window.window_id, 5000);
+    }
+  });
+
+  test("trusted virtual keyboard injects focused native keys and compositor shortcuts", async ({
+    base,
+    state,
+  }) => {
+    const stamp = Date.now();
+    const globalsPath = path.join(
+      artifactDir(),
+      `virtual-keyboard-globals-${stamp}.txt`,
+    );
+    const globalsCommand = [
+      shellQuote(nativeBin()),
+      "--require-global",
+      "zwp_virtual_keyboard_manager_v1",
+      "--list-globals",
+      ">",
+      shellQuote(globalsPath),
+      "2>&1;",
+      "printf",
+      shellQuote("\\nexit:%s\\n"),
+      "$?",
+      ">>",
+      shellQuote(globalsPath),
+    ].join(" ");
+    await spawnCommand(base, `sh -lc ${shellQuote(globalsCommand)}`);
+    const globalsOutput = await waitFor(
+      "wait for virtual keyboard registry probe",
+      async () => {
+        try {
+          const text = await readFile(globalsPath, "utf8");
+          return text.includes("\nexit:") ? text : null;
+        } catch {
+          return null;
+        }
+      },
+      5000,
+      100,
+    );
+    assert(globalsOutput.includes("zwp_virtual_keyboard_manager_v1"), globalsOutput);
+    assert(globalsOutput.includes("\nexit:0\n"), globalsOutput);
+
+    const keyboardStatusPath = path.join(
+      artifactDir(),
+      `virtual-keyboard-target-${stamp}.json`,
+    );
+    const native = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Virtual Keyboard Target ${stamp}`,
+      appId: "derp.e2e.virtual.keyboard.target",
+      token: `virtual-keyboard-target-${stamp}`,
+      strip: "green",
+      width: 420,
+      height: 240,
+      keyboardStatusJson: keyboardStatusPath,
+    });
+    state.spawnedNativeWindowIds.add(native.window.window_id);
+    try {
+      await waitForNativeFocus(base, native.window.window_id);
+      const keyProbePath = path.join(
+        artifactDir(),
+        `virtual-keyboard-probe-key-${stamp}.json`,
+      );
+      const keyProbeCommand = [
+        shellQuote(nativeBin()),
+        "--virtual-keyboard-probe",
+        "--virtual-keyboard-status-json",
+        shellQuote(keyProbePath),
+        "--virtual-keyboard-sequence",
+        "a",
+      ].join(" ");
+      await spawnCommand(base, `sh -lc ${shellQuote(keyProbeCommand)}`);
+      await waitForStatusJson<VirtualKeyboardProbeStatus>(
+        keyProbePath,
+        "wait for virtual keyboard key probe",
+        (status) => status.ready && status.sent && status.sequence === "a",
+      );
+      const keyboardStatus = await waitForStatusJson<KeyboardStatus>(
+        keyboardStatusPath,
+        "wait for virtual keyboard target key",
+        (status) =>
+          status.press >= 1 &&
+          status.release >= 1 &&
+          status.last_raw_code === 30,
+      );
+      assert(
+        keyboardStatus.last_keysym.includes("a") || keyboardStatus.last_utf8 === "a",
+        JSON.stringify(keyboardStatus),
+      );
+
+      const beforeShell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+      if (beforeShell.programs_menu_open) {
+        await tapKey(base, KEY.escape);
+        await waitForProgramsMenuClosed(base);
+      }
+      const superProbePath = path.join(
+        artifactDir(),
+        `virtual-keyboard-probe-super-${stamp}.json`,
+      );
+      const superProbeCommand = [
+        shellQuote(nativeBin()),
+        "--virtual-keyboard-probe",
+        "--virtual-keyboard-status-json",
+        shellQuote(superProbePath),
+        "--virtual-keyboard-sequence",
+        "super",
+      ].join(" ");
+      await spawnCommand(base, `sh -lc ${shellQuote(superProbeCommand)}`);
+      await waitForStatusJson<VirtualKeyboardProbeStatus>(
+        superProbePath,
+        "wait for virtual keyboard super probe",
+        (status) => status.ready && status.sent && status.sequence === "super",
+      );
+      const opened = await waitForProgramsMenuOpen(base);
+      assert(opened.programs_menu_open, "virtual Super tap should open programs menu");
+      await tapKey(base, KEY.escape);
+      await waitForProgramsMenuClosed(base);
+      await writeJsonArtifact("virtual-keyboard.json", {
+        globals: globalsOutput,
+        keyboardStatus,
+        keyProbe: await readStatusJson<VirtualKeyboardProbeStatus>(keyProbePath),
+        superProbe: await readStatusJson<VirtualKeyboardProbeStatus>(superProbePath),
+      });
+    } finally {
+      await closeWindow(base, native.window.window_id);
+      await waitForWindowGone(base, native.window.window_id, 5000);
     }
   });
 

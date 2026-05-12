@@ -1,5 +1,19 @@
 use super::*;
 
+use std::os::fd::AsRawFd;
+
+type VirtualKeyboardManager =
+    wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
+type VirtualKeyboard =
+    wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
+type VirtualKeyboardManagerRequest =
+    wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_manager_v1::Request;
+type VirtualKeyboardRequest =
+    wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_v1::Request;
+type VirtualKeyboardManagerError =
+    wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_manager_v1::Error;
+type VirtualKeyboardError =
+    wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_v1::Error;
 type XdgToplevelDragManager =
     smithay::reexports::wayland_protocols::xdg::toplevel_drag::v1::server::xdg_toplevel_drag_manager_v1::XdgToplevelDragManagerV1;
 type XdgToplevelDrag =
@@ -18,6 +32,238 @@ type XdgDecorationRequest =
     smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Request;
 type XdgDecorationManagerRequest =
     smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1::Request;
+
+pub(crate) struct VirtualKeyboardState {
+    seat: Seat<CompositorState>,
+    keymap_set: AtomicBool,
+    pressed_keys: Mutex<HashSet<u32>>,
+    modifiers: Mutex<(u32, u32, u32, u32)>,
+}
+
+impl VirtualKeyboardState {
+    fn new(seat: Seat<CompositorState>) -> Self {
+        Self {
+            seat,
+            keymap_set: AtomicBool::new(false),
+            pressed_keys: Mutex::new(HashSet::new()),
+            modifiers: Mutex::new((0, 0, 0, 0)),
+        }
+    }
+}
+
+fn virtual_keyboard_client_allowed(client: &Client) -> bool {
+    client
+        .get_data::<ClientState>()
+        .is_some_and(|data| data.virtual_keyboard_allowed)
+}
+
+fn virtual_keyboard_keymap_is_valid(format: u32, fd: OwnedFd, size: u32) -> bool {
+    if format
+        != smithay::reexports::wayland_server::protocol::wl_keyboard::KeymapFormat::XkbV1 as u32
+    {
+        return false;
+    }
+    let Ok(len) = usize::try_from(size) else {
+        return false;
+    };
+    if len == 0 || len > 1024 * 1024 {
+        return false;
+    }
+    unsafe {
+        let ptr = libc::mmap(
+            std::ptr::null_mut(),
+            len,
+            libc::PROT_READ,
+            libc::MAP_PRIVATE,
+            fd.as_raw_fd(),
+            0,
+        );
+        if ptr == libc::MAP_FAILED {
+            return false;
+        }
+        let bytes = std::slice::from_raw_parts(ptr.cast::<u8>(), len);
+        let valid = std::str::from_utf8(bytes)
+            .ok()
+            .is_some_and(|text| text.contains("xkb_keymap"));
+        let _ = libc::munmap(ptr, len);
+        valid
+    }
+}
+
+impl CompositorState {
+    fn virtual_keyboard_release_pressed(&mut self, data: &VirtualKeyboardState) {
+        let keys = match data.pressed_keys.lock() {
+            Ok(mut pressed) => pressed.drain().collect::<Vec<_>>(),
+            Err(_) => Vec::new(),
+        };
+        let loop_handle = self.core.loop_handle.clone();
+        for key in keys {
+            let _ = self.keyboard_input_from_source(
+                "virtual_keyboard",
+                key.saturating_add(8).into(),
+                KeyState::Released,
+                SERIAL_COUNTER.next_serial(),
+                0,
+                &loop_handle,
+            );
+        }
+    }
+}
+
+impl smithay::reexports::wayland_server::GlobalDispatch<VirtualKeyboardManager, (), CompositorState>
+    for CompositorState
+{
+    fn bind(
+        _state: &mut CompositorState,
+        _dh: &DisplayHandle,
+        _client: &Client,
+        resource: smithay::reexports::wayland_server::New<VirtualKeyboardManager>,
+        _global_data: &(),
+        data_init: &mut smithay::reexports::wayland_server::DataInit<'_, CompositorState>,
+    ) {
+        data_init.init(resource, ());
+    }
+
+    fn can_view(client: Client, _global_data: &()) -> bool {
+        virtual_keyboard_client_allowed(&client)
+    }
+}
+
+impl smithay::reexports::wayland_server::Dispatch<VirtualKeyboardManager, (), CompositorState>
+    for CompositorState
+{
+    fn request(
+        state: &mut CompositorState,
+        client: &Client,
+        resource: &VirtualKeyboardManager,
+        request: VirtualKeyboardManagerRequest,
+        _data: &(),
+        _dh: &DisplayHandle,
+        data_init: &mut smithay::reexports::wayland_server::DataInit<'_, CompositorState>,
+    ) {
+        match request {
+            VirtualKeyboardManagerRequest::CreateVirtualKeyboard { seat, id } => {
+                if !virtual_keyboard_client_allowed(client) {
+                    resource.post_error(
+                        VirtualKeyboardManagerError::Unauthorized,
+                        "client is not authorized",
+                    );
+                    return;
+                }
+                let Some(seat) = Seat::<CompositorState>::from_resource(&seat) else {
+                    resource.post_error(
+                        VirtualKeyboardManagerError::Unauthorized,
+                        "seat is not available",
+                    );
+                    return;
+                };
+                if seat != state.input_routing.seat {
+                    resource.post_error(
+                        VirtualKeyboardManagerError::Unauthorized,
+                        "seat is not authorized",
+                    );
+                    return;
+                }
+                data_init.init(id, VirtualKeyboardState::new(seat));
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl
+    smithay::reexports::wayland_server::Dispatch<
+        VirtualKeyboard,
+        VirtualKeyboardState,
+        CompositorState,
+    > for CompositorState
+{
+    fn request(
+        state: &mut CompositorState,
+        _client: &Client,
+        resource: &VirtualKeyboard,
+        request: VirtualKeyboardRequest,
+        data: &VirtualKeyboardState,
+        _dh: &DisplayHandle,
+        _data_init: &mut smithay::reexports::wayland_server::DataInit<'_, CompositorState>,
+    ) {
+        match request {
+            VirtualKeyboardRequest::Keymap { format, fd, size } => {
+                data.keymap_set.store(
+                    virtual_keyboard_keymap_is_valid(format, fd, size),
+                    Ordering::SeqCst,
+                );
+            }
+            VirtualKeyboardRequest::Key {
+                time,
+                key,
+                state: key_state,
+            } => {
+                if !data.keymap_set.load(Ordering::SeqCst) {
+                    resource.post_error(VirtualKeyboardError::NoKeymap, "`key` sent before keymap");
+                    return;
+                }
+                if data.seat != state.input_routing.seat {
+                    return;
+                }
+                let key_state = if key_state == 1 {
+                    KeyState::Pressed
+                } else {
+                    KeyState::Released
+                };
+                if let Ok(mut pressed) = data.pressed_keys.lock() {
+                    match key_state {
+                        KeyState::Pressed => {
+                            pressed.insert(key);
+                        }
+                        KeyState::Released => {
+                            pressed.remove(&key);
+                        }
+                    }
+                }
+                let loop_handle = state.core.loop_handle.clone();
+                let _ = state.keyboard_input_from_source(
+                    "virtual_keyboard",
+                    key.saturating_add(8).into(),
+                    key_state,
+                    SERIAL_COUNTER.next_serial(),
+                    time,
+                    &loop_handle,
+                );
+            }
+            VirtualKeyboardRequest::Modifiers {
+                mods_depressed,
+                mods_latched,
+                mods_locked,
+                group,
+            } => {
+                if !data.keymap_set.load(Ordering::SeqCst) {
+                    resource.post_error(
+                        VirtualKeyboardError::NoKeymap,
+                        "`modifiers` sent before keymap",
+                    );
+                    return;
+                }
+                if let Ok(mut modifiers) = data.modifiers.lock() {
+                    *modifiers = (mods_depressed, mods_latched, mods_locked, group);
+                }
+            }
+            VirtualKeyboardRequest::Destroy => {
+                state.virtual_keyboard_release_pressed(data);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn destroyed(
+        state: &mut CompositorState,
+        _client: ClientId,
+        _resource: &VirtualKeyboard,
+        data: &VirtualKeyboardState,
+    ) {
+        state.virtual_keyboard_release_pressed(data);
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct XdgToplevelDragState {

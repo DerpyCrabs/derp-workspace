@@ -3181,6 +3181,7 @@ export function buildNativeSpawnCommand({
   textInputStatusJson,
   inputMethodProbe = false,
   inputMethodStatusJson,
+  keyboardStatusJson,
 }: {
   title: string
   appId?: string
@@ -3219,6 +3220,7 @@ export function buildNativeSpawnCommand({
   textInputStatusJson?: string
   inputMethodProbe?: boolean
   inputMethodStatusJson?: string
+  keyboardStatusJson?: string
 }): string {
   const parts = [
     nativeBin(),
@@ -3262,6 +3264,7 @@ export function buildNativeSpawnCommand({
   if (textInputStatusJson) parts.push('--text-input-status-json', shellQuote(textInputStatusJson))
   if (inputMethodProbe) parts.push('--input-method-probe')
   if (inputMethodStatusJson) parts.push('--input-method-status-json', shellQuote(inputMethodStatusJson))
+  if (keyboardStatusJson) parts.push('--keyboard-status-json', shellQuote(keyboardStatusJson))
   if (spawnOnPressCommand) {
     parts.push('--spawn-on-press-command', shellQuote(spawnOnPressCommand))
   }
@@ -3317,6 +3320,7 @@ export async function spawnNativeWindow(
     textInputStatusJson,
     inputMethodProbe,
     inputMethodStatusJson,
+    keyboardStatusJson,
   }: {
     title: string
     appId?: string
@@ -3355,6 +3359,7 @@ export async function spawnNativeWindow(
     textInputStatusJson?: string
     inputMethodProbe?: boolean
     inputMethodStatusJson?: string
+    keyboardStatusJson?: string
   },
 ): Promise<NativeSpawnResult> {
   const command = buildNativeSpawnCommand({
@@ -3395,6 +3400,7 @@ export async function spawnNativeWindow(
     textInputStatusJson,
     inputMethodProbe,
     inputMethodStatusJson,
+    keyboardStatusJson,
   })
   await spawnCommand(base, command)
   return waitForSpawnedWindow(base, knownWindowIds, { title, appId, command })

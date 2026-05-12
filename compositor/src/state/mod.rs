@@ -3,7 +3,8 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
     io::Write,
-    os::fd::OwnedFd,
+    os::fd::{AsRawFd, OwnedFd},
+    os::unix::net::UnixStream,
     path::PathBuf,
     process::Stdio,
     sync::{
@@ -674,6 +675,7 @@ impl CompositorState {
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
         let xdg_foreign_state = XdgForeignState::new::<Self>(&dh);
+        dh.create_global::<Self, wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1, _>(1, ());
         dh.create_global::<Self, smithay::reexports::wayland_protocols::xdg::toplevel_drag::v1::server::xdg_toplevel_drag_manager_v1::XdgToplevelDragManagerV1, _>(1, ());
         dh.create_global::<Self, smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1, _>(1, ());
         let kde_decoration_state = KdeDecorationState::new::<Self>(
@@ -3565,14 +3567,75 @@ mod x11_runtime;
 
 pub struct ClientState {
     pub compositor_state: CompositorClientState,
+    pub peer_pid: Option<i32>,
+    pub peer_uid: Option<u32>,
+    pub virtual_keyboard_allowed: bool,
 }
 
 impl Default for ClientState {
     fn default() -> Self {
         Self {
             compositor_state: CompositorClientState::default(),
+            peer_pid: None,
+            peer_uid: None,
+            virtual_keyboard_allowed: false,
         }
     }
+}
+
+impl ClientState {
+    pub(crate) fn from_stream(stream: &UnixStream) -> Self {
+        let mut state = Self::default();
+        #[cfg(target_os = "linux")]
+        {
+            let mut cred = libc::ucred {
+                pid: 0,
+                uid: 0,
+                gid: 0,
+            };
+            let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+            let ok = unsafe {
+                libc::getsockopt(
+                    stream.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_PEERCRED,
+                    (&mut cred as *mut libc::ucred).cast(),
+                    &mut len,
+                )
+            } == 0;
+            if ok {
+                state.peer_pid = Some(cred.pid);
+                state.peer_uid = Some(cred.uid);
+                state.virtual_keyboard_allowed =
+                    virtual_keyboard_client_is_allowed(state.peer_uid, state.peer_pid);
+            }
+        }
+        state
+    }
+}
+
+fn process_name_for_pid(pid: Option<i32>) -> Option<String> {
+    let pid = pid?;
+    if pid <= 0 {
+        return None;
+    }
+    std::fs::read_to_string(format!("/proc/{pid}/comm"))
+        .ok()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+fn virtual_keyboard_client_is_allowed(uid: Option<u32>, pid: Option<i32>) -> bool {
+    if uid != Some(unsafe { libc::geteuid() }) {
+        return false;
+    }
+    let Some(process_name) = process_name_for_pid(pid) else {
+        return false;
+    };
+    matches!(
+        process_name.as_str(),
+        "squeekboard" | "wvkbd" | "wvkbd-mobintl"
+    ) || process_name.starts_with("derp-test-clien")
 }
 
 impl ClientData for ClientState {

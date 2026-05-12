@@ -6,11 +6,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
-use smithay::input::keyboard::FilterResult;
 use smithay::input::pointer::AxisFrame;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
-use smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitorSeat;
 
 use crate::derp_space::DerpSpaceElem;
 use crate::window_registry::{WindowBackend, WindowKind, WindowLifecycle};
@@ -470,133 +468,17 @@ impl CompositorState {
         keycode: u32,
         key_state: KeyState,
     ) -> Result<(), String> {
-        let Some(keyboard) = self.input_routing.seat.get_keyboard() else {
-            return Err("keyboard is unavailable".to_string());
-        };
         let serial = SERIAL_COUNTER.next_serial();
         let time = self.e2e_now_ms() as u32;
         let keycode = keycode.saturating_add(8);
-        let keyboard_grabbed = keyboard.is_grabbed();
-        keyboard.input::<(), _>(
-            self,
+        self.keyboard_input_from_source(
+            "e2e",
             keycode.into(),
             key_state,
             serial,
             time,
-            move |state, mods, keysym| {
-                let raw_sym = keysym.modified_sym().raw();
-                let is_super = crate::input::keysym_is_super(&keysym);
-                let is_alt = crate::input::keysym_is_alt(&keysym);
-                if is_super {
-                    let next = key_state == KeyState::Pressed;
-                    if state.input_routing.shell_super_held != next {
-                        state.input_routing.shell_super_held = next;
-                        if state.input_routing.shell_move_window_id.is_some()
-                            || state.input_routing.shell_resize_window_id.is_some()
-                        {
-                            state.shell_send_interaction_state();
-                        }
-                    }
-                }
-                if state.screenshot_selection_active() {
-                    if key_state == KeyState::Pressed
-                        && matches!(raw_sym, smithay::input::keyboard::keysyms::KEY_Escape)
-                    {
-                        state.cancel_screenshot_selection_mode();
-                    }
-                    return FilterResult::Intercept(());
-                }
-                if keyboard_grabbed {
-                    return FilterResult::Forward;
-                }
-                if key_state == KeyState::Pressed {
-                    if is_super && !state.input_routing.seat.keyboard_shortcuts_inhibited() {
-                        if state.input_routing.shell_move_window_id.is_some()
-                            || state.input_routing.shell_resize_window_id.is_some()
-                        {
-                            return FilterResult::Intercept(());
-                        }
-                        state.programs_menu_prepare_super_press();
-                        return FilterResult::Intercept(());
-                    }
-                    if matches!(raw_sym, smithay::input::keyboard::keysyms::KEY_Tab)
-                        && mods.alt
-                        && !state.input_routing.seat.keyboard_shortcuts_inhibited()
-                    {
-                        state.shell_window_switcher_cycle(mods.shift);
-                        return FilterResult::Intercept(());
-                    }
-                    if state.input_routing.programs_menu_super_armed
-                        && !is_super
-                        && !state.input_routing.seat.keyboard_shortcuts_inhibited()
-                    {
-                        if let Some(action) = state
-                            .super_hotkey_action_for_chord(raw_sym, mods.ctrl, mods.alt, mods.shift)
-                        {
-                            state.input_routing.programs_menu_super_chord = true;
-                            if state.shell_cef_active() {
-                                state.handle_super_hotkey_action(action);
-                            }
-                            return FilterResult::Intercept(());
-                        }
-                        state.input_routing.programs_menu_super_chord = true;
-                        return FilterResult::Intercept(());
-                    }
-                } else if key_state == KeyState::Released
-                    && is_super
-                    && !state.input_routing.seat.keyboard_shortcuts_inhibited()
-                {
-                    let armed = state.input_routing.programs_menu_super_armed;
-                    let chord = state.input_routing.programs_menu_super_chord;
-                    state.input_routing.programs_menu_super_armed = false;
-                    state.input_routing.programs_menu_super_chord = false;
-                    if armed && !chord {
-                        if state.shell_cef_active() {
-                            state.programs_menu_toggle_from_super(serial);
-                        } else {
-                            tracing::warn!(
-                                target: "derp_shell_menu",
-                                source = "e2e",
-                                "queue pending launcher toggle until shell load success"
-                            );
-                            state.input_routing.programs_menu_super_pending_toggle = true;
-                        }
-                        return FilterResult::Intercept(());
-                    }
-                }
-                if state.shell_window_switcher_open() {
-                    if key_state == KeyState::Released && is_alt {
-                        state.shell_window_switcher_commit();
-                        return FilterResult::Intercept(());
-                    }
-                    if key_state == KeyState::Pressed
-                        && matches!(raw_sym, smithay::input::keyboard::keysyms::KEY_Escape)
-                    {
-                        state.shell_window_switcher_cancel();
-                        return FilterResult::Intercept(());
-                    }
-                    return FilterResult::Intercept(());
-                }
-                if state.shell_keyboard_capture_active()
-                    && state.shell_cef_active()
-                    && state.shell_osr.shell_has_frame
-                {
-                    state.shell_ipc_forward_keyboard_to_cef(key_state, mods, &keysym, false);
-                    state.shell_ipc_refresh_pointer_modifiers();
-                    return FilterResult::Intercept(());
-                }
-                if key_state == KeyState::Pressed
-                    && matches!(raw_sym, smithay::input::keyboard::keysyms::KEY_Escape)
-                    && state.shell_osr.shell_exclusion_overlay_open
-                    && state.shell_cef_active()
-                {
-                    state.shell_dismiss_context_menu_from_compositor();
-                    return FilterResult::Intercept(());
-                }
-                FilterResult::Forward
-            },
-        );
-        Ok(())
+            &self.core.loop_handle.clone(),
+        )
     }
 
     pub(crate) fn e2e_crash_window_client(&mut self, window_id: u32) -> Result<(), String> {

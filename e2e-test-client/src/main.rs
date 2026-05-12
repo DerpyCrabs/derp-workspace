@@ -37,6 +37,7 @@ use smithay_client_toolkit::{
         Shm, ShmHandler,
     },
 };
+use std::ffi::CString;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixListener;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -125,6 +126,10 @@ use wayland_protocols_misc::zwp_input_method_v2::client::{
     zwp_input_method_manager_v2::ZwpInputMethodManagerV2,
     zwp_input_method_v2::{self, ZwpInputMethodV2},
     zwp_input_popup_surface_v2::{self, ZwpInputPopupSurfaceV2},
+};
+use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
+    zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
+    zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{Layer as WlrLayer, ZwlrLayerShellV1},
@@ -335,6 +340,14 @@ struct Args {
     input_method_probe: bool,
     #[arg(long)]
     input_method_status_json: Option<String>,
+    #[arg(long, default_value_t = false)]
+    virtual_keyboard_probe: bool,
+    #[arg(long)]
+    virtual_keyboard_status_json: Option<String>,
+    #[arg(long, default_value = "a")]
+    virtual_keyboard_sequence: String,
+    #[arg(long)]
+    keyboard_status_json: Option<String>,
 }
 
 fn main() {
@@ -376,6 +389,11 @@ fn main() {
 
     if args.explicit_sync_dmabuf {
         run_explicit_sync_dmabuf(&args);
+        return;
+    }
+
+    if args.virtual_keyboard_probe {
+        run_virtual_keyboard_probe(&args);
         return;
     }
 
@@ -748,10 +766,13 @@ fn main() {
         input_method_status: InputMethodProbeStatus::default(),
         input_method_response_sent: false,
         input_method_serial: 0,
+        keyboard_status_json: args.keyboard_status_json,
+        keyboard_status: KeyboardStatus::default(),
     };
     state.write_touch_status();
     state.write_text_input_status();
     state.write_input_method_status();
+    state.write_keyboard_status();
 
     while !state.exit {
         event_queue
@@ -777,6 +798,98 @@ fn main() {
             state.primary_paste_pending = false;
             state.request_primary_paste(&conn);
         }
+    }
+}
+
+struct VirtualKeyboardProbeClient {
+    registry_state: RegistryState,
+    seat_state: SeatState,
+    manager: ZwpVirtualKeyboardManagerV1,
+    virtual_keyboard: Option<ZwpVirtualKeyboardV1>,
+    status_json: Option<String>,
+    sequence: String,
+    sent: bool,
+}
+
+impl VirtualKeyboardProbeClient {
+    fn write_status(&self, ready: bool) {
+        let Some(path) = self.status_json.as_ref() else {
+            return;
+        };
+        let json = format!(
+            "{{\"ready\":{},\"sent\":{},\"sequence\":\"{}\"}}",
+            ready,
+            self.sent,
+            TestClient::json_escape(&self.sequence),
+        );
+        let _ = std::fs::write(path, json);
+    }
+
+    fn keymap_file() -> fs::File {
+        let name = CString::new("derp-virtual-keyboard-keymap").unwrap();
+        let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
+        if fd < 0 {
+            panic!("memfd_create virtual keyboard keymap failed");
+        }
+        let mut file = unsafe { fs::File::from_raw_fd(fd) };
+        let bytes = b"xkb_keymap { xkb_keycodes \"derp\" { minimum = 8; maximum = 255; }; xkb_types \"derp\" { }; xkb_compatibility \"derp\" { }; xkb_symbols \"derp\" { }; xkb_geometry \"derp\" { }; };";
+        file.write_all(bytes)
+            .expect("write virtual keyboard keymap");
+        file
+    }
+
+    fn send_probe(&mut self, conn: &Connection, qh: &QueueHandle<Self>, seat: &wl_seat::WlSeat) {
+        if self.sent {
+            return;
+        }
+        let keyboard = self.manager.create_virtual_keyboard(seat, qh, ());
+        let file = Self::keymap_file();
+        let size = file
+            .metadata()
+            .expect("virtual keyboard keymap metadata")
+            .len() as u32;
+        keyboard.keymap(wl_keyboard::KeymapFormat::XkbV1 as u32, file.as_fd(), size);
+        match self.sequence.as_str() {
+            "super" => {
+                keyboard.key(1, 125, wl_keyboard::KeyState::Pressed as u32);
+                keyboard.key(2, 125, wl_keyboard::KeyState::Released as u32);
+            }
+            _ => {
+                keyboard.key(1, 30, wl_keyboard::KeyState::Pressed as u32);
+                keyboard.key(2, 30, wl_keyboard::KeyState::Released as u32);
+            }
+        }
+        self.virtual_keyboard = Some(keyboard);
+        self.sent = true;
+        self.write_status(true);
+        conn.flush().expect("flush virtual keyboard probe");
+    }
+}
+
+fn run_virtual_keyboard_probe(args: &Args) {
+    let conn = Connection::connect_to_env().expect("connect virtual keyboard probe");
+    let (globals, mut event_queue) = registry_queue_init::<VirtualKeyboardProbeClient>(&conn)
+        .expect("init virtual keyboard registry");
+    let qh = event_queue.handle();
+    let registry_state = RegistryState::new(&globals);
+    let seat_state = SeatState::new(&globals, &qh);
+    let manager = globals
+        .bind::<ZwpVirtualKeyboardManagerV1, _, _>(&qh, 1..=1, ())
+        .expect("bind zwp_virtual_keyboard_manager_v1");
+    let mut state = VirtualKeyboardProbeClient {
+        registry_state,
+        seat_state,
+        manager,
+        virtual_keyboard: None,
+        status_json: args.virtual_keyboard_status_json.clone(),
+        sequence: args.virtual_keyboard_sequence.clone(),
+        sent: false,
+    };
+    state.write_status(false);
+    while !state.sent {
+        event_queue
+            .blocking_dispatch(&mut state)
+            .expect("dispatch virtual keyboard probe events");
     }
 }
 
@@ -1022,6 +1135,8 @@ struct TestClient {
     input_method_status: InputMethodProbeStatus,
     input_method_response_sent: bool,
     input_method_serial: u32,
+    keyboard_status_json: Option<String>,
+    keyboard_status: KeyboardStatus,
 }
 
 struct PopupProbeSurface {
@@ -1078,6 +1193,18 @@ struct InputMethodProbeStatus {
     last_anchor: u32,
     last_popup_width: i32,
     last_popup_height: i32,
+}
+
+#[derive(Default)]
+struct KeyboardStatus {
+    enter: u32,
+    leave: u32,
+    press: u32,
+    release: u32,
+    modifiers: u32,
+    last_raw_code: u32,
+    last_keysym: String,
+    last_utf8: String,
 }
 
 #[derive(Default)]
@@ -1200,6 +1327,25 @@ impl TestClient {
             status.last_anchor,
             status.last_popup_width,
             status.last_popup_height,
+        );
+        let _ = std::fs::write(path, json);
+    }
+
+    fn write_keyboard_status(&self) {
+        let Some(path) = self.keyboard_status_json.as_ref() else {
+            return;
+        };
+        let status = &self.keyboard_status;
+        let json = format!(
+            "{{\"enter\":{},\"leave\":{},\"press\":{},\"release\":{},\"modifiers\":{},\"last_raw_code\":{},\"last_keysym\":\"{}\",\"last_utf8\":\"{}\"}}",
+            status.enter,
+            status.leave,
+            status.press,
+            status.release,
+            status.modifiers,
+            status.last_raw_code,
+            Self::json_escape(&status.last_keysym),
+            Self::json_escape(&status.last_utf8),
         );
         let _ = std::fs::write(path, json);
     }
@@ -3779,6 +3925,8 @@ impl KeyboardHandler for TestClient {
         _raw: &[u32],
         _keysyms: &[Keysym],
     ) {
+        self.keyboard_status.enter = self.keyboard_status.enter.saturating_add(1);
+        self.write_keyboard_status();
         if self.xdg_popup_grab_probe {
             self.xdg_popup_status.keyboard_enters =
                 self.xdg_popup_status.keyboard_enters.saturating_add(1);
@@ -3796,6 +3944,8 @@ impl KeyboardHandler for TestClient {
         _surface: &wl_surface::WlSurface,
         _serial: u32,
     ) {
+        self.keyboard_status.leave = self.keyboard_status.leave.saturating_add(1);
+        self.write_keyboard_status();
     }
 
     fn press_key(
@@ -3811,6 +3961,11 @@ impl KeyboardHandler for TestClient {
                 self.xdg_popup_status.escape_pressed.saturating_add(1);
             self.destroy_topmost_xdg_popup();
         }
+        self.keyboard_status.press = self.keyboard_status.press.saturating_add(1);
+        self.keyboard_status.last_raw_code = event.raw_code;
+        self.keyboard_status.last_keysym = format!("{:?}", event.keysym);
+        self.keyboard_status.last_utf8 = event.utf8.unwrap_or_default();
+        self.write_keyboard_status();
         let Some(seat) = self.keyboard_seat.as_ref() else {
             return;
         };
@@ -3833,8 +3988,13 @@ impl KeyboardHandler for TestClient {
         qh: &QueueHandle<Self>,
         _keyboard: &wl_keyboard::WlKeyboard,
         serial: u32,
-        _event: KeyEvent,
+        event: KeyEvent,
     ) {
+        self.keyboard_status.release = self.keyboard_status.release.saturating_add(1);
+        self.keyboard_status.last_raw_code = event.raw_code;
+        self.keyboard_status.last_keysym = format!("{:?}", event.keysym);
+        self.keyboard_status.last_utf8.clear();
+        self.write_keyboard_status();
         let Some(seat) = self.keyboard_seat.as_ref() else {
             return;
         };
@@ -3851,6 +4011,8 @@ impl KeyboardHandler for TestClient {
         _raw_modifiers: RawModifiers,
         _layout: u32,
     ) {
+        self.keyboard_status.modifiers = self.keyboard_status.modifiers.saturating_add(1);
+        self.write_keyboard_status();
     }
 
     fn update_repeat_info(
@@ -4081,6 +4243,37 @@ impl SeatHandler for TestClient {
             self.touch_status.device_ready = false;
             self.write_touch_status();
         }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl SeatHandler for VirtualKeyboardProbeClient {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Keyboard {
+            self.send_probe(conn, qh, &seat);
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        _: Capability,
+    ) {
     }
 
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
@@ -4699,6 +4892,10 @@ delegate_noop!(TestClient: ignore ZxdgDecorationManagerV1);
 delegate_noop!(TestClient: ignore ZxdgToplevelDecorationV1);
 delegate_noop!(TestClient: ignore OrgKdeKwinServerDecorationManager);
 delegate_noop!(TestClient: ignore OrgKdeKwinServerDecoration);
+delegate_seat!(VirtualKeyboardProbeClient);
+delegate_registry!(VirtualKeyboardProbeClient);
+delegate_noop!(VirtualKeyboardProbeClient: ignore ZwpVirtualKeyboardManagerV1);
+delegate_noop!(VirtualKeyboardProbeClient: ignore ZwpVirtualKeyboardV1);
 delegate_compositor!(LayerPanelClient);
 delegate_output!(LayerPanelClient);
 delegate_shm!(LayerPanelClient);
@@ -4738,6 +4935,14 @@ impl ProvidesRegistryState for TestClient {
     }
 
     registry_handlers!(OutputState, SeatState);
+}
+
+impl ProvidesRegistryState for VirtualKeyboardProbeClient {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+
+    registry_handlers!(SeatState);
 }
 
 impl ProvidesRegistryState for LayerPanelClient {
