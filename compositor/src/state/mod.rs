@@ -1704,6 +1704,13 @@ impl CompositorState {
         self.surface_under_except_window(pos, None)
     }
 
+    pub(crate) fn upper_layer_surface_under(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        self.layer_surface_under(pos, &[Layer::Overlay, Layer::Top])
+    }
+
     pub(crate) fn surface_under_except_window(
         &self,
         pos: Point<f64, Logical>,

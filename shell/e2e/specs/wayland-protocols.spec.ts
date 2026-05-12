@@ -170,6 +170,18 @@ type TouchStatus = {
   last_position: [number, number];
 };
 
+type LayerPanelStatus = {
+  configured: boolean;
+  width: number;
+  height: number;
+  pointer_enter: number;
+  pointer_press: number;
+  touch_down: number;
+  touch_motion: number;
+  touch_up: number;
+  last_position: [number, number];
+};
+
 async function readStatusJson<T>(filePath: string): Promise<T | null> {
   try {
     return JSON.parse(await readFile(filePath, "utf8")) as T;
@@ -296,6 +308,26 @@ async function dominantInteriorColor(
     path: screenshot.path,
     red,
     green,
+    total: png.width * png.height,
+  };
+}
+
+async function layerPanelCyanPixels(
+  base: string,
+  rect: { x: number; y: number; width: number; height: number },
+) {
+  const screenshot = await captureScreenshotRect(base, rect);
+  const png = await readPngRgba(screenshot.path);
+  let cyan = 0;
+  for (let index = 0; index < png.data.length; index += 4) {
+    const r = png.data[index] ?? 0;
+    const g = png.data[index + 1] ?? 0;
+    const b = png.data[index + 2] ?? 0;
+    if (r < 90 && g > 130 && b > 160) cyan += 1;
+  }
+  return {
+    path: screenshot.path,
+    cyan,
     total: png.width * png.height,
   };
 }
@@ -486,6 +518,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const command = [
       shellQuote(nativeBin()),
       "--require-global",
+      "zwlr_layer_shell_v1",
+      "--require-global",
       "wp_presentation",
       "--require-global",
       "wp_content_type_manager_v1",
@@ -521,6 +555,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     );
+    assert(output.includes("zwlr_layer_shell_v1 "), output);
     assert(output.includes("wp_presentation 2"), output);
     assert(output.includes("wp_content_type_manager_v1 1"), output);
     assert(output.includes("wp_tearing_control_manager_v1 1"), output);
@@ -1536,6 +1571,117 @@ export default defineGroup(import.meta.url, ({ test }) => {
         nativeTiled: nativeTiled.window,
         shellMaximized: shellMaximized.window,
         shellTiled: shellTiled.window,
+      });
+    } finally {
+      await spawnCommand(base, `pkill -f ${shellQuote(panelToken)} || true`);
+    }
+  });
+
+  test("layer-shell overlay can host an OSK-style bottom touch panel without stealing native focus", async ({
+    base,
+    state,
+  }) => {
+    const stamp = Date.now();
+    const height = 220;
+    const panelToken = `layer-osk-panel-${stamp}`;
+    const statusPath = path.join(artifactDir(), `layer-osk-status-${stamp}.json`);
+    const native = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Layer OSK Focus ${stamp}`,
+      appId: "derp.e2e.layer.osk.focus",
+      token: `layer-osk-focus-${stamp}`,
+      strip: "green",
+      width: 460,
+      height: 300,
+    });
+    state.spawnedNativeWindowIds.add(native.window.window_id);
+    await waitForNativeFocus(base, native.window.window_id);
+    await spawnCommand(
+      base,
+      [
+        shellQuote(nativeBin()),
+        "--layer-panel",
+        "--layer-panel-osk",
+        "--height",
+        String(height),
+        "--token",
+        shellQuote(panelToken),
+        "--layer-panel-status-json",
+        shellQuote(statusPath),
+      ].join(" "),
+    );
+    try {
+      const ready = await waitForStatusJson<LayerPanelStatus>(
+        statusPath,
+        "wait for layer OSK panel configure",
+        (status) => status.configured && status.height === height && status.width > 0,
+      );
+      const compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      const output =
+        compositor.outputs.find((entry) => entry.width === ready.width) ??
+        compositor.outputs[0];
+      assert(output, "missing output for layer OSK panel");
+      const panelRect = {
+        x: output.x,
+        y: output.y + output.height - ready.height,
+        width: output.width,
+        height: ready.height,
+      };
+      const rendered = await waitFor(
+        "wait for layer OSK panel pixels",
+        async () => {
+          const pixels = await layerPanelCyanPixels(base, panelRect);
+          return pixels.cyan > pixels.total * 0.02 ? pixels : null;
+        },
+        5000,
+        100,
+      );
+      const hitPoint = {
+        x: panelRect.x + Math.floor(panelRect.width / 2),
+        y: panelRect.y + Math.floor(panelRect.height / 2),
+      };
+      await movePoint(base, hitPoint.x, hitPoint.y);
+      await pointerButton(base, BTN_LEFT, "press");
+      await pointerButton(base, BTN_LEFT, "release");
+      const pointerDelivered = await waitForStatusJson<LayerPanelStatus>(
+        statusPath,
+        "wait for layer OSK pointer delivery",
+        (status) =>
+          status.pointer_enter >= ready.pointer_enter + 1 &&
+          status.pointer_press >= ready.pointer_press + 1,
+      );
+      await waitForNativeFocus(base, native.window.window_id);
+
+      await touchDown(base, hitPoint.x, hitPoint.y);
+      await touchMove(base, hitPoint.x + 18, hitPoint.y - 12);
+      await touchUp(base);
+      const touchDelivered = await waitForStatusJson<LayerPanelStatus>(
+        statusPath,
+        "wait for layer OSK touch delivery",
+        (status) =>
+          status.touch_down >= pointerDelivered.touch_down + 1 &&
+          status.touch_motion >= pointerDelivered.touch_motion + 1 &&
+          status.touch_up >= pointerDelivered.touch_up + 1,
+      );
+      const focusAfterTouch = await waitForNativeFocus(
+        base,
+        native.window.window_id,
+      );
+      const taskbarRow = focusAfterTouch.shell.taskbar_windows.find(
+        (entry) => entry.window_id === native.window.window_id,
+      );
+      assert(
+        Boolean(taskbarRow?.activate),
+        `native taskbar focus not preserved: ${JSON.stringify(taskbarRow)}`,
+      );
+      await writeJsonArtifact("layer-shell-osk-overlay-input.json", {
+        panelRect,
+        rendered,
+        pointerDelivered,
+        touchDelivered,
+        focusedWindowId: focusAfterTouch.compositor.focused_window_id,
       });
     } finally {
       await spawnCommand(base, `pkill -f ${shellQuote(panelToken)} || true`);

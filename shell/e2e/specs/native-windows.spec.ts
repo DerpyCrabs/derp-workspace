@@ -2382,7 +2382,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const startY = Math.round(ready.window.y + Math.min(24, Math.max(14, ready.window.height * 0.08)))
     await movePoint(base, startX, startY)
     await pointerButton(base, BTN_LEFT, 'press')
-    const dx = -180
+    const dx = 0
     const dy = 64
     const steps = 24
     for (let index = 1; index <= steps; index += 1) {

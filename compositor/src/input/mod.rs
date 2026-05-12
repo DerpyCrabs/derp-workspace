@@ -1513,15 +1513,17 @@ impl CompositorState {
                     }
                 }
             } else {
-                self.shell_emit_shell_ui_focus_if_changed(None);
-                self.output_topology.space.elements().for_each(|e| {
-                    e.set_activate(false);
-                    if let DerpSpaceElem::Wayland(w) = e {
-                        w.toplevel().unwrap().send_pending_configure();
-                    }
-                });
-                keyboard.set_focus(self, Option::<WlSurface>::None, serial);
-                self.keyboard_on_focus_surface_changed(None);
+                if self.upper_layer_surface_under(pos).is_none() {
+                    self.shell_emit_shell_ui_focus_if_changed(None);
+                    self.output_topology.space.elements().for_each(|e| {
+                        e.set_activate(false);
+                        if let DerpSpaceElem::Wayland(w) = e {
+                            w.toplevel().unwrap().send_pending_configure();
+                        }
+                    });
+                    keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+                    self.keyboard_on_focus_surface_changed(None);
+                }
             }
         }
 

@@ -133,7 +133,9 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{Layer as WlrLayer, ZwlrLayerShellV1},
-    zwlr_layer_surface_v1::{Anchor, Event as LayerSurfaceEvent, ZwlrLayerSurfaceV1},
+    zwlr_layer_surface_v1::{
+        Anchor, Event as LayerSurfaceEvent, KeyboardInteractivity, ZwlrLayerSurfaceV1,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,6 +288,10 @@ struct Args {
     control_socket: Option<String>,
     #[arg(long, default_value_t = false)]
     layer_panel: bool,
+    #[arg(long, default_value_t = false)]
+    layer_panel_osk: bool,
+    #[arg(long)]
+    layer_panel_status_json: Option<String>,
     #[arg(long, default_value_t = 48)]
     exclusive_zone: i32,
     #[arg(long, default_value_t = false)]
@@ -891,11 +897,15 @@ fn run_virtual_keyboard_probe(args: &Args) {
             .blocking_dispatch(&mut state)
             .expect("dispatch virtual keyboard probe events");
     }
+    event_queue
+        .roundtrip(&mut state)
+        .expect("roundtrip virtual keyboard probe events");
 }
 
 struct LayerPanelClient {
     registry_state: RegistryState,
     output_state: OutputState,
+    seat_state: SeatState,
     _compositor_state: CompositorState,
     shm_state: Shm,
     pool: SlotPool,
@@ -907,6 +917,18 @@ struct LayerPanelClient {
     height: u32,
     token: String,
     configured: bool,
+    pointer: Option<wl_pointer::WlPointer>,
+    pointer_seat: Option<wl_seat::WlSeat>,
+    touch: Option<wl_touch::WlTouch>,
+    touch_seat: Option<wl_seat::WlSeat>,
+    status_json: Option<String>,
+    pointer_enter: u32,
+    pointer_press: u32,
+    touch_down: u32,
+    touch_motion: u32,
+    touch_up: u32,
+    last_x: f64,
+    last_y: f64,
 }
 
 fn run_layer_panel(args: &Args) {
@@ -916,29 +938,52 @@ fn run_layer_panel(args: &Args) {
     let compositor_state = CompositorState::bind(&globals, &qh).expect("bind wl_compositor");
     let shm_state = Shm::bind(&globals, &qh).expect("bind wl_shm");
     let output_state = OutputState::new(&globals, &qh);
+    let seat_state = SeatState::new(&globals, &qh);
     let registry_state = RegistryState::new(&globals);
     let layer_shell = globals
         .bind::<ZwlrLayerShellV1, _, _>(&qh, 1..=4, ())
         .expect("bind zwlr_layer_shell_v1");
     let surface = compositor_state.create_surface(&qh);
+    let layer = if args.layer_panel_osk {
+        WlrLayer::Overlay
+    } else {
+        WlrLayer::Top
+    };
     let layer_surface = layer_shell.get_layer_surface(
         &surface,
         None::<&wl_output::WlOutput>,
-        WlrLayer::Top,
-        "derp-e2e-exclusive-panel".to_string(),
+        layer,
+        if args.layer_panel_osk {
+            "derp-e2e-osk-panel"
+        } else {
+            "derp-e2e-exclusive-panel"
+        }
+        .to_string(),
         &qh,
         (),
     );
-    let zone = args.exclusive_zone.max(1);
-    layer_surface.set_size(0, zone as u32);
-    layer_surface.set_anchor(Anchor::Top | Anchor::Left | Anchor::Right);
-    layer_surface.set_exclusive_zone(zone);
+    let height = if args.layer_panel_osk {
+        args.height.max(1)
+    } else {
+        args.exclusive_zone.max(1) as u32
+    };
+    layer_surface.set_size(0, height);
+    if args.layer_panel_osk {
+        layer_surface.set_anchor(Anchor::Bottom | Anchor::Left | Anchor::Right);
+        layer_surface.set_exclusive_zone(0);
+        layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
+    } else {
+        let zone = args.exclusive_zone.max(1);
+        layer_surface.set_anchor(Anchor::Top | Anchor::Left | Anchor::Right);
+        layer_surface.set_exclusive_zone(zone);
+    }
     surface.commit();
-    let pool = SlotPool::new((args.width.max(1) * zone as u32 * 4) as usize, &shm_state)
+    let pool = SlotPool::new((args.width.max(1) * height * 4) as usize, &shm_state)
         .expect("create shared memory pool");
     let mut state = LayerPanelClient {
         registry_state,
         output_state,
+        seat_state,
         _compositor_state: compositor_state,
         shm_state,
         pool,
@@ -947,10 +992,23 @@ fn run_layer_panel(args: &Args) {
         _layer_surface: layer_surface,
         buffer: None,
         width: args.width.max(1),
-        height: zone as u32,
+        height,
         token: args.token.clone(),
         configured: false,
+        pointer: None,
+        pointer_seat: None,
+        touch: None,
+        touch_seat: None,
+        status_json: args.layer_panel_status_json.clone(),
+        pointer_enter: 0,
+        pointer_press: 0,
+        touch_down: 0,
+        touch_motion: 0,
+        touch_up: 0,
+        last_x: 0.0,
+        last_y: 0.0,
     };
+    state.write_status();
     loop {
         event_queue
             .blocking_dispatch(&mut state)
@@ -959,6 +1017,33 @@ fn run_layer_panel(args: &Args) {
 }
 
 impl LayerPanelClient {
+    fn write_status(&self) {
+        let Some(path) = self.status_json.as_ref() else {
+            return;
+        };
+        let json = format!(
+            concat!(
+                "{{",
+                "\"configured\":{},\"width\":{},\"height\":{},",
+                "\"pointer_enter\":{},\"pointer_press\":{},",
+                "\"touch_down\":{},\"touch_motion\":{},\"touch_up\":{},",
+                "\"last_position\":[{:.3},{:.3}]",
+                "}}\n"
+            ),
+            if self.configured { "true" } else { "false" },
+            self.width,
+            self.height,
+            self.pointer_enter,
+            self.pointer_press,
+            self.touch_down,
+            self.touch_motion,
+            self.touch_up,
+            self.last_x,
+            self.last_y,
+        );
+        fs::write(path, json).expect("write layer panel status json");
+    }
+
     fn draw(&mut self) {
         if !self.configured {
             return;
@@ -1014,6 +1099,7 @@ impl LayerPanelClient {
             .attach_to(&self.surface)
             .expect("attach layer buffer");
         self.surface.commit();
+        self.write_status();
     }
 }
 
@@ -4114,6 +4200,153 @@ impl ShmHandler for LayerPanelClient {
     }
 }
 
+impl SeatHandler for LayerPanelClient {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer && self.pointer.is_none() {
+            self.pointer_seat = Some(seat.clone());
+            self.pointer = Some(
+                self.seat_state
+                    .get_pointer(qh, &seat)
+                    .expect("create pointer"),
+            );
+        }
+        if capability == Capability::Touch && self.touch.is_none() {
+            self.touch_seat = Some(seat.clone());
+            self.touch = Some(self.seat_state.get_touch(qh, &seat).expect("create touch"));
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _conn: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer {
+            if let Some(pointer) = self.pointer.take() {
+                pointer.release();
+            }
+            self.pointer_seat = None;
+        }
+        if capability == Capability::Touch {
+            if let Some(touch) = self.touch.take() {
+                touch.release();
+            }
+            self.touch_seat = None;
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl PointerHandler for LayerPanelClient {
+    fn pointer_frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        for event in events {
+            self.last_x = event.position.0;
+            self.last_y = event.position.1;
+            match event.kind {
+                PointerEventKind::Enter { .. } => {
+                    self.pointer_enter = self.pointer_enter.saturating_add(1);
+                }
+                PointerEventKind::Press { .. } => {
+                    self.pointer_press = self.pointer_press.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+        self.write_status();
+    }
+}
+
+impl TouchHandler for LayerPanelClient {
+    fn down(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _serial: u32,
+        _time: u32,
+        _surface: wl_surface::WlSurface,
+        _id: i32,
+        position: (f64, f64),
+    ) {
+        self.touch_down = self.touch_down.saturating_add(1);
+        self.last_x = position.0;
+        self.last_y = position.1;
+        self.write_status();
+    }
+
+    fn up(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _serial: u32,
+        _time: u32,
+        _id: i32,
+    ) {
+        self.touch_up = self.touch_up.saturating_add(1);
+        self.write_status();
+    }
+
+    fn motion(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _time: u32,
+        _id: i32,
+        position: (f64, f64),
+    ) {
+        self.touch_motion = self.touch_motion.saturating_add(1);
+        self.last_x = position.0;
+        self.last_y = position.1;
+        self.write_status();
+    }
+
+    fn shape(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _id: i32,
+        _major: f64,
+        _minor: f64,
+    ) {
+    }
+
+    fn orientation(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _id: i32,
+        _orientation: f64,
+    ) {
+    }
+
+    fn cancel(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch) {}
+}
+
 impl Dispatch<ZwlrLayerSurfaceV1, ()> for LayerPanelClient {
     fn event(
         state: &mut Self,
@@ -4135,6 +4368,7 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for LayerPanelClient {
             state.buffer = None;
             state.configured = true;
             state.draw();
+            state.write_status();
         }
     }
 }
@@ -4899,6 +5133,9 @@ delegate_noop!(VirtualKeyboardProbeClient: ignore ZwpVirtualKeyboardV1);
 delegate_compositor!(LayerPanelClient);
 delegate_output!(LayerPanelClient);
 delegate_shm!(LayerPanelClient);
+delegate_seat!(LayerPanelClient);
+delegate_pointer!(LayerPanelClient);
+delegate_touch!(LayerPanelClient);
 delegate_registry!(LayerPanelClient);
 delegate_noop!(LayerPanelClient: ignore ZwlrLayerShellV1);
 delegate_noop!(LayerPanelClient: ignore wl_buffer::WlBuffer);
@@ -4950,5 +5187,5 @@ impl ProvidesRegistryState for LayerPanelClient {
         &mut self.registry_state
     }
 
-    registry_handlers!(OutputState);
+    registry_handlers!(OutputState, SeatState);
 }
