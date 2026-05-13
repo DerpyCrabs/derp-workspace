@@ -7,7 +7,16 @@ import {
   type TestContext,
   type WindowSnapshot,
 } from '../lib/runtime.ts'
-import { clickRect, clickRectWithoutSync, dragBetweenPoints, movePoint, pointerButton } from '../lib/user.ts'
+import {
+  clickRect,
+  clickRectWithoutSync,
+  dragBetweenPoints,
+  movePoint,
+  pointerButton,
+  touchDown,
+  touchMove,
+  touchUp,
+} from '../lib/user.ts'
 import {
   assert,
   assertRectMinSize,
@@ -283,6 +292,91 @@ async function dragRightResizeEdge(base: string, windowId: number, dx: number, l
   return { before: beforeWindow, after: afterWindow, during: resizeRect, handle }
 }
 
+async function dragTitlebarByTouch(base: string, windowId: number, dx: number, dy: number, label: string) {
+  const before = await waitForShellTracksCompositor(base, windowId, `${label} before touch drag`)
+  const beforeWindow = shellWindowById(before.shell, windowId)
+  assert(beforeWindow, `${label} missing window before touch drag`)
+  const titlebar = await waitFor(
+    `${label} touch titlebar control`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const rect = windowControls(shell, windowId)?.titlebar
+      return rect && rect.width >= 80 && rect.height >= 16 ? rect : null
+    },
+    5000,
+    40,
+  )
+  const startX = titlebar.global_x + Math.min(Math.max(titlebar.width * 0.35, 80), titlebar.width - 80)
+  const startY = titlebar.global_y + titlebar.height / 2
+  await touchDown(base, startX, startY)
+  await touchMove(base, startX + dx, startY + dy)
+  const during = await getSnapshots(base)
+  assert(during.compositor.shell_move_visual, `${label} missing active touch move rect`)
+  await touchUp(base)
+  const settled = await waitForChromeSettled(base, windowId, `${label} touch drag settled`)
+  const afterWindow = shellWindowById(settled.shell, windowId)
+  assert(afterWindow, `${label} missing window after touch drag`)
+  assert(
+    Math.abs(afterWindow.x - (beforeWindow.x + dx)) <= 2 && Math.abs(afterWindow.y - (beforeWindow.y + dy)) <= 2,
+    `${label} touch drag delta should move window: ${JSON.stringify({
+      before: beforeWindow,
+      after: afterWindow,
+      dx,
+      dy,
+    })}`,
+  )
+  return { before: beforeWindow, after: afterWindow, during: during.compositor.shell_move_visual, titlebar }
+}
+
+async function dragRightResizeEdgeByTouch(base: string, windowId: number, dx: number, label: string) {
+  const before = await waitForShellTracksCompositor(base, windowId, `${label} before touch resize`)
+  const beforeWindow = shellWindowById(before.shell, windowId)
+  assert(beforeWindow, `${label} missing window before touch resize`)
+  const handle = await waitForResizeRightRect(base, windowId, label)
+  const startX = handle.global_x + handle.width - 1
+  const startY = handle.global_y + handle.height / 2
+  await touchDown(base, startX, startY)
+  await waitFor(
+    `${label} touch resize started`,
+    async () => {
+      const snapshots = await getSnapshots(base)
+      return snapshots.compositor.shell_resize_visual ? snapshots : null
+    },
+    5000,
+    40,
+  )
+  await touchMove(base, startX + dx, startY)
+  const resizeRect = await waitFor(
+    `${label} active touch resize rect follows pointer`,
+    async () => {
+      const during = await getSnapshots(base)
+      const rect = during.compositor.shell_resize_visual
+      if (!rect) return null
+      return Math.abs(rect.x + rect.width - (beforeWindow.x + beforeWindow.width + dx)) <= 2 ? rect : null
+    },
+    5000,
+    40,
+  )
+  await touchUp(base)
+  const afterWindow = await waitFor(
+    `${label} touch resize committed geometry`,
+    async () => {
+      const snapshots = await getSnapshots(base)
+      if (snapshots.compositor.shell_resize_window_id !== null) return null
+      if (snapshots.compositor.shell_pointer_grab_window_id !== null) return null
+      if (snapshots.compositor.pointer_pressed_button_count !== 0) return null
+      const controls = windowControls(snapshots.shell, windowId)
+      if (controls?.dragging) return null
+      const after = shellWindowById(snapshots.shell, windowId)
+      if (!after) return null
+      return Math.abs(after.width - (beforeWindow.width + dx)) <= 2 ? after : null
+    },
+    5000,
+    40,
+  )
+  return { before: beforeWindow, after: afterWindow, during: resizeRect, handle }
+}
+
 async function runChromeContract(context: TestContext, parity: ParityCase) {
   const { base } = context
   const opened = await parity.open(context)
@@ -454,4 +548,43 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const resize = await dragRightResizeEdge(base, opened.window.window_id, 120, 'shell-hosted fractional resize')
     await writeJsonArtifact('window-parity-shell-hosted-resize-fractional.json', resize)
   })
+
+  const touchDragCases = cases.slice(0, 2)
+  const touchResizeCases: ParityCase[] = [
+    cases[0],
+    {
+      label: 'native',
+      open: async ({ base, state }) => {
+        const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+          title: 'Derp Native Touch Resize Probe',
+          token: 'native-touch-resize-probe',
+          strip: 'red',
+          resizable: true,
+        })
+        state.spawnedNativeWindowIds.add(spawned.window.window_id)
+        assert(spawned.window.app_id === NATIVE_APP_ID, `expected ${NATIVE_APP_ID}, got ${spawned.window.app_id}`)
+        return spawned.window
+      },
+    },
+  ]
+
+  for (const parity of touchDragCases) {
+    test(`${parity.label} titlebar drag follows touchscreen motion`, async (context) => {
+      const { base } = context
+      const opened = await parity.open(context)
+      await waitForWindowRaised(base, opened.window_id)
+      const drag = await dragTitlebarByTouch(base, opened.window_id, 96, 64, `${parity.label} touch drag`)
+      await writeJsonArtifact(`window-parity-${parity.label}-touch-drag.json`, drag)
+    })
+  }
+
+  for (const parity of touchResizeCases) {
+    test(`${parity.label} right resize edge follows touchscreen motion`, async (context) => {
+      const { base } = context
+      const opened = await parity.open(context)
+      await waitForWindowRaised(base, opened.window_id)
+      const resize = await dragRightResizeEdgeByTouch(base, opened.window_id, 104, `${parity.label} touch resize`)
+      await writeJsonArtifact(`window-parity-${parity.label}-touch-resize.json`, resize)
+    })
+  }
 })

@@ -1216,8 +1216,51 @@ impl CompositorState {
         info.output_name = self
             .output_for_window_position(x, y, width, height)
             .unwrap_or_default();
-        self.shell_emit_chrome_event(ChromeEvent::WindowGeometryChanged { info });
-        self.shell_nudge_cef_repaint();
+        self.shell_emit_requested_native_geometry(
+            window_id,
+            x,
+            y,
+            width,
+            height,
+            info.output_name,
+            info.maximized,
+            info.fullscreen,
+        );
+    }
+
+    pub(crate) fn shell_resize_interaction_info(&self) -> Option<WindowInfo> {
+        let window_id = self.input_routing.shell_resize_window_id?;
+        let edges = self.input_routing.shell_resize_edges?;
+        let initial_rect = self.input_routing.shell_resize_initial_rect?;
+        let mut info = self.windows.window_registry.window_info(window_id)?;
+        let dx = self.input_routing.shell_resize_accum.0.round() as i32;
+        let dy = self.input_routing.shell_resize_accum.1.round() as i32;
+        let mut x = initial_rect.loc.x;
+        let mut y = initial_rect.loc.y;
+        let mut width = initial_rect.size.w;
+        let mut height = initial_rect.size.h;
+        if edges.intersects(crate::grabs::resize_grab::ResizeEdge::LEFT) {
+            x = initial_rect.loc.x.saturating_add(dx);
+            width = initial_rect.size.w.saturating_sub(dx);
+        }
+        if edges.intersects(crate::grabs::resize_grab::ResizeEdge::RIGHT) {
+            width = initial_rect.size.w.saturating_add(dx);
+        }
+        if edges.intersects(crate::grabs::resize_grab::ResizeEdge::TOP) {
+            y = initial_rect.loc.y.saturating_add(dy);
+            height = initial_rect.size.h.saturating_sub(dy);
+        }
+        if edges.intersects(crate::grabs::resize_grab::ResizeEdge::BOTTOM) {
+            height = initial_rect.size.h.saturating_add(dy);
+        }
+        info.x = x;
+        info.y = y;
+        info.width = width.max(1);
+        info.height = height.max(1);
+        info.output_name = self
+            .output_for_window_position(info.x, info.y, info.width, info.height)
+            .unwrap_or(info.output_name);
+        Some(info)
     }
 
     pub fn shell_resize_delta(&mut self, dx: i32, dy: i32) {

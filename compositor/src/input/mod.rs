@@ -981,6 +981,12 @@ impl CompositorState {
         Some((output_geo, pos - output_geo.loc.to_f64()))
     }
 
+    fn touch_update_pointer_position(&mut self, pos: Point<f64, Logical>, time_msec: u32) {
+        if let Some((output_geo, local)) = self.touch_output_geo_and_local(pos) {
+            self.pointer_motion_output_local(output_geo, local, time_msec);
+        }
+    }
+
     fn touch_route_for_down(&mut self, pos: Point<f64, Logical>) -> TouchRoute {
         self.sync_shell_shared_state_for_input();
         if self.screenshot_selection_active() {
@@ -1057,6 +1063,7 @@ impl CompositorState {
                 }
             }
             TouchRoute::ShellCef { .. } => {
+                self.touch_update_pointer_position(pos, time_msec);
                 self.send_touch_to_cef(slot_id, shell_wire::TOUCH_PHASE_PRESSED, pos);
                 self.shell_keyboard_capture_shell_ui();
                 self.shell_emit_shell_ui_focus_from_point(pos);
@@ -1103,6 +1110,12 @@ impl CompositorState {
             }
             TouchRoute::ShellCef { .. } => {
                 self.send_touch_to_cef(slot_id, shell_wire::TOUCH_PHASE_MOVED, pos);
+                if self.shell_move_is_active()
+                    || self.shell_resize_is_active()
+                    || self.shell_ui_pointer_grab_active()
+                {
+                    self.touch_update_pointer_position(pos, time_msec);
+                }
                 self.input_routing
                     .touch_routes
                     .insert(slot_id, TouchRoute::ShellCef { last_pos: pos });

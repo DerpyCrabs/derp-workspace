@@ -245,6 +245,8 @@ struct Args {
     #[arg(long, default_value_t = 320)]
     height: u32,
     #[arg(long, default_value_t = false)]
+    resizable: bool,
+    #[arg(long, default_value_t = false)]
     drop_buffer_after_draw: bool,
     #[arg(long, default_value = "none")]
     pointer_constraint: String,
@@ -554,8 +556,10 @@ fn main() {
     let window = xdg_shell_state.create_window(surface, window_decorations, &qh);
     window.set_title(args.title.clone());
     window.set_app_id(args.app_id.clone());
-    window.set_min_size(Some((args.width, args.height)));
-    window.set_max_size(Some((args.width, args.height)));
+    if !args.resizable {
+        window.set_min_size(Some((args.width, args.height)));
+        window.set_max_size(Some((args.width, args.height)));
+    }
     if let Some(manager) = xdg_decoration_manager.as_ref() {
         let decoration = manager.get_toplevel_decoration(window.xdg_toplevel(), &qh, ());
         let mode = if args.xdg_decoration_raw_none {
@@ -3327,8 +3331,10 @@ fn run_explicit_sync_dmabuf(args: &Args) {
     let window = xdg_shell_state.create_window(surface, WindowDecorations::RequestServer, &qh);
     window.set_title(args.title.clone());
     window.set_app_id(args.app_id.clone());
-    window.set_min_size(Some((args.width, args.height)));
-    window.set_max_size(Some((args.width, args.height)));
+    if !args.resizable {
+        window.set_min_size(Some((args.width, args.height)));
+        window.set_max_size(Some((args.width, args.height)));
+    }
     window.commit();
     let status = std::sync::Arc::new(Mutex::new(ExplicitSyncDmabufStatus::default()));
     let control_triggered = std::sync::Arc::new(AtomicBool::new(false));

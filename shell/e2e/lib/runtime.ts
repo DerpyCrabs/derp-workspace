@@ -3172,6 +3172,7 @@ export function buildNativeSpawnCommand({
   strip,
   width = 480,
   height = 320,
+  resizable = false,
   dropBufferAfterDraw = false,
   pointerConstraint = 'none',
   spawnOnPressCommand,
@@ -3211,6 +3212,7 @@ export function buildNativeSpawnCommand({
   strip: string
   width?: number
   height?: number
+  resizable?: boolean
   dropBufferAfterDraw?: boolean
   pointerConstraint?: 'none' | 'lock' | 'confine'
   spawnOnPressCommand?: string
@@ -3262,6 +3264,7 @@ export function buildNativeSpawnCommand({
     shellQuote(pointerConstraint),
   ]
   if (dropBufferAfterDraw) parts.push('--drop-buffer-after-draw')
+  if (resizable) parts.push('--resizable')
   if (fifoSmoke) parts.push('--fifo-smoke')
   if (presentationSmoke) parts.push('--presentation-smoke')
   if (contentType) parts.push('--content-type', shellQuote(contentType))
@@ -3311,6 +3314,7 @@ export async function spawnNativeWindow(
     strip,
     width,
     height,
+    resizable,
     dropBufferAfterDraw,
     pointerConstraint,
     spawnOnPressCommand,
@@ -3350,6 +3354,7 @@ export async function spawnNativeWindow(
     strip: string
     width?: number
     height?: number
+    resizable?: boolean
     dropBufferAfterDraw?: boolean
     pointerConstraint?: 'none' | 'lock' | 'confine'
     spawnOnPressCommand?: string
@@ -3391,6 +3396,7 @@ export async function spawnNativeWindow(
     strip,
     width,
     height,
+    resizable,
     dropBufferAfterDraw,
     pointerConstraint,
     spawnOnPressCommand,

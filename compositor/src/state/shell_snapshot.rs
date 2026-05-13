@@ -1142,6 +1142,19 @@ impl CompositorState {
                     }
                 })
         };
+        let resize_visual = self.shell_resize_interaction_info().map(|info| {
+            let i = self
+                .shell_window_info_to_output_local_layout(&info)
+                .unwrap_or(info);
+            shell_wire::CompositorInteractionVisual {
+                x: i.x,
+                y: i.y,
+                width: i.width.max(1),
+                height: i.height.max(1),
+                maximized: i.maximized,
+                fullscreen: i.fullscreen,
+            }
+        });
         let pointer = self
             .input_routing
             .seat
@@ -1157,7 +1170,7 @@ impl CompositorState {
             move_proxy_window_id,
             move_capture_window_id,
             interaction_visual(self.input_routing.shell_move_window_id),
-            interaction_visual(self.input_routing.shell_resize_window_id),
+            resize_visual.or_else(|| interaction_visual(self.input_routing.shell_resize_window_id)),
             self.shell_window_switcher_effective_selected_window_id(),
             self.input_routing.shell_super_held,
         )

@@ -294,7 +294,12 @@ impl CompositorState {
         &self,
         window_id: Option<u32>,
     ) -> Option<E2eInteractionVisualSnapshot> {
-        let info = self.windows.window_registry.window_info(window_id?)?;
+        let window_id = window_id?;
+        let info = if self.input_routing.shell_resize_window_id == Some(window_id) {
+            self.shell_resize_interaction_info()?
+        } else {
+            self.windows.window_registry.window_info(window_id)?
+        };
         Some(E2eInteractionVisualSnapshot {
             x: info.x,
             y: info.y,
