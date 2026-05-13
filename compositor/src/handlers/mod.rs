@@ -387,6 +387,14 @@ impl InputMethodHandler for CompositorState {
         self.windows.wayland_commit_needs_render = true;
     }
 
+    fn commit_string_without_text_input(&mut self, text: String) -> bool {
+        self.shell_ipc_commit_text_to_cef(&text)
+    }
+
+    fn input_method_without_text_input_should_activate(&self) -> bool {
+        self.session_services.osk_shell_text_input_active
+    }
+
     fn parent_geometry(&self, parent: &WlSurface) -> Rectangle<i32, Logical> {
         let root = self
             .popups

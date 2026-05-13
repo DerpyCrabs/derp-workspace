@@ -151,7 +151,10 @@ impl CompositorState {
                     }
                     return FilterResult::Intercept(());
                 }
-                if keyboard_grabbed {
+                if keyboard_grabbed
+                    && !(source == "virtual_keyboard"
+                        && state.session_services.osk_shell_text_input_active)
+                {
                     return FilterResult::Forward;
                 }
                 if key_state == KeyState::Pressed {
@@ -992,6 +995,12 @@ impl CompositorState {
         }
         let in_excl = self.point_in_shell_exclusion_zones(pos);
         let in_shell_ui = self.shell_ui_placement_topmost_for_input_at(pos).is_some();
+        if !in_excl && !in_shell_ui && self.point_in_osk_fallback_touch_area(pos) {
+            if self.session_services.osk_shell_text_input_active {
+                return TouchRoute::ShellOskKey { last_pos: pos };
+            }
+            return TouchRoute::PointerEmulation { last_pos: pos };
+        }
         if !in_excl && !in_shell_ui {
             if let Some((_window_id, surface, surface_origin)) =
                 self.native_surface_under_no_shell_exclusion(pos)
@@ -1052,6 +1061,7 @@ impl CompositorState {
                 self.shell_keyboard_capture_shell_ui();
                 self.shell_emit_shell_ui_focus_from_point(pos);
             }
+            TouchRoute::ShellOskKey { .. } => {}
             TouchRoute::PointerEmulation { .. } => {
                 if let Some((output_geo, local)) = self.touch_output_geo_and_local(pos) {
                     self.pointer_motion_output_local(output_geo, local, time_msec);
@@ -1097,6 +1107,11 @@ impl CompositorState {
                     .touch_routes
                     .insert(slot_id, TouchRoute::ShellCef { last_pos: pos });
             }
+            TouchRoute::ShellOskKey { .. } => {
+                self.input_routing
+                    .touch_routes
+                    .insert(slot_id, TouchRoute::ShellOskKey { last_pos: pos });
+            }
             TouchRoute::PointerEmulation { .. } => {
                 if let Some((output_geo, local)) = self.touch_output_geo_and_local(pos) {
                     self.pointer_motion_output_local(output_geo, local, time_msec);
@@ -1131,6 +1146,12 @@ impl CompositorState {
             TouchRoute::ShellCef { last_pos } => {
                 self.send_touch_to_cef(slot_id, shell_wire::TOUCH_PHASE_RELEASED, last_pos);
             }
+            TouchRoute::ShellOskKey { last_pos } => {
+                if let Some(ch) = self.shell_osk_key_for_point(last_pos) {
+                    let text = ch.to_string();
+                    let _ = self.shell_ipc_commit_text_to_cef(&text);
+                }
+            }
             TouchRoute::PointerEmulation { last_pos } => {
                 if let Some((output_geo, local)) = self.touch_output_geo_and_local(last_pos) {
                     self.pointer_motion_output_local(output_geo, local, time_msec);
@@ -1161,6 +1182,7 @@ impl CompositorState {
                 TouchRoute::ShellCef { last_pos } => {
                     self.send_touch_to_cef(slot_id, shell_wire::TOUCH_PHASE_CANCELLED, last_pos);
                 }
+                TouchRoute::ShellOskKey { .. } => {}
                 TouchRoute::PointerEmulation { last_pos } => {
                     if let Some((output_geo, local)) = self.touch_output_geo_and_local(last_pos) {
                         self.pointer_motion_output_local(output_geo, local, time_msec);

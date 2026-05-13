@@ -67,7 +67,7 @@ use smithay::{
         foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState},
         fractional_scale::{FractionalScaleHandler, FractionalScaleManagerState},
         idle_inhibit::IdleInhibitManagerState,
-        input_method::InputMethodManagerState,
+        input_method::{InputMethodManagerState, InputMethodSeat},
         keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState,
         output::OutputManagerState,
         presentation::{
@@ -3222,6 +3222,7 @@ impl CompositorState {
     ) {
         self.shell_force_next_dmabuf_full_damage();
         self.input_routing.keyboard_forget_window(window_id);
+        self.clear_shell_osk_text_input_for_window(window_id);
         if self
             .shell_osr
             .shell_hosted_app_state

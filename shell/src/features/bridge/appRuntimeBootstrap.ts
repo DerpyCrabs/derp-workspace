@@ -2,6 +2,13 @@ import { registerCompositorBridgeRuntime } from '@/features/bridge/compositorBri
 import { registerShellE2eBridge } from '@/features/bridge/shellE2eBridge'
 import type { ShellSharedStateSyncRequest } from './shellSharedStateSync'
 
+declare global {
+  interface Window {
+    __DERP_LAST_SHELL_TOUCH?: { x: number; y: number; at: number }
+    __DERP_SHELL_TOUCH_DOWN?: (x: number, y: number) => void
+  }
+}
+
 type AppRuntimeBootstrapOptions = {
   startThemeDomSync: () => () => void
   subscribeShellWindowState: (listener: () => void) => () => void
@@ -28,7 +35,7 @@ type AppRuntimeBootstrapOptions = {
   onWindowBlur: (state: { dragWindowId: number | null; resizeWindowId: number | null }) => void
   requestSharedStateSync: (request: ShellSharedStateSyncRequest, timing?: 'now' | 'microtask') => void
   shellWireSend: (
-    op: 'presentation_fullscreen',
+    op: 'presentation_fullscreen' | 'shell_editable_focus',
     arg?: number | string,
     arg2?: number | string,
     arg3?: number,
@@ -55,6 +62,10 @@ function updatePointerInMain(
 
 export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions) {
   let pointerGestureBlurPendingRelease = false
+  let lastEditableIntent: { touch: boolean; x: number; y: number; at: number } | null = null
+  let shellEditableFocusActive = false
+  let activeEditableElement: HTMLElement | null = null
+  let editableVisibilityCheckRaf = 0
   const stopThemeDomSync = options.startThemeDomSync()
   const stopShellWindowStateSync = options.subscribeShellWindowState(() => {
     options.onShellWindowStateChanged()
@@ -143,6 +154,146 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
     pointerGestureBlurPendingRelease = false
   }
 
+  const editableElement = (target: EventTarget | null): HTMLElement | null => {
+    if (!(target instanceof HTMLElement)) return null
+    const element = target.closest('input, textarea, [contenteditable]')
+    if (!(element instanceof HTMLElement)) return null
+    const contentEditable = element.getAttribute('contenteditable')
+    if (contentEditable !== null && contentEditable.toLowerCase() === 'false') return null
+    if (element instanceof HTMLInputElement) {
+      const type = element.type.toLowerCase()
+      if (['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'].includes(type)) return null
+      if (element.disabled || element.readOnly) return null
+    }
+    if (element instanceof HTMLTextAreaElement && (element.disabled || element.readOnly)) return null
+    return element
+  }
+
+  const editableCenter = (element: HTMLElement) => {
+    const rect = element.getBoundingClientRect()
+    return {
+      x: Math.round(rect.left + rect.width / 2),
+      y: Math.round(rect.top + rect.height / 2),
+    }
+  }
+
+  const sendEditableFocus = (active: boolean, touch: boolean, point: { x: number; y: number }) => {
+    shellEditableFocusActive = active
+    if (!active) activeEditableElement = null
+    options.shellWireSend('shell_editable_focus', active ? 1 : 0, touch ? 1 : 0, point.x, point.y)
+  }
+
+  const editableIsVisible = (element: HTMLElement) => {
+    if (!element.isConnected) return false
+    if (editableElement(element) !== element) return false
+    const rects = Array.from(element.getClientRects())
+    return rects.some((rect) =>
+      rect.width > 0 &&
+      rect.height > 0 &&
+      rect.right > 0 &&
+      rect.bottom > 0 &&
+      rect.left < window.innerWidth &&
+      rect.top < window.innerHeight,
+    )
+  }
+
+  const checkActiveEditableVisibility = () => {
+    editableVisibilityCheckRaf = 0
+    if (!shellEditableFocusActive) return
+    const editable = activeEditableElement
+    if (!editable || document.activeElement !== editable || !editableIsVisible(editable)) {
+      sendEditableFocus(false, false, { x: 0, y: 0 })
+    }
+  }
+
+  const scheduleActiveEditableVisibilityCheck = () => {
+    if (editableVisibilityCheckRaf !== 0) return
+    editableVisibilityCheckRaf = window.requestAnimationFrame(checkActiveEditableVisibility)
+  }
+
+  const recentShellTouch = () => {
+    const touch = window.__DERP_LAST_SHELL_TOUCH
+    return touch && performance.now() - touch.at < 1200 ? touch : null
+  }
+
+  const recordShellTouchDown = (x: number, y: number) => {
+    const point = {
+      touch: true,
+      x: Math.round(x),
+      y: Math.round(y),
+      at: performance.now(),
+    }
+    window.__DERP_LAST_SHELL_TOUCH = point
+    lastEditableIntent = point
+    const hit = document.elementFromPoint(point.x, point.y)
+    const editable = editableElement(hit)
+    if (!editable) return
+    editable.focus({ preventScroll: true })
+    activeEditableElement = editable
+    sendEditableFocus(true, true, editableCenter(editable))
+  }
+
+  window.__DERP_SHELL_TOUCH_DOWN = recordShellTouchDown
+
+  const onDocumentPointerDown = (event: PointerEvent) => {
+    if (event.pointerType === 'touch') {
+      recordShellTouchDown(event.clientX, event.clientY)
+      return
+    }
+    window.__DERP_LAST_SHELL_TOUCH = undefined
+    const editable = editableElement(event.target)
+    if (!editable) {
+      if (shellEditableFocusActive) sendEditableFocus(false, false, { x: 0, y: 0 })
+      return
+    }
+    lastEditableIntent = {
+      touch: false,
+      x: Math.round(event.clientX),
+      y: Math.round(event.clientY),
+      at: performance.now(),
+    }
+  }
+
+  const onDocumentTouchStart = (event: TouchEvent) => {
+    const touch = event.changedTouches[0]
+    if (!touch) return
+    recordShellTouchDown(touch.clientX, touch.clientY)
+  }
+
+  const onDocumentMouseDown = (event: MouseEvent) => {
+    window.__DERP_LAST_SHELL_TOUCH = undefined
+    const editable = editableElement(event.target)
+    if (!editable) {
+      if (shellEditableFocusActive) sendEditableFocus(false, false, { x: 0, y: 0 })
+      return
+    }
+    lastEditableIntent = {
+      touch: false,
+      x: Math.round(event.clientX),
+      y: Math.round(event.clientY),
+      at: performance.now(),
+    }
+  }
+
+  const onDocumentFocusIn = (event: FocusEvent) => {
+    const editable = editableElement(event.target)
+    if (!editable) return
+    activeEditableElement = editable
+    const now = performance.now()
+    const center = editableCenter(editable)
+    const intent = lastEditableIntent && now - lastEditableIntent.at < 1200 ? lastEditableIntent : null
+    const shellTouch = recentShellTouch()
+    sendEditableFocus(true, shellTouch !== null || intent?.touch === true, intent ? { x: intent.x, y: intent.y } : center)
+  }
+
+  const onDocumentFocusOut = () => {
+    queueMicrotask(() => {
+      if (!shellEditableFocusActive) return
+      const editable = editableElement(document.activeElement)
+      if (!editable) sendEditableFocus(false, false, { x: 0, y: 0 })
+    })
+  }
+
   const onWindowBlur = () => {
     const state = {
       dragWindowId: options.getShellWindowDragId(),
@@ -176,6 +327,7 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
 
   const onWindowResize = () => {
     syncViewport()
+    scheduleActiveEditableVisibilityCheck()
     options.requestSharedStateSync({ shellUi: 'invalidate-all', exclusion: 'schedule' })
   }
 
@@ -186,35 +338,59 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
   const pointerEventsSupported = typeof window.PointerEvent !== 'undefined'
   if (pointerEventsSupported) {
     window.addEventListener('pointermove', onPointerMove, { passive: true })
+    document.addEventListener('pointerdown', onDocumentPointerDown, true)
     window.addEventListener('pointerup', onWindowPointerUp, { passive: true })
     window.addEventListener('pointercancel', onWindowPointerCancel, { passive: true })
   } else {
+    document.addEventListener('mousedown', onDocumentMouseDown, true)
     window.addEventListener('mousemove', onMouseMove, { passive: true })
     window.addEventListener('mouseup', onWindowMouseUp, { passive: true })
   }
   window.addEventListener('blur', onWindowBlur)
   window.addEventListener('touchend', onWindowTouchEnd, { passive: true })
   window.addEventListener('touchcancel', onWindowTouchEnd, { passive: true })
+  document.addEventListener('touchstart', onDocumentTouchStart, { capture: true, passive: true })
+  document.addEventListener('focusin', onDocumentFocusIn, true)
+  document.addEventListener('focusout', onDocumentFocusOut, true)
+  document.addEventListener('scroll', scheduleActiveEditableVisibilityCheck, true)
   window.addEventListener('touchmove', onWindowTouchMove, { passive: false })
   window.addEventListener('resize', onWindowResize, { passive: true })
   document.addEventListener('fullscreenchange', onFullscreenChange)
+  const editableMutationObserver = typeof MutationObserver !== 'undefined'
+    ? new MutationObserver(scheduleActiveEditableVisibilityCheck)
+    : null
+  editableMutationObserver?.observe(document.documentElement, {
+    attributes: true,
+    childList: true,
+    subtree: true,
+    attributeFilter: ['class', 'hidden', 'style', 'disabled', 'readonly', 'contenteditable', 'aria-hidden'],
+  })
 
   return () => {
     unregisterCompositorBridgeRuntime()
     if (pointerEventsSupported) {
       window.removeEventListener('pointermove', onPointerMove)
+      document.removeEventListener('pointerdown', onDocumentPointerDown, true)
       window.removeEventListener('pointerup', onWindowPointerUp)
       window.removeEventListener('pointercancel', onWindowPointerCancel)
     } else {
+      document.removeEventListener('mousedown', onDocumentMouseDown, true)
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onWindowMouseUp)
     }
     window.removeEventListener('blur', onWindowBlur)
     window.removeEventListener('touchend', onWindowTouchEnd)
     window.removeEventListener('touchcancel', onWindowTouchEnd)
+    document.removeEventListener('touchstart', onDocumentTouchStart, true)
+    document.removeEventListener('focusin', onDocumentFocusIn, true)
+    document.removeEventListener('focusout', onDocumentFocusOut, true)
+    document.removeEventListener('scroll', scheduleActiveEditableVisibilityCheck, true)
     window.removeEventListener('touchmove', onWindowTouchMove)
     window.removeEventListener('resize', onWindowResize)
     document.removeEventListener('fullscreenchange', onFullscreenChange)
+    editableMutationObserver?.disconnect()
+    if (editableVisibilityCheckRaf !== 0) window.cancelAnimationFrame(editableVisibilityCheckRaf)
+    if (window.__DERP_SHELL_TOUCH_DOWN === recordShellTouchDown) delete window.__DERP_SHELL_TOUCH_DOWN
     unregisterShellE2eBridge()
     stopThemeDomSync()
     stopShellWindowStateSync()

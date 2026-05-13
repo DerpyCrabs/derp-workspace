@@ -222,6 +222,7 @@ struct E2eCompositorSnapshot {
     session_power_requested_at_ms: Option<u128>,
     osk_visible: Option<bool>,
     osk_text_input_visibility_allowed: bool,
+    osk_shell_text_input_active: bool,
     osk_preferred_output_name: Option<String>,
     shell_keyboard_focus: bool,
     screenshot_selection_active: bool,
@@ -826,6 +827,7 @@ impl CompositorState {
             osk_text_input_visibility_allowed: self
                 .session_services
                 .osk_text_input_visibility_allowed,
+            osk_shell_text_input_active: self.session_services.osk_shell_text_input_active,
             osk_preferred_output_name: self.session_services.osk_preferred_output_name.clone(),
             shell_keyboard_focus: self.shell_keyboard_capture_active(),
             screenshot_selection_active: self.capture.screenshot_selection_active(),

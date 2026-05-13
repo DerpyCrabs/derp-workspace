@@ -375,6 +375,7 @@ impl CompositorState {
             None
         };
         if self.shell_osr.shell_focused_ui_window_id == Some(window_id) {
+            self.clear_shell_osk_text_input_for_window(window_id);
             self.input_routing.shell_ui_pointer_grab = None;
             self.shell_emit_shell_ui_focus_if_changed(None);
             self.shell_keyboard_capture_clear();
@@ -396,6 +397,7 @@ impl CompositorState {
         self.capture_forget_window_source_cache(window_id);
         self.shell_window_stack_forget(window_id);
         self.input_routing.shell_ui_pointer_grab = None;
+        self.clear_shell_osk_text_input_if_no_shell_focus();
         self.shell_send_to_cef(
             shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id },
         );
@@ -436,6 +438,7 @@ impl CompositorState {
         );
         self.cancel_shell_move_resize_for_window(window_id);
         if self.shell_osr.shell_focused_ui_window_id == Some(window_id) {
+            self.clear_shell_osk_text_input_for_window(window_id);
             self.shell_emit_shell_ui_focus_if_changed(None);
         }
         self.shell_osr.shell_exclusion_zones_need_full_damage = true;

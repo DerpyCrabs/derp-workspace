@@ -1,9 +1,12 @@
+import { createSignal } from 'solid-js'
+
 type ShellTestWindowContentProps = {
   windowId: number
   title: string
 }
 
 export function ShellTestWindowContent(props: ShellTestWindowContentProps) {
+  const [inputVisible, setInputVisible] = createSignal(true)
   return (
     <div
       class="flex h-full min-h-0 flex-col gap-3 overflow-auto"
@@ -37,6 +40,22 @@ export function ShellTestWindowContent(props: ShellTestWindowContentProps) {
           <p class="m-0 mt-1 text-sm font-medium text-(--shell-text)">Reusable js test window</p>
         </div>
       </div>
+      <button
+        class="self-start rounded-md border border-(--shell-border) bg-(--shell-surface-panel) px-3 py-2 text-sm text-(--shell-text) hover:bg-(--shell-surface-hover)"
+        data-shell-test-hide-input={props.windowId}
+        type="button"
+        onClick={() => setInputVisible(false)}
+      >
+        Hide input
+      </button>
+      {inputVisible() ? (
+        <input
+          class="rounded-md border border-(--shell-input-border) bg-(--shell-input-bg) px-3 py-2 text-sm text-(--shell-text) outline-none focus:border-(--shell-input-focus)"
+          data-shell-test-input={props.windowId}
+          placeholder="Shell input"
+          spellcheck={false}
+        />
+      ) : null}
     </div>
   )
 }

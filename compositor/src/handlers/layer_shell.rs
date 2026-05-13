@@ -65,7 +65,12 @@ impl WlrLayerShellHandler for CompositorState {
         _layer: Layer,
         namespace: String,
     ) {
-        let Some(output) = self.layer_surface_target_output(output.as_ref()) else {
+        let output = if CompositorState::osk_layer_namespace(&namespace) {
+            self.preferred_osk_output()
+        } else {
+            self.layer_surface_target_output(output.as_ref())
+        };
+        let Some(output) = output else {
             return;
         };
         let layer_surface = DesktopLayerSurface::new(surface, namespace);

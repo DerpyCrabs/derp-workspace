@@ -75,6 +75,9 @@ ensure_runtime_packages() {
 ensure_runtime_packages
 
 if [[ "$SHELL_ONLY" -eq 0 ]]; then
+  echo "=== cargo fetch + smithay shell OSK patch ==="
+  cargo fetch
+  bash scripts/patch-smithay-shell-osk.sh
   echo "=== cargo build --release (compositor + derpctl + derp-test-client) ==="
   cargo build --release -p compositor -p derp-test-client
 else

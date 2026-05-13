@@ -1185,6 +1185,15 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     setDialog({ kind: 'closed' })
   }
 
+  createEffect(() => {
+    const kind = dialog().kind
+    if (kind === 'closed' || kind === 'delete') return
+    queueMicrotask(() => {
+      const input = rootRef?.querySelector('[data-file-browser-dialog-input]')
+      if (input instanceof HTMLInputElement) input.focus({ preventScroll: true })
+    })
+  })
+
   async function submitFileDialog() {
     const d = dialog()
     const base = shellHttpBase()

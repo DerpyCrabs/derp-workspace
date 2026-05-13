@@ -1670,6 +1670,24 @@ pub fn encode_compositor_key(
     v
 }
 
+pub fn encode_compositor_ime_commit_text(text: &str) -> Option<Vec<u8>> {
+    let b = text.as_bytes();
+    let tl = u32::try_from(b.len()).ok()?;
+    if tl == 0 || tl > MAX_IME_COMMIT_TEXT_BYTES {
+        return None;
+    }
+    let body_len = 8u32.checked_add(tl)?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_IME_COMMIT_TEXT.to_le_bytes());
+    v.extend_from_slice(&tl.to_le_bytes());
+    v.extend_from_slice(b);
+    Some(v)
+}
+
 fn decode_window_strings_body(
     body: &[u8],
     expect_type: u32,
@@ -1995,6 +2013,28 @@ fn decode_compositor_to_shell_body(
                 character,
                 unmodified_character,
             })
+        }
+        MSG_COMPOSITOR_IME_COMMIT_TEXT => {
+            if body.len() < 8 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let tl = cursor
+                .read_u32()
+                .ok_or(DecodeError::BadCompositorToShellPayload)? as usize;
+            if tl == 0 || tl > MAX_IME_COMMIT_TEXT_BYTES as usize {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            if body.len() != 8 + tl {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let text = std::str::from_utf8(
+                cursor
+                    .read_bytes(tl)
+                    .ok_or(DecodeError::BadCompositorToShellPayload)?,
+            )
+            .map_err(|_| DecodeError::BadUtf8Command)?
+            .to_string();
+            Ok(DecodedCompositorToShellMessage::ImeCommitText { text })
         }
         MSG_OUTPUT_GEOMETRY => {
             if body.len() != 20 {
@@ -3445,6 +3485,7 @@ mod tests {
             encode_compositor_touch(1, TOUCH_PHASE_MOVED, 2, 3),
             encode_compositor_pointer_axis(1, 2, 3, 4, 0),
             encode_compositor_key(CEF_KEYEVENT_KEYDOWN, 0, 65, 65, 65, 65),
+            encode_compositor_ime_commit_text("abc").unwrap(),
             encode_output_geometry(1920, 1080, 1920, 1080),
             encode_output_layout(
                 1,
@@ -3580,6 +3621,9 @@ mod tests {
         ));
         assert_compositor_malformed_no_panic(partial_string_compositor_packet(
             MSG_COMPOSITOR_KEYBIND,
+        ));
+        assert_compositor_malformed_no_panic(partial_string_compositor_packet(
+            MSG_COMPOSITOR_IME_COMMIT_TEXT,
         ));
     }
 

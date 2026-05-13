@@ -198,6 +198,12 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_editable_focus(&self, active: bool, touch: bool, x: i32, y: i32) {
+        self.run(move |s| {
+            s.shell_editable_focus_from_shell(active, touch, x, y);
+        });
+    }
+
     pub fn shell_activate_window(&self, window_id: u32) {
         self.run(move |s| {
             s.window_op_focus(window_id);

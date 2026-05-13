@@ -402,12 +402,12 @@ async function setOskEnabledThroughSettings(
     100,
   );
   assert(shell.controls?.settings_osk_enabled_trigger, "missing OSK enabled trigger");
+  assert(shell.controls.settings_osk_save, "missing OSK save button");
+  const oskSaveRect = shell.controls.settings_osk_save;
   await clickRect(base, shell.controls.settings_osk_enabled_trigger);
   await tapKey(base, enabled ? KEY.home : KEY.end);
   await tapKey(base, KEY.enter);
-  shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
-  assert(shell.controls?.settings_osk_save, "missing OSK save button");
-  await clickRect(base, shell.controls.settings_osk_save);
+  await clickRect(base, oskSaveRect);
   try {
     return await waitFor(
       `wait for OSK ${enabled ? "enabled" : "disabled"} setting`,
@@ -1343,6 +1343,254 @@ export default defineGroup(import.meta.url, ({ test }) => {
       if (textClient) {
         await closeWindow(base, textClient.window.window_id);
         await waitForWindowGone(base, textClient.window.window_id, 5000);
+      }
+      await postJson(base, "/settings_osk", originalOsk);
+    }
+  });
+
+  test("squeekboard auto-opens and types into shell editables", async ({
+    base,
+    state,
+  }) => {
+    const stamp = Date.now();
+    const originalOsk = await getJson<OskSettings>(base, "/settings_osk");
+    const missingReason = await squeekboardMissingReason(base, stamp);
+    if (missingReason) {
+      await writeJsonArtifact("shell-editable-osk.json", {
+        failed: true,
+        reason: missingReason,
+      });
+      throw new Error(missingReason);
+    }
+    await postJson(base, "/settings_osk", {
+      enabled: false,
+      provider: "squeekboard",
+    });
+    await waitForSqueekboardStopped();
+    let shellWindow: Awaited<ReturnType<typeof openShellTestWindow>> | null = null;
+    try {
+      await postJson(base, "/settings_osk", {
+        enabled: true,
+        provider: "squeekboard",
+      });
+      const expectedDisplay = `WAYLAND_DISPLAY=wayland-d${process.getuid?.() ?? ""}`;
+      const started = await waitFor(
+        "wait for shell-editable squeekboard",
+        async () => {
+          const envs = await squeekboardProcessEnvs();
+          return envs.find((entry) => entry.env.includes(expectedDisplay)) ?? null;
+        },
+        5000,
+        100,
+      );
+      shellWindow = await openShellTestWindow(base, state);
+      const shellInput = await waitFor(
+        "wait for shell test input",
+        async () => {
+          const { shell } = await getSnapshots(base);
+          return shell.shell_test_inputs?.find((entry) => entry.window_id === shellWindow?.window.window_id && entry.rect) ?? null;
+        },
+        5000,
+        100,
+      );
+      assert(shellInput.rect, "missing shell test input rect");
+      await clickRect(base, shellInput.rect);
+      const mouseFocused = await waitFor(
+        "wait for shell mouse focus to keep OSK hidden",
+        async () => {
+          const next = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          return next.osk_shell_text_input_active !== true &&
+            next.osk_visible !== true
+            ? next
+            : null;
+        },
+        5000,
+        100,
+      );
+      await touchTap(
+        base,
+        shellInput.rect.x + Math.round(shellInput.rect.width / 2),
+        shellInput.rect.y + Math.round(shellInput.rect.height / 2),
+        11,
+      );
+      const shellTouchFocused = await waitFor(
+        "wait for touch-focused shell input OSK",
+        async () => {
+          const next = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const output = next.outputs.find((entry) =>
+            shellInput.rect!.global_x >= entry.x &&
+            shellInput.rect!.global_x < entry.x + entry.width &&
+            shellInput.rect!.global_y >= entry.y &&
+            shellInput.rect!.global_y < entry.y + entry.height
+          );
+          return next.osk_shell_text_input_active === true &&
+            next.osk_visible === true &&
+            output &&
+            next.osk_preferred_output_name === output.name
+            ? { compositor: next, output }
+            : null;
+        },
+        5000,
+        100,
+      );
+      const tapPoints = [0.12, 0.22, 0.32, 0.42].map((xRatio) => ({
+        x: shellTouchFocused.output.x + Math.round(shellTouchFocused.output.width * xRatio),
+        y: shellTouchFocused.output.y + Math.round(shellTouchFocused.output.height * 0.82),
+      }));
+      const shellWindowAboveOsk = await waitFor(
+        "wait for shell window above OSK",
+        async () => {
+          const next = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = next.windows.find((entry) => entry.window_id === shellWindow?.window.window_id);
+          const output = next.outputs.find((entry) => entry.name === shellTouchFocused.output.name);
+          if (!window || !output || output.usable_y === undefined || output.usable_height === undefined) return null;
+          return window.y + window.height <= output.usable_y + output.usable_height ? { compositor: next, window, output } : null;
+        },
+        5000,
+        100,
+      );
+      const shellOskScreenshot = await captureScreenshotRect(base, {
+        x: shellTouchFocused.output.x,
+        y: shellTouchFocused.output.y,
+        width: shellTouchFocused.output.width,
+        height: shellTouchFocused.output.height,
+      });
+      await writeJsonArtifact("shell-editable-osk-before-taps.json", {
+        started: { pid: started.pid, env: started.env },
+        mouseFocused,
+        shellTouchFocused,
+        shellOskScreenshot,
+        shellInput,
+        tapPoints,
+      });
+      for (const [index, point] of tapPoints.entries()) {
+        await touchTap(base, point.x, point.y, 20 + index);
+      }
+      await writeJsonArtifact("shell-editable-osk-after-taps.json", {
+        compositor: await getJson<CompositorSnapshot>(
+          base,
+          "/test/state/compositor",
+        ),
+        shell: await getJson<ShellSnapshot>(base, "/test/state/shell"),
+        tapPoints,
+      });
+      const typedShellInput = await waitFor(
+        "wait for OSK text in shell input",
+        async () => {
+          const { shell } = await getSnapshots(base);
+          const input = shell.shell_test_inputs?.find((entry) => entry.window_id === shellWindow?.window.window_id);
+          return input && input.value.length > 0 ? input : null;
+        },
+        5000,
+        100,
+      );
+      const hideInputButton = await waitFor(
+        "wait for shell hide input button",
+        async () => {
+          const next = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          return next.shell_test_hide_inputs?.find((entry) => entry.window_id === shellWindow?.window.window_id && entry.rect) ?? null;
+        },
+        5000,
+        100,
+      );
+      assert(hideInputButton.rect, "missing shell hide input button rect");
+      await clickRect(base, hideInputButton.rect);
+      const shellInputHidden = await waitFor(
+        "wait for hidden shell input to close OSK",
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const input = shell.shell_test_inputs?.find((entry) => entry.window_id === shellWindow?.window.window_id);
+          return !input && compositor.osk_shell_text_input_active !== true && compositor.osk_visible !== true
+            ? { compositor, shell }
+            : null;
+        },
+        5000,
+        100,
+      );
+      let shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+      if (shell.programs_menu_open) {
+        await tapKey(base, KEY.escape);
+        await waitForProgramsMenuClosed(base);
+      }
+      shell = await waitFor(
+        "wait for programs toggle for shell OSK",
+        async () => {
+          const next = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          return next.controls?.taskbar_programs_toggle ? next : null;
+        },
+        5000,
+        100,
+      );
+      assert(shell.controls.taskbar_programs_toggle, "missing programs toggle");
+      await touchTap(
+        base,
+        shell.controls.taskbar_programs_toggle.x + Math.round(shell.controls.taskbar_programs_toggle.width / 2),
+        shell.controls.taskbar_programs_toggle.y + Math.round(shell.controls.taskbar_programs_toggle.height / 2),
+        31,
+      );
+      const menuShell = await waitForProgramsMenuOpen(base);
+      assert(menuShell.controls.programs_menu_search, "missing programs menu search");
+      await touchTap(
+        base,
+        menuShell.controls.programs_menu_search.x + Math.round(menuShell.controls.programs_menu_search.width / 2),
+        menuShell.controls.programs_menu_search.y + Math.round(menuShell.controls.programs_menu_search.height / 2),
+        32,
+      );
+      const paletteTouchFocused = await waitFor(
+        "wait for touch-focused command palette OSK",
+        async () => {
+          const next = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          return next.osk_shell_text_input_active === true &&
+            next.osk_visible === true
+            ? next
+            : null;
+        },
+        5000,
+        100,
+      );
+      for (const [index, point] of tapPoints.entries()) {
+        await touchTap(base, point.x, point.y, 40 + index);
+      }
+      const typedPalette = await waitFor(
+        "wait for OSK text in command palette",
+        async () => {
+          const next = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          return next.programs_menu_query.length > 0 ? next : null;
+        },
+        5000,
+        100,
+      );
+      await writeJsonArtifact("shell-editable-osk.json", {
+        failed: false,
+        started: { pid: started.pid, env: started.env },
+        mouseFocused,
+        shellTouchFocused,
+        shellWindowAboveOsk,
+        shellInputHidden,
+        paletteTouchFocused,
+        shellOskScreenshot,
+        typedShellInput,
+        programsMenuQuery: typedPalette.programs_menu_query,
+        tapPoints,
+      });
+      assert(typedShellInput.value.length > 0, JSON.stringify(typedShellInput));
+      assert(typedPalette.programs_menu_query.length > 0, typedPalette.programs_menu_query);
+    } finally {
+      if (shellWindow) {
+        await closeWindow(base, shellWindow.window.window_id);
+        await waitForWindowGone(base, shellWindow.window.window_id, 5000);
       }
       await postJson(base, "/settings_osk", originalOsk);
     }

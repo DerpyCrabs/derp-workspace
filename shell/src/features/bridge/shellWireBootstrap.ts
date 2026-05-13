@@ -115,6 +115,14 @@ export const shellWireSend: ShellCompositorWireSend = function shellWireSend(
   } else if (op === "set_taskbar_auto_hide" && typeof arg === "number") {
     fn(op, arg);
   } else if (
+    op === "shell_editable_focus" &&
+    typeof arg === "number" &&
+    typeof arg2 === "number" &&
+    arg3 !== undefined &&
+    arg4 !== undefined
+  ) {
+    fn(op, arg, arg2, arg3, arg4);
+  } else if (
     op === "set_taskbar_side" &&
     typeof arg === "string" &&
     typeof arg2 === "string"

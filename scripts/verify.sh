@@ -10,6 +10,8 @@ case "$(uname -s)" in
 esac
 
 cd "$REPO_ROOT"
+cargo fetch
+bash scripts/patch-smithay-shell-osk.sh
 cargo test
 
 cd "$REPO_ROOT/shell"

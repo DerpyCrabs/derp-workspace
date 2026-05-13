@@ -18,6 +18,7 @@ impl CompositorState {
         self.shell_osr.shell_last_sent_ui_focus_id = None;
         self.shell_osr.shell_last_sent_focus_pair = None;
         self.shell_osr.shell_exclusion_zones_need_full_damage = true;
+        self.clear_shell_osk_text_input_if_no_shell_focus();
     }
 
     pub(crate) fn shell_keyboard_capture_active(&self) -> bool {

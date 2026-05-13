@@ -552,6 +552,15 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     title: pin.getAttribute('title') ?? '',
     rect: snapshotRect(pin, args.origin),
   })).filter((pin) => pin.id.length > 0)
+  const shellTestInputs = cache.queryAllAttr('data-shell-test-input').map((input) => ({
+    window_id: Number.parseInt(input.getAttribute('data-shell-test-input') ?? '', 10),
+    rect: snapshotRect(input, args.origin),
+    value: input instanceof HTMLInputElement ? input.value : '',
+  })).filter((entry) => Number.isInteger(entry.window_id) && entry.window_id > 0)
+  const shellTestHideInputs = cache.queryAllAttr('data-shell-test-hide-input').map((button) => ({
+    window_id: Number.parseInt(button.getAttribute('data-shell-test-hide-input') ?? '', 10),
+    rect: snapshotRect(button, args.origin),
+  })).filter((entry) => Number.isInteger(entry.window_id) && entry.window_id > 0)
   const windowControls = args.windows.map((window) => {
     const nativeDragPreviewEl = cache.queryAttr('data-shell-native-drag-preview', window.window_id)
     const nativeDragPreviewImg = nativeDragPreviewEl?.querySelector('img')
@@ -1237,6 +1246,8 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     taskbars: taskbarButtons,
     settings_taskbar_side_buttons: settingsTaskbarSideButtons,
     taskbar_pins: taskbarPins,
+    shell_test_inputs: shellTestInputs,
+    shell_test_hide_inputs: shellTestHideInputs,
     taskbar_windows: taskbarWindowButtons,
     window_controls: windowControls,
     bridge_debug:

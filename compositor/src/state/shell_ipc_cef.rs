@@ -548,6 +548,19 @@ impl CompositorState {
         }
     }
 
+    pub(crate) fn shell_ipc_commit_text_to_cef(&mut self, text: &str) -> bool {
+        if !self.session_services.osk_shell_text_input_active
+            || !self.shell_cef_active()
+            || !self.shell_osr.shell_has_frame
+        {
+            return false;
+        }
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::ImeCommitText {
+            text: text.to_string(),
+        });
+        true
+    }
+
     /// Solid / CEF OSR is composited from dma-buf, not a Wayland surface under the cursor — forward moves to `cef_host`.
     pub(crate) fn shell_ipc_maybe_forward_pointer_move(&mut self, pos: Point<f64, Logical>) {
         if !self.shell_cef_active() || !self.shell_osr.shell_has_frame {

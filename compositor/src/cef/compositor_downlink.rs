@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use cef::{
     binary_value_create, process_message_create, Browser, CefString, ImplBrowser, ImplBrowserHost,
     ImplFrame, ImplListValue, ImplProcessMessage, KeyEvent, KeyEventType, MouseButtonType,
-    MouseEvent, PointerType, ProcessId, TouchEvent, TouchEventType,
+    MouseEvent, PointerType, ProcessId, Range, TouchEvent, TouchEventType,
 };
 use serde_json::{json, Value};
 use shell_wire::{
@@ -869,6 +869,23 @@ fn apply_message(
             ev.focus_on_editable_field = 1;
             host.send_key_event(Some(&ev));
         }
+        shell_wire::DecodedCompositorToShellMessage::ImeCommitText { text } => {
+            let Some(b) = browser else {
+                return;
+            };
+            let Some(host) = b.host() else {
+                return;
+            };
+            ensure_host_focus_for_input(&host);
+            host.ime_commit_text(
+                Some(&CefString::from(text.as_str())),
+                Some(&Range {
+                    from: u32::MAX,
+                    to: u32::MAX,
+                }),
+                0,
+            );
+        }
         shell_wire::DecodedCompositorToShellMessage::Touch {
             touch_id,
             phase,
@@ -881,6 +898,16 @@ fn apply_message(
             let Some(host) = b.host() else {
                 return;
             };
+            if phase == shell_wire::TOUCH_PHASE_PRESSED {
+                if let Some(frame) = b.main_frame() {
+                    let code = format!(
+                        "(()=>{{const f=window.__DERP_SHELL_TOUCH_DOWN;if(typeof f==='function')f({},{});else window.__DERP_LAST_SHELL_TOUCH={{x:{},y:{},at:performance.now()}};}})();",
+                        x, y,
+                        x, y
+                    );
+                    frame.execute_java_script(Some(&CefString::from(code.as_str())), None, 0);
+                }
+            }
             let ty = match phase {
                 shell_wire::TOUCH_PHASE_MOVED => TouchEventType::MOVED,
                 shell_wire::TOUCH_PHASE_PRESSED => TouchEventType::PRESSED,

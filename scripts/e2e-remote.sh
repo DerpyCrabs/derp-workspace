@@ -195,6 +195,8 @@ else
   ssh_base bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
+cargo fetch
+bash scripts/patch-smithay-shell-osk.sh
 exec cargo build --release -p compositor -p derp-test-client
 EOF
 fi

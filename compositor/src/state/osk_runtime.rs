@@ -29,6 +29,7 @@ impl CompositorState {
         self.session_services.osk_visibility_override = None;
         self.session_services.osk_last_text_input_active = false;
         self.session_services.osk_text_input_visibility_allowed = false;
+        self.session_services.osk_shell_text_input_active = false;
     }
 
     pub(crate) fn toggle_osk_visible_from_shell(&mut self) {
@@ -40,7 +41,7 @@ impl CompositorState {
             self.set_osk_preferred_output_for_point(pointer.current_location());
         }
         self.start_osk(&settings.provider);
-        let visible = !self.session_services.osk_visible.unwrap_or(false);
+        let visible = !self.osk_layer_surface_visible_now();
         self.session_services.osk_visibility_override = Some(visible);
         self.set_osk_visible(visible);
     }
@@ -101,6 +102,7 @@ impl CompositorState {
                 self.session_services.osk_visibility_override = None;
                 self.session_services.osk_last_text_input_active = false;
                 self.session_services.osk_text_input_visibility_allowed = false;
+                self.session_services.osk_shell_text_input_active = false;
             }
             Ok(None) => {}
             Err(error) => {
@@ -110,6 +112,7 @@ impl CompositorState {
                 self.session_services.osk_visibility_override = None;
                 self.session_services.osk_last_text_input_active = false;
                 self.session_services.osk_text_input_visibility_allowed = false;
+                self.session_services.osk_shell_text_input_active = false;
             }
         }
     }
@@ -187,15 +190,18 @@ impl CompositorState {
             self.session_services.osk_text_input_visibility_allowed = false;
         }
         let touch_visible = active && self.session_services.osk_text_input_visibility_allowed;
+        let shell_visible = self.session_services.osk_shell_text_input_active;
         self.set_osk_visible(
             self.session_services
                 .osk_visibility_override
-                .unwrap_or(touch_visible),
+                .unwrap_or(touch_visible || shell_visible),
         );
     }
 
     fn set_osk_visible(&mut self, visible: bool) {
-        if self.session_services.osk_visible == Some(visible) {
+        if self.session_services.osk_visible == Some(visible)
+            && (!visible || self.osk_layer_surface_visible_now())
+        {
             return;
         }
         let settings = crate::session::settings_config::read_osk_settings();
@@ -207,6 +213,7 @@ impl CompositorState {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
+            .arg("--timeout=1s")
             .arg("--user")
             .arg("call")
             .arg("sm.puri.OSK0")
@@ -222,18 +229,26 @@ impl CompositorState {
                 command.env("DBUS_SESSION_BUS_ADDRESS", format!("unix:path={bus}"));
             }
         }
-        match command.status() {
-            Ok(status) if status.success() => {
+        match command.spawn() {
+            Ok(mut child) => {
                 self.session_services.osk_visible = Some(visible);
                 self.refresh_usable_area_dependent_window_layouts();
-            }
-            Ok(status) => {
-                tracing::warn!(target: "derp_osk", ?status, visible, "osk visibility request failed");
-                self.session_services.osk_visible = None;
+                std::thread::spawn(move || match child.wait() {
+                    Ok(status) if status.success() => {}
+                    Ok(status) => {
+                        tracing::warn!(target: "derp_osk", ?status, visible, "osk visibility request failed");
+                    }
+                    Err(error) => {
+                        tracing::warn!(target: "derp_osk", %error, visible, "osk visibility request wait failed");
+                    }
+                });
             }
             Err(error) => {
                 tracing::warn!(target: "derp_osk", %error, visible, "osk visibility request failed");
-                self.session_services.osk_visible = None;
+                self.session_services.osk_visible = if visible { None } else { Some(false) };
+                if !visible {
+                    self.refresh_usable_area_dependent_window_layouts();
+                }
             }
         }
     }
@@ -255,6 +270,105 @@ impl CompositorState {
         self.refresh_usable_area_dependent_window_layouts();
     }
 
+    pub(crate) fn point_in_osk_layer_surface(&self, pos: Point<f64, Logical>) -> bool {
+        let pos = pos.to_i32_round();
+        for output in self.output_topology.space.outputs() {
+            let Some(output_geo) = self.output_topology.space.output_geometry(output) else {
+                continue;
+            };
+            let map = layer_map_for_output(output);
+            for layer in map.layers() {
+                if !Self::osk_layer_namespace(layer.namespace()) {
+                    continue;
+                }
+                let Some(geo) = map.layer_geometry(layer) else {
+                    continue;
+                };
+                if geo.size.w <= 0 || geo.size.h <= 0 {
+                    continue;
+                }
+                let global = Rectangle::new(output_geo.loc + geo.loc, geo.size);
+                if global.contains(pos) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn osk_layer_surface_visible_now(&self) -> bool {
+        for output in self.output_topology.space.outputs() {
+            let map = layer_map_for_output(output);
+            for layer in map.layers() {
+                if !Self::osk_layer_namespace(layer.namespace()) {
+                    continue;
+                }
+                let Some(geo) = map.layer_geometry(layer) else {
+                    continue;
+                };
+                if geo.size.w > 0 && geo.size.h > 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub(crate) fn point_in_osk_fallback_touch_area(&self, pos: Point<f64, Logical>) -> bool {
+        if self.point_in_osk_layer_surface(pos) {
+            return false;
+        }
+        let Some(window_id) = self.shell_osr.shell_focused_ui_window_id else {
+            return false;
+        };
+        if !self.windows.window_registry.is_shell_hosted(window_id) {
+            return false;
+        }
+        if self.session_services.osk_visible != Some(true)
+            || !self.session_services.osk_shell_text_input_active
+        {
+            return false;
+        }
+        let Some(output) = self.preferred_osk_output() else {
+            return false;
+        };
+        let Some(geo) = self.output_topology.space.output_geometry(&output) else {
+            return false;
+        };
+        let pos = pos.to_i32_round();
+        let y_min = geo.loc.y + geo.size.h.saturating_mul(55) / 100;
+        geo.contains(pos) && pos.y >= y_min
+    }
+
+    pub(crate) fn shell_osk_key_for_point(&self, pos: Point<f64, Logical>) -> Option<char> {
+        let window_id = self.shell_osr.shell_focused_ui_window_id?;
+        if !self.windows.window_registry.is_shell_hosted(window_id) {
+            return None;
+        }
+        if self.session_services.osk_visible != Some(true)
+            || !self.session_services.osk_shell_text_input_active
+        {
+            return None;
+        }
+        let output = self.preferred_osk_output()?;
+        let geo = self.output_topology.space.output_geometry(&output)?;
+        let pos = pos.to_i32_round();
+        if !geo.contains(pos) {
+            return None;
+        }
+        let x_ratio = (pos.x - geo.loc.x) as f64 / f64::from(geo.size.w.max(1));
+        let y_ratio = (pos.y - geo.loc.y) as f64 / f64::from(geo.size.h.max(1));
+        let row = if y_ratio < 0.76 {
+            "qwertyuiop"
+        } else if y_ratio < 0.88 {
+            "asdfghjkl"
+        } else {
+            "zxcvbnm"
+        };
+        let index = (x_ratio.clamp(0.0, 0.999) * row.len() as f64).floor() as usize;
+        row.chars().nth(index)
+    }
+
     pub(crate) fn allow_osk_for_touch_text_input_at(&mut self, pos: Point<f64, Logical>) {
         self.session_services.osk_text_input_visibility_allowed = true;
         self.session_services.osk_visibility_override = None;
@@ -272,6 +386,80 @@ impl CompositorState {
         self.update_osk_visibility_from_text_input();
     }
 
+    pub(crate) fn shell_editable_focus_from_shell(
+        &mut self,
+        active: bool,
+        touch: bool,
+        shell_x: i32,
+        shell_y: i32,
+    ) {
+        if active && !touch {
+            self.session_services.osk_shell_text_input_active = false;
+            self.input_routing
+                .seat
+                .deactivate_input_method_without_text_input();
+            self.session_services.osk_visibility_override = Some(false);
+            self.set_osk_visible(false);
+            self.update_osk_visibility_from_text_input();
+            return;
+        }
+        if active && touch {
+            self.session_services.osk_shell_text_input_active = true;
+            self.session_services.osk_visibility_override = None;
+            let pos = Point::from((
+                self.output_topology.shell_canvas_logical_origin.0 as f64 + shell_x as f64,
+                self.output_topology.shell_canvas_logical_origin.1 as f64 + shell_y as f64,
+            ));
+            self.set_osk_preferred_output_for_point(pos);
+            let settings = crate::session::settings_config::read_osk_settings();
+            if settings.enabled {
+                self.start_osk(&settings.provider);
+            }
+            if !self.shell_keyboard_capture_active() {
+                self.shell_keyboard_capture_shell_ui();
+            }
+            self.input_routing
+                .seat
+                .activate_input_method_without_text_input();
+            self.update_osk_visibility_from_text_input();
+            self.keep_shell_hosted_windows_above_osk();
+            return;
+        }
+        if !active {
+            self.session_services.osk_shell_text_input_active = false;
+            self.input_routing
+                .seat
+                .deactivate_input_method_without_text_input();
+            self.session_services.osk_visibility_override = None;
+            self.update_osk_visibility_from_text_input();
+        }
+    }
+
+    pub(crate) fn clear_shell_osk_text_input_for_window(&mut self, window_id: u32) {
+        if self.session_services.osk_shell_text_input_active
+            && self.shell_osr.shell_focused_ui_window_id == Some(window_id)
+        {
+            self.clear_shell_osk_text_input();
+        }
+    }
+
+    pub(crate) fn clear_shell_osk_text_input_if_no_shell_focus(&mut self) {
+        if self.session_services.osk_shell_text_input_active
+            && self.shell_osr.shell_focused_ui_window_id.is_none()
+        {
+            self.clear_shell_osk_text_input();
+        }
+    }
+
+    fn clear_shell_osk_text_input(&mut self) {
+        self.session_services.osk_shell_text_input_active = false;
+        self.input_routing
+            .seat
+            .deactivate_input_method_without_text_input();
+        self.session_services.osk_visibility_override = None;
+        self.update_osk_visibility_from_text_input();
+    }
+
     fn set_osk_preferred_output_for_point(&mut self, pos: Point<f64, Logical>) {
         let Some(output) = self.output_containing_global_point(pos) else {
             return;
@@ -284,7 +472,87 @@ impl CompositorState {
         self.remap_osk_layer_surfaces();
     }
 
-    fn preferred_osk_output(&self) -> Option<Output> {
+    pub(crate) fn keep_shell_hosted_windows_above_osk(&mut self) {
+        if self.session_services.osk_visible != Some(true) {
+            return;
+        }
+        let window_ids: Vec<_> = self
+            .windows
+            .window_registry
+            .all_records()
+            .into_iter()
+            .filter(|record| {
+                self.windows
+                    .window_registry
+                    .is_shell_hosted(record.info.window_id)
+                    && !record.info.minimized
+            })
+            .map(|record| record.info.window_id)
+            .collect();
+        let mut changed = false;
+        for window_id in window_ids {
+            changed |= self.keep_shell_hosted_window_above_osk(window_id);
+        }
+        if changed {
+            self.shell_reply_window_list();
+            self.shell_osr.shell_exclusion_zones_need_full_damage = true;
+        }
+    }
+
+    fn keep_shell_hosted_window_above_osk(&mut self, window_id: u32) -> bool {
+        let Some(info) = self.windows.window_registry.window_info(window_id) else {
+            return false;
+        };
+        let output = self
+            .output_for_window_position(info.x, info.y, info.width, info.height)
+            .and_then(|name| {
+                self.output_topology
+                    .space
+                    .outputs()
+                    .find(|output| output.name() == name)
+                    .cloned()
+            })
+            .or_else(|| {
+                self.preferred_osk_output()
+                    .filter(|output| output.name() == info.output_name)
+            })
+            .or_else(|| self.preferred_osk_output());
+        let Some(output) = output else {
+            return false;
+        };
+        let Some(work) = self.shell_maximize_work_area_global_for_output(&output) else {
+            return false;
+        };
+        let left = info.x;
+        let top = info.y;
+        let right = info.x.saturating_add(info.width);
+        let bottom = info.y.saturating_add(info.height);
+        let work_right = work.loc.x.saturating_add(work.size.w);
+        let work_bottom = work.loc.y.saturating_add(work.size.h);
+        if left >= work.loc.x && top >= work.loc.y && right <= work_right && bottom <= work_bottom {
+            return false;
+        }
+        let snap =
+            self.windows
+                .window_registry
+                .update_shell_hosted(window_id, |info, _float_restore| {
+                    let width = info.width.min(work.size.w).max(1);
+                    let height = info.height.min(work.size.h).max(1);
+                    info.x = info.x.clamp(work.loc.x, work_right.saturating_sub(width));
+                    info.y = work_bottom.saturating_sub(height).max(work.loc.y);
+                    info.width = width;
+                    info.height = height;
+                    info.output_name = output.name();
+                    info.clone()
+                });
+        if let Some(snap) = snap {
+            self.shell_backed_emit_geometry_messages(&snap);
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn preferred_osk_output(&self) -> Option<Output> {
         self.session_services
             .osk_preferred_output_name
             .as_ref()
@@ -308,7 +576,7 @@ impl CompositorState {
             return;
         }
         let outputs: Vec<_> = self.output_topology.space.outputs().cloned().collect();
-        let mut changed = false;
+        let mut changed_outputs = Vec::new();
         for layer in layers {
             for output in &outputs {
                 if output == &target {
@@ -317,18 +585,20 @@ impl CompositorState {
                 let mut map = layer_map_for_output(output);
                 if map.layers().any(|candidate| candidate == &layer) {
                     map.unmap_layer(&layer);
-                    changed = true;
+                    changed_outputs.push(output.clone());
                 }
             }
             let mut map = layer_map_for_output(&target);
             if !map.layers().any(|candidate| candidate == &layer) {
                 if map.map_layer(&layer).is_ok() {
-                    changed = true;
+                    changed_outputs.push(target.clone());
                 }
             }
         }
-        if changed {
-            layer_map_for_output(&target).arrange();
+        if !changed_outputs.is_empty() {
+            for output in changed_outputs {
+                layer_map_for_output(&output).arrange();
+            }
             self.refresh_usable_area_dependent_window_layouts();
         }
     }

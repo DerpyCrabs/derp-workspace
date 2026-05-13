@@ -50,7 +50,8 @@
     { "name": "MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW", "value": 61 },
     { "name": "MSG_COMPOSITOR_WORKSPACE_STATE_BINARY", "value": 62 },
     { "name": "MSG_WINDOW_ORDER", "value": 63 },
-    { "name": "MSG_COMPOSITOR_COMMAND_PALETTE_STATE", "value": 64 }
+    { "name": "MSG_COMPOSITOR_COMMAND_PALETTE_STATE", "value": 64 },
+    { "name": "MSG_COMPOSITOR_IME_COMMIT_TEXT", "value": 65 }
   ],
   "snapshot": {
     "magic": { "name": "SHELL_SHARED_SNAPSHOT_MAGIC", "value": 1146245203, "rustType": "u32" },
@@ -159,7 +160,8 @@
     { "name": "MAX_WORKSPACE_JSON_BYTES", "value": 65536, "rustType": "u32" },
     { "name": "MAX_WORKSPACE_BINARY_BYTES", "value": 262144, "rustType": "u32" },
     { "name": "MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES", "value": 65536, "rustType": "u32" },
-    { "name": "MAX_COMMAND_PALETTE_STATE_JSON_BYTES", "value": 65536, "rustType": "u32" }
+    { "name": "MAX_COMMAND_PALETTE_STATE_JSON_BYTES", "value": 65536, "rustType": "u32" },
+    { "name": "MAX_IME_COMMIT_TEXT_BYTES", "value": 4096, "rustType": "u32" }
   ],
   "rustTypes": [
     { "kind": "struct", "name": "FrameDmabufPlane", "derives": ["Debug", "Clone", "Copy", "PartialEq", "Eq"], "fields": [
@@ -235,6 +237,7 @@
       { "name": "Touch", "fields": [{ "name": "touch_id", "type": "i32" }, { "name": "phase", "type": "u32" }, { "name": "x", "type": "i32" }, { "name": "y", "type": "i32" }] },
       { "name": "PointerAxis", "fields": [{ "name": "x", "type": "i32" }, { "name": "y", "type": "i32" }, { "name": "delta_x", "type": "i32" }, { "name": "delta_y", "type": "i32" }, { "name": "modifiers", "type": "u32" }] },
       { "name": "Key", "fields": [{ "name": "cef_key_type", "type": "u32" }, { "name": "modifiers", "type": "u32" }, { "name": "windows_key_code", "type": "i32" }, { "name": "native_key_code", "type": "i32" }, { "name": "character", "type": "u32" }, { "name": "unmodified_character", "type": "u32" }] },
+      { "name": "ImeCommitText", "fields": [{ "name": "text", "type": "String" }] },
       { "name": "OutputGeometry", "fields": [{ "name": "logical_w", "type": "u32" }, { "name": "logical_h", "type": "u32" }, { "name": "physical_w", "type": "u32" }, { "name": "physical_h", "type": "u32" }] },
       { "name": "OutputLayout", "fields": [{ "name": "revision", "type": "u64" }, { "name": "canvas_logical_w", "type": "u32" }, { "name": "canvas_logical_h", "type": "u32" }, { "name": "canvas_physical_w", "type": "u32" }, { "name": "canvas_physical_h", "type": "u32" }, { "name": "screens", "type": "Vec<OutputLayoutScreen>" }, { "name": "shell_chrome_primary", "type": "Option<String>" }, { "name": "taskbar_auto_hide", "type": "bool" }] },
       { "name": "WindowMapped", "fields": [{ "name": "window_id", "type": "u32" }, { "name": "surface_id", "type": "u32" }, { "name": "stack_z", "type": "u32" }, { "name": "x", "type": "i32" }, { "name": "y", "type": "i32" }, { "name": "w", "type": "i32" }, { "name": "h", "type": "i32" }, { "name": "minimized", "type": "bool" }, { "name": "maximized", "type": "bool" }, { "name": "fullscreen", "type": "bool" }, { "name": "title", "type": "String" }, { "name": "app_id", "type": "String" }, { "name": "client_side_decoration", "type": "bool" }, { "name": "shell_flags", "type": "u32" }, { "name": "output_id", "type": "String" }, { "name": "output_name", "type": "String" }, { "name": "capture_identifier", "type": "String" }, { "name": "kind", "type": "String" }, { "name": "x11_class", "type": "String" }, { "name": "x11_instance", "type": "String" }] },

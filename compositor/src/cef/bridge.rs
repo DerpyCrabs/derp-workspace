@@ -198,6 +198,7 @@ fn pending_message_is_urgent_input(msg: &shell_wire::DecodedCompositorToShellMes
             | shell_wire::DecodedCompositorToShellMessage::PointerButton { .. }
             | shell_wire::DecodedCompositorToShellMessage::PointerAxis { .. }
             | shell_wire::DecodedCompositorToShellMessage::Key { .. }
+            | shell_wire::DecodedCompositorToShellMessage::ImeCommitText { .. }
             | shell_wire::DecodedCompositorToShellMessage::Touch { .. }
     )
 }

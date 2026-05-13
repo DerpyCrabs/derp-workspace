@@ -367,6 +367,13 @@ fn handle_uplink_list(
         "osk_toggle_visible" => {
             uplink.osk_toggle_visible();
         }
+        "shell_editable_focus" => {
+            let active = args.int(1) != 0;
+            let touch = args.int(2) != 0;
+            let x = args.int(3);
+            let y = args.int(4);
+            uplink.shell_editable_focus(active, touch, x, y);
+        }
         "activate_window" => {
             let wid = args.int(1) as u32;
             uplink.shell_activate_window(wid);
@@ -1091,6 +1098,34 @@ wrap_v8_handler! {
                     let _ = list.set_string(1, Some(&CefString::from(name.as_str())));
                     let _ = list.set_string(2, Some(&CefString::from(side.as_str())));
                 }
+                "shell_editable_focus" => {
+                    macro_rules! int_at_editable {
+                        ($idx:literal, $label:literal) => {{
+                            let Some(av) = args.get($idx).and_then(|a| a.as_ref()) else {
+                                return_exception!($label);
+                            };
+                            if av.is_bool() != 0 {
+                                if av.bool_value() != 0 { 1 } else { 0 }
+                            } else if av.is_int() != 0 {
+                                av.int_value()
+                            } else if av.is_uint() != 0 {
+                                av.uint_value() as i32
+                            } else if av.is_double() != 0 {
+                                av.double_value() as i32
+                            } else {
+                                return_exception!($label);
+                            }
+                        }};
+                    }
+                    let active = int_at_editable!(1, "shell_editable_focus: active required");
+                    let touch = int_at_editable!(2, "shell_editable_focus: touch required");
+                    let x = int_at_editable!(3, "shell_editable_focus: x required");
+                    let y = int_at_editable!(4, "shell_editable_focus: y required");
+                    let _ = list.set_int(1, active);
+                    let _ = list.set_int(2, touch);
+                    let _ = list.set_int(3, x);
+                    let _ = list.set_int(4, y);
+                }
                 "set_tile_preview" => {
                     macro_rules! int_at_tp {
                         ($idx:literal, $label:literal) => {{
@@ -1256,7 +1291,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, taskbar_pin_add, taskbar_pin_remove, taskbar_pin_launch, shell_hosted_window_state, shell_hosted_window_title, command_palette_activate, request_compositor_sync, spawn, move_begin, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_output_vrr, set_taskbar_auto_hide, set_taskbar_side, set_tile_preview, set_chrome_metrics, set_desktop_background, osk_toggle_visible, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_shell_event, e2e_snapshot_response, e2e_html_response, e2e_perf_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
+                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, taskbar_pin_add, taskbar_pin_remove, taskbar_pin_launch, shell_hosted_window_state, shell_hosted_window_title, command_palette_activate, request_compositor_sync, spawn, move_begin, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_output_vrr, set_taskbar_auto_hide, set_taskbar_side, set_tile_preview, set_chrome_metrics, set_desktop_background, osk_toggle_visible, shell_editable_focus, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_shell_event, e2e_snapshot_response, e2e_html_response, e2e_perf_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
                     );
                 }
             }

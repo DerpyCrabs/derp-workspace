@@ -191,6 +191,7 @@ export interface CompositorSnapshot {
   session_power_requested_at_ms?: number | null
   osk_visible?: boolean | null
   osk_text_input_visibility_allowed?: boolean
+  osk_shell_text_input_active?: boolean
   osk_preferred_output_name?: string | null
   shell_move_visual?: CompositorInteractionVisualSnapshot | null
   shell_move_proxy_window_id?: number | null
@@ -534,11 +535,24 @@ export interface PortalPickerMonitorSnapshot {
   rect: Rect | null
 }
 
+export interface ShellTestInputSnapshot {
+  window_id: number
+  rect: Rect | null
+  value: string
+}
+
+export interface ShellTestHideInputSnapshot {
+  window_id: number
+  rect: Rect | null
+}
+
 export interface ShellSnapshot {
   windows: WindowSnapshot[]
   taskbars: ShellTaskbar[]
   settings_taskbar_side_buttons?: ShellTaskbarSideButton[]
   taskbar_pins?: ShellTaskbarPin[]
+  shell_test_inputs?: ShellTestInputSnapshot[]
+  shell_test_hide_inputs?: ShellTestHideInputSnapshot[]
   taskbar_windows: ShellTaskbarWindow[]
   tab_groups?: ShellTabGroup[]
   window_controls?: ShellWindowControls[]

@@ -16,6 +16,9 @@ pub(crate) enum TouchRoute {
     ShellCef {
         last_pos: Point<f64, Logical>,
     },
+    ShellOskKey {
+        last_pos: Point<f64, Logical>,
+    },
     PointerEmulation {
         last_pos: Point<f64, Logical>,
     },

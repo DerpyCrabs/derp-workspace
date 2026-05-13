@@ -289,6 +289,9 @@ pub enum DecodedCompositorToShellMessage {
         character: u32,
         unmodified_character: u32,
     },
+    ImeCommitText {
+        text: String,
+    },
     OutputGeometry {
         logical_w: u32,
         logical_h: u32,
@@ -508,6 +511,7 @@ pub enum ShellWireMessage {
     CompositorWorkspaceStateBinary = 62,
     WindowOrder = 63,
     CompositorCommandPaletteState = 64,
+    CompositorImeCommitText = 65,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -591,6 +595,7 @@ pub const MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW: u32 = 61;
 pub const MSG_COMPOSITOR_WORKSPACE_STATE_BINARY: u32 = 62;
 pub const MSG_WINDOW_ORDER: u32 = 63;
 pub const MSG_COMPOSITOR_COMMAND_PALETTE_STATE: u32 = 64;
+pub const MSG_COMPOSITOR_IME_COMMIT_TEXT: u32 = 65;
 
 pub const SHELL_SNAPSHOT_DOMAIN_OUTPUTS: u32 = 1;
 pub const SHELL_SNAPSHOT_DOMAIN_WINDOWS: u32 = 2;
@@ -683,6 +688,7 @@ pub const MAX_WORKSPACE_JSON_BYTES: u32 = 65536;
 pub const MAX_WORKSPACE_BINARY_BYTES: u32 = 262144;
 pub const MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES: u32 = 65536;
 pub const MAX_COMMAND_PALETTE_STATE_JSON_BYTES: u32 = 65536;
+pub const MAX_IME_COMMIT_TEXT_BYTES: u32 = 4096;
 
 pub const SHELL_WIRE_MESSAGE_VALUES: &[u32] = &[
     MSG_SPAWN_WAYLAND_CLIENT,
@@ -736,6 +742,7 @@ pub const SHELL_WIRE_MESSAGE_VALUES: &[u32] = &[
     MSG_COMPOSITOR_WORKSPACE_STATE_BINARY,
     MSG_WINDOW_ORDER,
     MSG_COMPOSITOR_COMMAND_PALETTE_STATE,
+    MSG_COMPOSITOR_IME_COMMIT_TEXT,
 ];
 pub const SHELL_SNAPSHOT_DOMAIN_VALUES: &[u32] = &[
     SHELL_SNAPSHOT_DOMAIN_OUTPUTS,
