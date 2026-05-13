@@ -16,7 +16,7 @@ use smithay::{
             Bind, Blit, Frame, Offscreen, Renderer, TextureFilter,
         },
     },
-    desktop::space::SpaceElement,
+    desktop::space::{space_render_elements, SpaceElement},
     output::Output,
     reexports::wayland_server::{
         backend::GlobalId,
@@ -39,6 +39,7 @@ use wayland_protocols::ext::{
         ext_output_image_capture_source_manager_v1::{self, ExtOutputImageCaptureSourceManagerV1},
     },
     image_copy_capture::v1::server::{
+        ext_image_copy_capture_cursor_session_v1::{self, ExtImageCopyCaptureCursorSessionV1},
         ext_image_copy_capture_frame_v1::{self, ExtImageCopyCaptureFrameV1},
         ext_image_copy_capture_manager_v1::{self, ExtImageCopyCaptureManagerV1},
         ext_image_copy_capture_session_v1::{self, ExtImageCopyCaptureSessionV1},
@@ -46,6 +47,8 @@ use wayland_protocols::ext::{
 };
 
 use crate::{
+    derp_space::DerpSpaceElem,
+    desktop::desktop_stack::{DesktopStack, FractionalDamageSpaceElements, SpaceExclusionClip},
     render::capture::{
         buffer_access_error, crop_capture_image, write_image_to_shm_buffer,
         CaptureSourceDescriptor, CaptureSourceKey,
@@ -70,7 +73,15 @@ pub(crate) struct ImageCopyCaptureSessionState {
     source: CaptureSourceKey,
     frame_active: Arc<AtomicBool>,
     registered_for_full_damage: AtomicBool,
+    paint_cursors: bool,
+    stopped: AtomicBool,
     buffer_size: Mutex<Size<i32, Buffer>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ImageCopyCaptureCursorSessionState {
+    source: CaptureSourceKey,
+    capture_session_created: AtomicBool,
 }
 
 #[derive(Debug)]
@@ -103,6 +114,7 @@ pub(crate) struct PendingImageCopyCapture {
     logical_region: Rectangle<i32, Logical>,
     buffer_size: Size<i32, Buffer>,
     buffer: ValidatedCaptureBuffer,
+    paint_cursors: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -127,6 +139,7 @@ impl ExtImageCaptureManagerState {
         D: Dispatch<ExtImageCaptureSourceV1, ImageCaptureSourceData>,
         D: GlobalDispatch<ExtImageCopyCaptureManagerV1, ()>,
         D: Dispatch<ExtImageCopyCaptureManagerV1, ()>,
+        D: Dispatch<ExtImageCopyCaptureCursorSessionV1, ImageCopyCaptureCursorSessionState>,
         D: Dispatch<ExtImageCopyCaptureSessionV1, ImageCopyCaptureSessionState>,
         D: Dispatch<ExtImageCopyCaptureFrameV1, ImageCopyCaptureFrameState>,
         D: 'static,
@@ -174,10 +187,9 @@ impl CompositorState {
             return;
         };
 
-        let image = if matching
-            .iter()
-            .any(|request| matches!(&request.buffer, ValidatedCaptureBuffer::Shm(_)))
-        {
+        let image_with_cursors = if matching.iter().any(|request| {
+            request.paint_cursors && matches!(&request.buffer, ValidatedCaptureBuffer::Shm(_))
+        }) {
             match crate::render::screenshot::capture_output_image(
                 renderer,
                 framebuffer,
@@ -199,6 +211,8 @@ impl CompositorState {
         } else {
             None
         };
+        let mut image_without_cursors = None;
+        let mut target_without_cursors = None;
 
         for request in matching {
             if !request.frame.is_alive() {
@@ -216,10 +230,31 @@ impl CompositorState {
                         request.output_logical_rect,
                         request.logical_region,
                         request.buffer_size,
+                        request.paint_cursors,
                     )
                     .and_then(|rendered| write_image_to_shm_buffer(&buffer, &rendered)),
                     None => {
-                        let Some(image) = image.as_ref() else {
+                        if !request.paint_cursors && image_without_cursors.is_none() {
+                            match render_output_capture_image_without_cursors(
+                                self, renderer, output,
+                            ) {
+                                Ok(image) => image_without_cursors = Some(image),
+                                Err(error) => {
+                                    warn!(%error, output = %output_name, "ext image copy no-cursor render failed");
+                                    fail_image_copy_request(
+                                        request,
+                                        ext_image_copy_capture_frame_v1::FailureReason::Unknown,
+                                    );
+                                    continue;
+                                }
+                            }
+                        };
+                        let image = if request.paint_cursors {
+                            image_with_cursors.as_ref()
+                        } else {
+                            image_without_cursors.as_ref()
+                        };
+                        let Some(image) = image else {
                             fail_image_copy_request(
                                 request,
                                 ext_image_copy_capture_frame_v1::FailureReason::Unknown,
@@ -253,9 +288,10 @@ impl CompositorState {
                         request.output_logical_rect,
                         request.logical_region,
                         request.buffer_size,
+                        request.paint_cursors,
                         &mut dmabuf,
                     ),
-                    None => write_output_to_dmabuf(
+                    None if request.paint_cursors => write_output_to_dmabuf(
                         renderer,
                         framebuffer,
                         output_source.buffer_size,
@@ -263,6 +299,44 @@ impl CompositorState {
                         request.logical_region,
                         &mut dmabuf,
                     ),
+                    None => {
+                        if target_without_cursors.is_none() {
+                            match render_output_capture_texture_without_cursors(
+                                self, renderer, output,
+                            ) {
+                                Ok(texture) => target_without_cursors = Some(texture),
+                                Err(error) => {
+                                    warn!(%error, output = %output_name, "ext image copy no-cursor render failed");
+                                    fail_image_copy_request(
+                                        request,
+                                        ext_image_copy_capture_frame_v1::FailureReason::Unknown,
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                        let Some(texture) = target_without_cursors.as_mut() else {
+                            fail_image_copy_request(
+                                request,
+                                ext_image_copy_capture_frame_v1::FailureReason::Unknown,
+                            );
+                            continue;
+                        };
+                        let source = renderer
+                            .bind(texture)
+                            .map_err(|error| error.to_string())
+                            .and_then(|source| {
+                                write_output_to_dmabuf(
+                                    renderer,
+                                    &source,
+                                    output_source.buffer_size,
+                                    request.output_logical_rect,
+                                    request.logical_region,
+                                    &mut dmabuf,
+                                )
+                            });
+                        source
+                    }
                 },
             };
             if let Err(error) = write_result {
@@ -491,11 +565,217 @@ fn write_output_to_dmabuf(
         .map_err(|error| error.to_string())
 }
 
+type CaptureDesktopStack<'a> =
+    DesktopStack<'a, <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement>;
+
+fn append_output_capture_elements<'a>(
+    state: &mut CompositorState,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+    shell_render: &'a crate::render::shell_render::ShellOutputRenderElements,
+    render_elements: &mut Vec<CaptureDesktopStack<'a>>,
+    paint_cursors: bool,
+) -> Result<(), String> {
+    if paint_cursors {
+        crate::render::pointer_render::append_pointer_desktop_elements(
+            state,
+            renderer,
+            output,
+            render_elements,
+        );
+    }
+    crate::render::screenshot_overlay_render::append_screenshot_overlay_for_output(
+        state,
+        output,
+        render_elements,
+    );
+    crate::render::tile_preview_render::append_tile_preview_for_output(
+        state,
+        output,
+        render_elements,
+    );
+    let output_scale = output.current_scale().fractional_scale();
+    if state.shell_osr.shell_presentation_fullscreen {
+        let space_els =
+            space_render_elements(renderer, [&state.output_topology.space], output, 1.0)
+                .map_err(|error| error.to_string())?;
+        for el in &shell_render.move_proxy {
+            render_elements.push(DesktopStack::ShellDma(el));
+        }
+        for el in &shell_render.shell_ui_overlay {
+            render_elements.push(DesktopStack::ShellDma(el));
+        }
+        if let Some(ref el) = shell_render.dmabuf {
+            render_elements.push(DesktopStack::ShellDma(el));
+        }
+        render_elements.extend(
+            space_els.into_iter().map(|el| {
+                DesktopStack::Space(FractionalDamageSpaceElements::new(el, output_scale))
+            }),
+        );
+    } else {
+        for el in &shell_render.move_proxy {
+            render_elements.push(DesktopStack::ShellDma(el));
+        }
+        for el in &shell_render.shell_ui_overlay {
+            render_elements.push(DesktopStack::ShellDma(el));
+        }
+        let tagged = crate::render::derp_space_render::derp_space_render_elements_with_window_ids(
+            &state.output_topology.space,
+            state,
+            renderer,
+            output,
+            1.0,
+        );
+        let ordered_window_ids_on_output = state.ordered_window_ids_on_output(output);
+        let empty_clip_ctx = state.shell_empty_clip_ctx_for_draw(output);
+        for (el, wid, include_self_decor) in tagged {
+            let excl_ctx = state.shell_exclusion_clip_ctx_for_draw(
+                output,
+                wid,
+                include_self_decor,
+                Some(&ordered_window_ids_on_output),
+            );
+            let clip_bounds = wid.and_then(|id| state.native_window_space_clip_bounds(id));
+            match (excl_ctx, clip_bounds) {
+                (None, None) => render_elements.push(DesktopStack::Space(
+                    FractionalDamageSpaceElements::new(el, output_scale),
+                )),
+                (Some(ctx), None) => render_elements.push(DesktopStack::SpaceClip(
+                    SpaceExclusionClip::new(el, output_scale, ctx),
+                )),
+                (Some(ctx), Some(bounds)) => render_elements.push(DesktopStack::SpaceClip(
+                    SpaceExclusionClip::new_with_bounds(el, output_scale, ctx, Some(bounds)),
+                )),
+                (None, Some(bounds)) => {
+                    if let Some(ctx) = empty_clip_ctx.clone() {
+                        render_elements.push(DesktopStack::SpaceClip(
+                            SpaceExclusionClip::new_with_bounds(
+                                el,
+                                output_scale,
+                                ctx,
+                                Some(bounds),
+                            ),
+                        ));
+                    } else {
+                        render_elements.push(DesktopStack::Space(
+                            FractionalDamageSpaceElements::new(el, output_scale),
+                        ));
+                    }
+                }
+            }
+        }
+        if !state.output_has_fullscreen_native_direct_path(output) {
+            if let Some(ref el) = shell_render.dmabuf {
+                render_elements.push(DesktopStack::ShellDma(el));
+            }
+        }
+    }
+    let (backdrop, _) =
+        crate::render::backdrop_render::desktop_backdrop_layers(state, output, output_scale);
+    for s in backdrop.solids {
+        render_elements.push(DesktopStack::BackdropSolid(s));
+    }
+    for t in backdrop.textures {
+        render_elements.push(DesktopStack::BackdropTex(t));
+    }
+    Ok(())
+}
+
+fn render_output_capture_texture(
+    state: &mut CompositorState,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+    paint_cursors: bool,
+) -> Result<GlesTexture, String> {
+    let descriptor = state
+        .capture_output_source(output)
+        .ok_or_else(|| "capture output source is no longer available".to_string())?;
+    let shell_render = match crate::render::shell_render::compositor_shell_render_elements(
+        state, renderer, output,
+    ) {
+        Ok(render) => render,
+        Err(error) => {
+            warn!(
+                target: "derp_shell_dmabuf",
+                ?error,
+                "capture render path: shell dma-buf layers skipped"
+            );
+            crate::render::shell_render::ShellOutputRenderElements::default()
+        }
+    };
+    let mut render_elements = Vec::new();
+    append_output_capture_elements(
+        state,
+        renderer,
+        output,
+        &shell_render,
+        &mut render_elements,
+        paint_cursors,
+    )?;
+    let mut offscreen: GlesTexture = renderer
+        .create_buffer(Fourcc::Abgr8888, descriptor.buffer_size)
+        .map_err(|error| error.to_string())?;
+    {
+        let mut target = renderer
+            .bind(&mut offscreen)
+            .map_err(|error| error.to_string())?;
+        let target_size =
+            Size::<i32, Physical>::from((descriptor.buffer_size.w, descriptor.buffer_size.h));
+        let damage = [Rectangle::from_size(target_size)];
+        let cc = state.desktop_background_config.solid_rgba;
+        let mut frame = renderer
+            .render(&mut target, target_size, Transform::Normal)
+            .map_err(|error| error.to_string())?;
+        frame
+            .clear([cc[0], cc[1], cc[2], cc[3]].into(), &damage)
+            .map_err(|error| error.to_string())?;
+        smithay::backend::renderer::utils::draw_render_elements(
+            &mut frame,
+            output.current_scale().fractional_scale(),
+            &render_elements,
+            &damage,
+        )
+        .map_err(|error| error.to_string())?;
+        let _ = frame.finish().map_err(|error| error.to_string())?;
+    }
+    Ok(offscreen)
+}
+
+fn render_output_capture_texture_without_cursors(
+    state: &mut CompositorState,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+) -> Result<GlesTexture, String> {
+    render_output_capture_texture(state, renderer, output, false)
+}
+
+fn render_output_capture_image_without_cursors(
+    state: &mut CompositorState,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+) -> Result<image::RgbaImage, String> {
+    let descriptor = state
+        .capture_output_source(output)
+        .ok_or_else(|| "capture output source is no longer available".to_string())?;
+    let mut texture = render_output_capture_texture_without_cursors(state, renderer, output)?;
+    let target = renderer
+        .bind(&mut texture)
+        .map_err(|error| error.to_string())?;
+    crate::render::screenshot::capture_output_image(
+        renderer,
+        &target,
+        descriptor.buffer_size,
+        Transform::Normal,
+    )
+}
+
 fn render_window_output_texture(
     state: &CompositorState,
     renderer: &mut GlesRenderer,
     window_id: u32,
     output_name: &str,
+    paint_cursors: bool,
 ) -> Result<
     (
         GlesTexture,
@@ -514,6 +794,15 @@ fn render_window_output_texture(
     let output_source = state
         .capture_output_source(&output)
         .ok_or_else(|| "capture output source is no longer available".to_string())?;
+    let mut cursor_elements = Vec::new();
+    if paint_cursors {
+        crate::render::pointer_render::append_pointer_desktop_elements(
+            state,
+            renderer,
+            &output,
+            &mut cursor_elements,
+        );
+    }
     let elements: Vec<_> =
         crate::render::derp_space_render::derp_space_render_elements_with_window_ids(
             &state.output_topology.space,
@@ -563,6 +852,15 @@ fn render_window_output_texture(
             &damage,
         )
         .map_err(|error| error.to_string())?;
+        if paint_cursors {
+            smithay::backend::renderer::utils::draw_render_elements(
+                &mut frame,
+                render_scale,
+                &cursor_elements,
+                &damage,
+            )
+            .map_err(|error| error.to_string())?;
+        }
         let _ = frame.finish().map_err(|error| error.to_string())?;
     }
     Ok((
@@ -695,9 +993,10 @@ fn render_window_capture_image(
     output_rect: Rectangle<i32, Logical>,
     capture_rect: Rectangle<i32, Logical>,
     buffer_size: Size<i32, Buffer>,
+    paint_cursors: bool,
 ) -> Result<image::RgbaImage, String> {
     let (mut source_offscreen, output_buffer_size, output_logical_rect, rendered_bounds) =
-        render_window_output_texture(state, renderer, window_id, output_name)?;
+        render_window_output_texture(state, renderer, window_id, output_name, paint_cursors)?;
     let source = renderer
         .bind(&mut source_offscreen)
         .map_err(|error| error.to_string())?;
@@ -821,10 +1120,11 @@ fn render_window_to_dmabuf(
     output_rect: Rectangle<i32, Logical>,
     capture_rect: Rectangle<i32, Logical>,
     buffer_size: Size<i32, Buffer>,
+    paint_cursors: bool,
     dmabuf: &mut Dmabuf,
 ) -> Result<(), String> {
     let (mut source_offscreen, output_buffer_size, _, rendered_bounds) =
-        render_window_output_texture(state, renderer, window_id, output_name)?;
+        render_window_output_texture(state, renderer, window_id, output_name, paint_cursors)?;
     let source = renderer
         .bind(&mut source_offscreen)
         .map_err(|error| error.to_string())?;
@@ -985,11 +1285,14 @@ impl Dispatch<ExtImageCopyCaptureManagerV1, (), CompositorState> for ExtImageCap
                     );
                     return;
                 };
-                match options {
+                let paint_cursors = match options {
                     WEnum::Value(value)
                         if value.bits()
                             & !ext_image_copy_capture_manager_v1::Options::PaintCursors.bits()
-                            == 0 => {}
+                            == 0 =>
+                    {
+                        value.contains(ext_image_copy_capture_manager_v1::Options::PaintCursors)
+                    }
                     _ => {
                         resource.post_error(
                             ext_image_copy_capture_manager_v1::Error::InvalidOption,
@@ -997,11 +1300,13 @@ impl Dispatch<ExtImageCopyCaptureManagerV1, (), CompositorState> for ExtImageCap
                         );
                         return;
                     }
-                }
+                };
                 let session_data = ImageCopyCaptureSessionState {
                     source: source_data.key,
                     frame_active: Arc::new(AtomicBool::new(false)),
                     registered_for_full_damage: AtomicBool::new(true),
+                    paint_cursors,
+                    stopped: AtomicBool::new(false),
                     buffer_size: Mutex::new(Size::from((1, 1))),
                 };
                 state.capture.active_image_copy_capture_sessions += 1;
@@ -1011,11 +1316,74 @@ impl Dispatch<ExtImageCopyCaptureManagerV1, (), CompositorState> for ExtImageCap
                         send_session_constraints(state, &session, data, &descriptor);
                     } else {
                         release_image_copy_session(state, data);
+                        data.stopped.store(true, Ordering::Release);
                         session.stopped();
                     }
                 }
             }
+            ext_image_copy_capture_manager_v1::Request::CreatePointerCursorSession {
+                session,
+                source,
+                pointer: _,
+            } => {
+                let Some(source_data) = source.data::<ImageCaptureSourceData>().cloned() else {
+                    resource.post_error(
+                        ext_image_copy_capture_manager_v1::Error::InvalidOption,
+                        "missing image capture source".to_string(),
+                    );
+                    return;
+                };
+                data_init.init(
+                    session,
+                    ImageCopyCaptureCursorSessionState {
+                        source: source_data.key,
+                        capture_session_created: AtomicBool::new(false),
+                    },
+                );
+            }
             ext_image_copy_capture_manager_v1::Request::Destroy => {}
+            _ => {}
+        }
+    }
+}
+
+impl
+    Dispatch<
+        ExtImageCopyCaptureCursorSessionV1,
+        ImageCopyCaptureCursorSessionState,
+        CompositorState,
+    > for ExtImageCaptureManagerState
+{
+    fn request(
+        _state: &mut CompositorState,
+        _client: &Client,
+        resource: &ExtImageCopyCaptureCursorSessionV1,
+        request: ext_image_copy_capture_cursor_session_v1::Request,
+        data: &ImageCopyCaptureCursorSessionState,
+        _display: &DisplayHandle,
+        data_init: &mut DataInit<'_, CompositorState>,
+    ) {
+        match request {
+            ext_image_copy_capture_cursor_session_v1::Request::GetCaptureSession { session } => {
+                if data.capture_session_created.swap(true, Ordering::AcqRel) {
+                    resource.post_error(
+                        ext_image_copy_capture_cursor_session_v1::Error::DuplicateSession,
+                        "cursor image copy capture session already exists".to_string(),
+                    );
+                    return;
+                }
+                let session_data = ImageCopyCaptureSessionState {
+                    source: data.source.clone(),
+                    frame_active: Arc::new(AtomicBool::new(false)),
+                    registered_for_full_damage: AtomicBool::new(false),
+                    paint_cursors: false,
+                    stopped: AtomicBool::new(true),
+                    buffer_size: Mutex::new(Size::from((1, 1))),
+                };
+                let session = data_init.init(session, session_data);
+                session.stopped();
+            }
+            ext_image_copy_capture_cursor_session_v1::Request::Destroy => {}
             _ => {}
         }
     }
@@ -1035,6 +1403,10 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, ImageCopyCaptureSessionState, Compos
     ) {
         match request {
             ext_image_copy_capture_session_v1::Request::CreateFrame { frame } => {
+                if data.stopped.load(Ordering::Acquire) {
+                    resource.stopped();
+                    return;
+                }
                 if data.frame_active.swap(true, Ordering::AcqRel) {
                     resource.post_error(
                         ext_image_copy_capture_session_v1::Error::DuplicateFrame,
@@ -1043,6 +1415,7 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, ImageCopyCaptureSessionState, Compos
                     return;
                 }
                 let Some(descriptor) = state.capture_source_descriptor(&data.source) else {
+                    data.stopped.store(true, Ordering::Release);
                     resource.stopped();
                     data.frame_active.store(false, Ordering::Release);
                     return;
@@ -1064,6 +1437,7 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, ImageCopyCaptureSessionState, Compos
             }
             ext_image_copy_capture_session_v1::Request::Destroy => {
                 release_image_copy_session(state, data);
+                data.stopped.store(true, Ordering::Release);
             }
             _ => {}
         }
@@ -1155,6 +1529,7 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ImageCopyCaptureFrameState, Compositor
                 let Some(resolved) = state.resolve_image_copy_request(&session_data.source) else {
                     if data.session.is_alive() {
                         release_image_copy_session(state, session_data);
+                        session_data.stopped.store(true, Ordering::Release);
                         data.session.stopped();
                     }
                     resource.failed(ext_image_copy_capture_frame_v1::FailureReason::Stopped);
@@ -1198,6 +1573,7 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ImageCopyCaptureFrameState, Compositor
                         logical_region: resolved.logical_region,
                         buffer_size: resolved.source.buffer_size,
                         buffer: validated_buffer,
+                        paint_cursors: session_data.paint_cursors,
                     });
                 state.capture.capture_force_full_damage_frames =
                     state.capture.capture_force_full_damage_frames.max(8);
@@ -1237,6 +1613,9 @@ smithay::reexports::wayland_server::delegate_global_dispatch!(
 );
 smithay::reexports::wayland_server::delegate_dispatch!(
     crate::CompositorState: [ExtImageCopyCaptureManagerV1: ()] => ExtImageCaptureManagerState
+);
+smithay::reexports::wayland_server::delegate_dispatch!(
+    crate::CompositorState: [ExtImageCopyCaptureCursorSessionV1: ImageCopyCaptureCursorSessionState] => ExtImageCaptureManagerState
 );
 smithay::reexports::wayland_server::delegate_dispatch!(
     crate::CompositorState: [ExtImageCopyCaptureSessionV1: ImageCopyCaptureSessionState] => ExtImageCaptureManagerState

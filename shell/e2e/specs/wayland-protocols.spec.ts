@@ -800,6 +800,101 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(output.includes("\nexit:0\n"), output);
   });
 
+  test("ext-image-copy-capture-v1 handles cursor options and cursor sessions", async ({
+    base,
+  }) => {
+    const paintStatusPath = path.join(
+      artifactDir(),
+      `ext-image-copy-paint-cursors-${Date.now()}.json`,
+    );
+    const paintOutputPath = path.join(
+      artifactDir(),
+      `ext-image-copy-paint-cursors-${Date.now()}.txt`,
+    );
+    const paintCommand = [
+      shellQuote(nativeBin()),
+      "--ext-image-copy-capture-output",
+      "--ext-image-copy-paint-cursors",
+      "--ext-image-copy-capture-frames",
+      "1",
+      "--status-json",
+      shellQuote(paintStatusPath),
+      ">",
+      shellQuote(paintOutputPath),
+      "2>&1;",
+      "printf",
+      shellQuote("\\nexit:%s\\n"),
+      "$?",
+      ">>",
+      shellQuote(paintOutputPath),
+    ].join(" ");
+    await spawnCommand(base, `sh -lc ${shellQuote(paintCommand)}`);
+    const paintOutput = await waitFor(
+      "wait for ext-image-copy paint-cursors probe",
+      async () => {
+        try {
+          const text = await readFile(paintOutputPath, "utf8");
+          return text.includes("\nexit:") ? text : null;
+        } catch {
+          return null;
+        }
+      },
+      5000,
+      100,
+    );
+    const paintStatus = JSON.parse(await readFile(paintStatusPath, "utf8"));
+    assert(paintOutput.includes("\nexit:0\n"), paintOutput);
+    assert(paintStatus.constraints_done === true, JSON.stringify(paintStatus));
+    assert(paintStatus.frames.length === 1, JSON.stringify(paintStatus));
+    assert(paintStatus.frames[0].ready === true, JSON.stringify(paintStatus));
+    assert(paintStatus.frames[0].nonzero_pixels > 0, JSON.stringify(paintStatus));
+
+    const cursorStatusPath = path.join(
+      artifactDir(),
+      `ext-image-copy-cursor-session-${Date.now()}.json`,
+    );
+    const cursorOutputPath = path.join(
+      artifactDir(),
+      `ext-image-copy-cursor-session-${Date.now()}.txt`,
+    );
+    const cursorCommand = [
+      shellQuote(nativeBin()),
+      "--ext-image-copy-capture-output",
+      "--ext-image-copy-cursor-session",
+      "--ext-image-copy-capture-frames",
+      "1",
+      "--status-json",
+      shellQuote(cursorStatusPath),
+      ">",
+      shellQuote(cursorOutputPath),
+      "2>&1;",
+      "printf",
+      shellQuote("\\nexit:%s\\n"),
+      "$?",
+      ">>",
+      shellQuote(cursorOutputPath),
+    ].join(" ");
+    await spawnCommand(base, `sh -lc ${shellQuote(cursorCommand)}`);
+    const cursorOutput = await waitFor(
+      "wait for ext-image-copy cursor-session probe",
+      async () => {
+        try {
+          const text = await readFile(cursorOutputPath, "utf8");
+          return text.includes("\nexit:") ? text : null;
+        } catch {
+          return null;
+        }
+      },
+      5000,
+      100,
+    );
+    const cursorStatus = JSON.parse(await readFile(cursorStatusPath, "utf8"));
+    assert(cursorOutput.includes("\nexit:0\n"), cursorOutput);
+    assert(cursorStatus.cursor_session === true, JSON.stringify(cursorStatus));
+    assert(cursorStatus.stopped === true, JSON.stringify(cursorStatus));
+    assert(cursorStatus.frames.length === 0, JSON.stringify(cursorStatus));
+  });
+
   test("xdg-toplevel-drag attaches new native windows to the active pointer drag", async ({
     base,
     state,

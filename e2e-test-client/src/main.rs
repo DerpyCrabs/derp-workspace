@@ -61,6 +61,7 @@ use wayland_protocols::ext::{
         ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1,
     },
     image_copy_capture::v1::client::{
+        ext_image_copy_capture_cursor_session_v1::{self, ExtImageCopyCaptureCursorSessionV1},
         ext_image_copy_capture_frame_v1::{self, ExtImageCopyCaptureFrameV1},
         ext_image_copy_capture_manager_v1::{self, ExtImageCopyCaptureManagerV1},
         ext_image_copy_capture_session_v1::{self, ExtImageCopyCaptureSessionV1},
@@ -300,6 +301,10 @@ struct Args {
     ext_image_copy_capture_output: bool,
     #[arg(long, default_value_t = 3)]
     ext_image_copy_capture_frames: u32,
+    #[arg(long, default_value_t = false)]
+    ext_image_copy_paint_cursors: bool,
+    #[arg(long, default_value_t = false)]
+    ext_image_copy_cursor_session: bool,
     #[arg(long)]
     xdg_icon_name: Option<String>,
     #[arg(long, default_value_t = false)]
@@ -2891,6 +2896,7 @@ struct ExtImageCopyStatus {
     buffer_height: u32,
     constraints_done: bool,
     stopped: bool,
+    cursor_session: bool,
     frames: Vec<ExtImageCopyFrameStatus>,
 }
 
@@ -2902,6 +2908,9 @@ struct ExtImageCopyClient {
     _output_source_manager: ExtOutputImageCaptureSourceManagerV1,
     _copy_manager: ExtImageCopyCaptureManagerV1,
     _source: ExtImageCaptureSourceV1,
+    _seat: Option<wl_seat::WlSeat>,
+    _pointer: Option<wl_pointer::WlPointer>,
+    _cursor_session: Option<ExtImageCopyCaptureCursorSessionV1>,
     session: ExtImageCopyCaptureSessionV1,
     active_frame: Option<ExtImageCopyCaptureFrameV1>,
     active_buffer: Option<Buffer>,
@@ -2940,8 +2949,8 @@ fn write_ext_image_copy_status(path: &Option<String>, status: &ExtImageCopyStatu
         .collect::<Vec<_>>()
         .join(",");
     let body = format!(
-        "{{\"buffer_width\":{},\"buffer_height\":{},\"constraints_done\":{},\"stopped\":{},\"frames\":[{}]}}\n",
-        status.buffer_width, status.buffer_height, status.constraints_done, status.stopped, frames
+        "{{\"buffer_width\":{},\"buffer_height\":{},\"constraints_done\":{},\"stopped\":{},\"cursor_session\":{},\"frames\":[{}]}}\n",
+        status.buffer_width, status.buffer_height, status.constraints_done, status.stopped, status.cursor_session, frames
     );
     if std::fs::write(&tmp, body).is_ok() {
         let _ = std::fs::rename(tmp, path);
@@ -3181,6 +3190,18 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ()> for ExtImageCopyClient {
     }
 }
 
+impl Dispatch<ExtImageCopyCaptureCursorSessionV1, ()> for ExtImageCopyClient {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ExtImageCopyCaptureCursorSessionV1,
+        _event: ext_image_copy_capture_cursor_session_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
 impl ProvidesRegistryState for ExtImageCopyClient {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
@@ -3207,12 +3228,29 @@ fn run_ext_image_copy_capture_output(args: &Args) {
         .bind::<ExtImageCopyCaptureManagerV1, _, _>(&qh, 1..=1, ())
         .expect("bind ext_image_copy_capture_manager_v1");
     let source = output_source_manager.create_source(&output, &qh, ());
-    let session = copy_manager.create_session(
-        &source,
-        ext_image_copy_capture_manager_v1::Options::empty(),
-        &qh,
-        (),
-    );
+    let mut seat = None;
+    let mut pointer = None;
+    let mut cursor_session = None;
+    let session = if args.ext_image_copy_cursor_session {
+        let bound_seat = globals
+            .bind::<wl_seat::WlSeat, _, _>(&qh, 1..=9, ())
+            .expect("bind cursor capture wl_seat");
+        let bound_pointer = bound_seat.get_pointer(&qh, ());
+        let bound_cursor_session =
+            copy_manager.create_pointer_cursor_session(&source, &bound_pointer, &qh, ());
+        let session = bound_cursor_session.get_capture_session(&qh, ());
+        seat = Some(bound_seat);
+        pointer = Some(bound_pointer);
+        cursor_session = Some(bound_cursor_session);
+        session
+    } else {
+        let options = if args.ext_image_copy_paint_cursors {
+            ext_image_copy_capture_manager_v1::Options::PaintCursors
+        } else {
+            ext_image_copy_capture_manager_v1::Options::empty()
+        };
+        copy_manager.create_session(&source, options, &qh, ())
+    };
     let pool = SlotPool::new(4, &shm_state).expect("create ext image copy pool");
     let mut state = ExtImageCopyClient {
         registry_state,
@@ -3222,6 +3260,9 @@ fn run_ext_image_copy_capture_output(args: &Args) {
         _output_source_manager: output_source_manager,
         _copy_manager: copy_manager,
         _source: source,
+        _seat: seat,
+        _pointer: pointer,
+        _cursor_session: cursor_session,
         session,
         active_frame: None,
         active_buffer: None,
@@ -3229,7 +3270,10 @@ fn run_ext_image_copy_capture_output(args: &Args) {
         target_frames: args.ext_image_copy_capture_frames,
         exit: false,
         status_path: args.status_json.clone(),
-        status: ExtImageCopyStatus::default(),
+        status: ExtImageCopyStatus {
+            cursor_session: args.ext_image_copy_cursor_session,
+            ..ExtImageCopyStatus::default()
+        },
     };
     write_ext_image_copy_status(&state.status_path, &state.status);
     conn.flush().expect("flush initial ext image copy capture");
@@ -5172,6 +5216,8 @@ delegate_shm!(ExtImageCopyClient);
 delegate_registry!(ExtImageCopyClient);
 delegate_noop!(ExtImageCopyClient: ignore wl_output::WlOutput);
 delegate_noop!(ExtImageCopyClient: ignore wl_buffer::WlBuffer);
+delegate_noop!(ExtImageCopyClient: ignore wl_seat::WlSeat);
+delegate_noop!(ExtImageCopyClient: ignore wl_pointer::WlPointer);
 delegate_noop!(ExtImageCopyClient: ignore ExtOutputImageCaptureSourceManagerV1);
 delegate_noop!(ExtImageCopyClient: ignore ExtImageCopyCaptureManagerV1);
 delegate_noop!(ExtImageCopyClient: ignore ExtImageCaptureSourceV1);
