@@ -169,6 +169,20 @@ export interface CompositorFloatingLayerSnapshot {
   global: CompositorWorkspaceRect
 }
 
+export interface CompositorOskLayerSnapshot {
+  surface_id: number
+  output_name: string
+  namespace: string
+  global: CompositorWorkspaceRect
+}
+
+export interface CompositorLayerSurfaceSnapshot {
+  surface_id: number
+  output_name: string
+  namespace: string
+  global: CompositorWorkspaceRect | null
+}
+
 export interface CompositorShellUiWindowSnapshot {
   id: number
   z: number
@@ -193,6 +207,9 @@ export interface CompositorSnapshot {
   osk_text_input_visibility_allowed?: boolean
   osk_shell_text_input_active?: boolean
   osk_preferred_output_name?: string | null
+  osk_layer_visible_on_preferred_output?: boolean
+  osk_layer_surfaces?: CompositorOskLayerSnapshot[]
+  layer_surfaces?: CompositorLayerSurfaceSnapshot[]
   shell_move_visual?: CompositorInteractionVisualSnapshot | null
   shell_move_proxy_window_id?: number | null
   shell_move_proxy_global?: CompositorWorkspaceRect | null
@@ -2199,8 +2216,12 @@ export async function clickRect(base: string, rect: Rect): Promise<void> {
 
 export async function doubleClickRect(base: string, rect: Rect): Promise<void> {
   const point = rectCenter(rect)
-  await clickPoint(base, point.x, point.y)
-  await clickPoint(base, point.x, point.y)
+  await postJson(base, '/test/input/pointer_move', { x: point.x, y: point.y })
+  await postJson(base, '/test/input/pointer_button', { button: BTN_LEFT, action: 'press' })
+  await postJson(base, '/test/input/pointer_button', { button: BTN_LEFT, action: 'release' })
+  await postJson(base, '/test/input/pointer_button', { button: BTN_LEFT, action: 'press' })
+  await postJson(base, '/test/input/pointer_button', { button: BTN_LEFT, action: 'release' })
+  await syncTest(base)
 }
 
 export async function rightClickPoint(base: string, x: number, y: number): Promise<void> {
@@ -2561,10 +2582,8 @@ export function expectedGridAutoLayoutClientRect(
 }
 
 export async function getSnapshots(base: string): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
-  const [compositor, shell] = await Promise.all([
-    getJson<CompositorSnapshot>(base, '/test/state/compositor'),
-    getJson<ShellSnapshot>(base, '/test/state/shell'),
-  ])
+  const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   return { compositor, shell }
 }
 
@@ -2631,9 +2650,43 @@ export async function getShellHtml(base: string, selector?: string): Promise<str
   return getText(base, `/test/state/html${suffix}`)
 }
 
-export async function activateTaskbarWindow(base: string, shellSnapshot: ShellSnapshot, windowId: number): Promise<void> {
-  const row = taskbarEntry(shellSnapshot, windowId)
-  assert(row?.activate, `missing taskbar activate control for window ${windowId}`)
+function outputHasHiddenOskReserve(compositor: CompositorSnapshot, output: OutputSnapshot): boolean {
+  if (compositor.osk_visible === true) return false
+  const usableHeight = output.usable_height ?? output.height
+  const usableWidth = output.usable_width ?? output.width
+  return output.height - usableHeight > 64 || output.width - usableWidth > 64
+}
+
+export async function activateTaskbarWindow(base: string, _shellSnapshot: ShellSnapshot, windowId: number): Promise<void> {
+  const row = await waitFor(
+    `wait for taskbar activate control ${windowId}`,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const next = taskbarEntry(shell, windowId)
+      const rect = next?.activate
+      if (!rect) return null
+      const center = rectCenter(rect)
+      const taskbar = shell.taskbars.find((entry) => pointInRect(entry.rect, center))
+      if (!taskbar?.rect) return null
+      const output = compositor.outputs.find((entry) => entry.name === taskbar.monitor)
+      if (!output) return null
+      if (outputHasHiddenOskReserve(compositor, output)) return null
+      const usableX = output.usable_x ?? output.x
+      const usableY = output.usable_y ?? output.y
+      const usableWidth = output.usable_width ?? output.width
+      const usableHeight = output.usable_height ?? output.height
+      const usableRight = usableX + usableWidth
+      const usableBottom = usableY + usableHeight
+      if (taskbar.side === 'bottom' && Math.abs(taskbar.rect.global_y + taskbar.rect.height - usableBottom) > 2) return null
+      if (taskbar.side === 'top' && Math.abs(taskbar.rect.global_y - usableY) > 2) return null
+      if (taskbar.side === 'left' && Math.abs(taskbar.rect.global_x - usableX) > 2) return null
+      if (taskbar.side === 'right' && Math.abs(taskbar.rect.global_x + taskbar.rect.width - usableRight) > 2) return null
+      return next
+    },
+    5000,
+    50,
+  )
+  assert(row.activate, `missing taskbar activate control for window ${windowId}`)
   await clickRect(base, row.activate)
 }
 
@@ -2924,8 +2977,26 @@ async function waitForTaskbarToggle(
   const shell = await waitFor(
     `wait for taskbar ${label} toggle`,
     async () => {
-      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      return next.controls?.[key] ? next : null
+      const { compositor, shell: next } = await getSnapshots(base)
+      const rect = next.controls?.[key]
+      if (!rect) return null
+      const center = rectCenter(rect)
+      const taskbar = next.taskbars.find((entry) => pointInRect(entry.rect, center))
+      if (!taskbar?.rect) return null
+      const output = compositor.outputs.find((entry) => entry.name === taskbar.monitor)
+      if (!output) return null
+      if (outputHasHiddenOskReserve(compositor, output)) return null
+      const usableX = output.usable_x ?? output.x
+      const usableY = output.usable_y ?? output.y
+      const usableWidth = output.usable_width ?? output.width
+      const usableHeight = output.usable_height ?? output.height
+      const usableRight = usableX + usableWidth
+      const usableBottom = usableY + usableHeight
+      if (taskbar.side === 'bottom' && Math.abs(taskbar.rect.global_y + taskbar.rect.height - usableBottom) > 2) return null
+      if (taskbar.side === 'top' && Math.abs(taskbar.rect.global_y - usableY) > 2) return null
+      if (taskbar.side === 'left' && Math.abs(taskbar.rect.global_x - usableX) > 2) return null
+      if (taskbar.side === 'right' && Math.abs(taskbar.rect.global_x + taskbar.rect.width - usableRight) > 2) return null
+      return next
     },
     timeoutMs,
     50,
@@ -3656,10 +3727,7 @@ export async function cleanupNativeWindows(base: string, windowIds: Set<number>)
 export async function cleanupShellWindows(base: string, windowIds: number[]): Promise<void> {
   for (const windowId of windowIds) {
     try {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      const shellWindow = shellWindowById(shell, windowId)
-      if (!shellWindow) continue
-      await closeTaskbarWindow(base, shell, windowId)
+      await closeWindow(base, windowId)
       await waitForWindowGone(base, windowId, 4000)
     } catch {}
   }

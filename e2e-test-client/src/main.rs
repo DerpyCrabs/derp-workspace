@@ -47,11 +47,11 @@ use std::{
     io::{Read, Write},
 };
 use wayland_client::{
-    delegate_noop,
+    delegate_noop, event_created_child,
     globals::registry_queue_init,
     protocol::{
-        wl_buffer, wl_data_device, wl_data_device_manager, wl_data_source, wl_keyboard, wl_output,
-        wl_pointer, wl_seat, wl_surface, wl_touch,
+        wl_buffer, wl_data_device, wl_data_device_manager, wl_data_offer, wl_data_source,
+        wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface, wl_touch,
     },
     Connection, Dispatch, Proxy, QueueHandle,
 };
@@ -313,6 +313,10 @@ struct Args {
     xdg_toplevel_drag_attach: bool,
     #[arg(long, default_value_t = false)]
     xdg_toplevel_drag_source: bool,
+    #[arg(long, default_value_t = false)]
+    xdg_toplevel_drag_reuse_source: bool,
+    #[arg(long, default_value_t = false)]
+    xdg_toplevel_drag_destroy_on_start: bool,
     #[arg(long, default_value_t = 64)]
     xdg_toplevel_drag_x_offset: i32,
     #[arg(long, default_value_t = 32)]
@@ -628,12 +632,19 @@ fn main() {
     }
     let mut xdg_toplevel_drag = xdg_toplevel_drag;
     let mut xdg_toplevel_drag_data_source = xdg_toplevel_drag_data_source;
-    if let Some(manager) = xdg_toplevel_drag_manager.as_ref() {
+    if let Some(manager) = xdg_toplevel_drag_manager
+        .as_ref()
+        .filter(|_| !args.xdg_toplevel_drag_source)
+    {
         let data_source = xdg_toplevel_drag_data_device_manager
             .as_ref()
             .expect("xdg toplevel drag data device manager")
             .create_data_source(&qh, ());
         let drag = manager.get_xdg_toplevel_drag(&data_source, &qh, ());
+        if args.xdg_toplevel_drag_reuse_source {
+            let _reuse = manager.get_xdg_toplevel_drag(&data_source, &qh, ());
+            conn.flush().expect("flush xdg toplevel drag reuse");
+        }
         drag.attach(
             window.xdg_toplevel(),
             args.xdg_toplevel_drag_x_offset,
@@ -713,6 +724,7 @@ fn main() {
         _xdg_toplevel_drag_data_device: xdg_toplevel_drag_data_device,
         xdg_toplevel_drag_started: false,
         xdg_toplevel_drag_source: args.xdg_toplevel_drag_source,
+        xdg_toplevel_drag_destroy_on_start: args.xdg_toplevel_drag_destroy_on_start,
         xdg_toplevel_drag_x_offset: args.xdg_toplevel_drag_x_offset,
         xdg_toplevel_drag_y_offset: args.xdg_toplevel_drag_y_offset,
         _toplevel_icon: toplevel_icon,
@@ -788,6 +800,25 @@ fn main() {
     state.write_text_input_status();
     state.write_input_method_status();
     state.write_keyboard_status();
+    if state._xdg_toplevel_drag_data_device_manager.is_some()
+        && state._xdg_toplevel_drag_data_device.is_none()
+    {
+        let seats = state.seat_state.seats().collect::<Vec<_>>();
+        for seat in seats {
+            if !state
+                .seat_state
+                .info(&seat)
+                .is_some_and(|info| info.has_pointer)
+            {
+                continue;
+            }
+            if let Some(manager) = state._xdg_toplevel_drag_data_device_manager.as_ref() {
+                state._xdg_toplevel_drag_data_device =
+                    Some(manager.get_data_device(&seat, &qh, ()));
+            }
+            break;
+        }
+    }
 
     while !state.exit {
         event_queue
@@ -1162,6 +1193,7 @@ struct TestClient {
     _xdg_toplevel_drag_data_device: Option<wl_data_device::WlDataDevice>,
     xdg_toplevel_drag_started: bool,
     xdg_toplevel_drag_source: bool,
+    xdg_toplevel_drag_destroy_on_start: bool,
     xdg_toplevel_drag_x_offset: i32,
     xdg_toplevel_drag_y_offset: i32,
     _toplevel_icon: Option<XdgToplevelIconV1>,
@@ -1769,16 +1801,21 @@ impl TestClient {
             .expect("xdg toplevel drag data device manager")
             .create_data_source(qh, ());
         data_source.offer("application/x-derp-toplevel-drag".to_string());
-        let drag = self._xdg_toplevel_drag_manager.as_ref().map(|manager| {
-            let drag = manager.get_xdg_toplevel_drag(&data_source, qh, ());
+        let drag = self
+            ._xdg_toplevel_drag_manager
+            .as_ref()
+            .map(|manager| manager.get_xdg_toplevel_drag(&data_source, qh, ()));
+        data_device.start_drag(Some(&data_source), self.window.wl_surface(), None, serial);
+        if let Some(drag) = drag.as_ref() {
             drag.attach(
                 self.window.xdg_toplevel(),
                 self.xdg_toplevel_drag_x_offset,
                 self.xdg_toplevel_drag_y_offset,
             );
-            drag
-        });
-        data_device.start_drag(Some(&data_source), self.window.wl_surface(), None, serial);
+            if self.xdg_toplevel_drag_destroy_on_start {
+                drag.destroy();
+            }
+        }
         self._xdg_toplevel_drag_data_source = Some(data_source);
         self._xdg_toplevel_drag = drag;
     }
@@ -5144,6 +5181,22 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for TestClient {
     }
 }
 
+impl Dispatch<wl_data_device::WlDataDevice, ()> for TestClient {
+    event_created_child!(TestClient, wl_data_device::WlDataDevice, [
+        0 => (wl_data_offer::WlDataOffer, ())
+    ]);
+
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_data_device::WlDataDevice,
+        _event: wl_data_device::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
 delegate_compositor!(TestClient);
 delegate_output!(TestClient);
 delegate_shm!(TestClient);
@@ -5173,7 +5226,7 @@ delegate_noop!(TestClient: ignore XdgToplevelIconV1);
 delegate_noop!(TestClient: ignore XdgToplevelDragManagerV1);
 delegate_noop!(TestClient: ignore XdgToplevelDragV1);
 delegate_noop!(TestClient: ignore wl_data_device_manager::WlDataDeviceManager);
-delegate_noop!(TestClient: ignore wl_data_device::WlDataDevice);
+delegate_noop!(TestClient: ignore wl_data_offer::WlDataOffer);
 delegate_noop!(TestClient: ignore wl_data_source::WlDataSource);
 delegate_noop!(TestClient: ignore ZwpPointerGesturesV1);
 delegate_noop!(TestClient: ignore ZxdgDecorationManagerV1);

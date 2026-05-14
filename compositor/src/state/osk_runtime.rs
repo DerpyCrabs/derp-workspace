@@ -24,6 +24,7 @@ impl CompositorState {
 
     pub fn stop_osk(&mut self) {
         self.set_osk_visible(false);
+        Self::set_squeekboard_a11y_enabled(false);
         crate::sidecar::terminate_sidecar(&mut self.session_services.osk_child);
         self.session_services.osk_visible = None;
         self.session_services.osk_visibility_override = None;
@@ -55,6 +56,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_osk", provider, "unsupported osk provider");
             return;
         }
+        self.session_services.osk_visible = None;
         let runtime = match std::env::var("XDG_RUNTIME_DIR") {
             Ok(value) if !value.is_empty() => value,
             _ => {
@@ -70,7 +72,9 @@ impl CompositorState {
             .stderr(std::process::Stdio::inherit())
             .env("WAYLAND_DISPLAY", display)
             .env("XDG_RUNTIME_DIR", runtime)
-            .env("XDG_SESSION_TYPE", "wayland");
+            .env("XDG_SESSION_TYPE", "wayland")
+            .env("GDK_BACKEND", "wayland")
+            .env("GSK_RENDERER", "cairo");
         if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
             let uid = unsafe { libc::geteuid() };
             let bus = format!("/run/user/{uid}/bus");
@@ -81,11 +85,40 @@ impl CompositorState {
         match crate::sidecar::spawn_process_group(command) {
             Ok(child) => {
                 self.session_services.osk_child = Some(child);
+                Self::set_squeekboard_a11y_enabled(true);
                 self.arm_osk_monitor();
                 self.arm_osk_visibility_monitor();
             }
             Err(error) => {
                 tracing::warn!(target: "derp_osk", %error, "osk spawn failed");
+            }
+        }
+    }
+
+    fn set_squeekboard_a11y_enabled(enabled: bool) {
+        let mut command = std::process::Command::new("gsettings");
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .arg("set")
+            .arg("org.gnome.desktop.a11y.applications")
+            .arg("screen-keyboard-enabled")
+            .arg(if enabled { "true" } else { "false" });
+        if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+            let uid = unsafe { libc::geteuid() };
+            let bus = format!("/run/user/{uid}/bus");
+            if std::path::Path::new(&bus).exists() {
+                command.env("DBUS_SESSION_BUS_ADDRESS", format!("unix:path={bus}"));
+            }
+        }
+        match command.status() {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                tracing::warn!(target: "derp_osk", ?status, enabled, "osk a11y setting failed");
+            }
+            Err(error) => {
+                tracing::warn!(target: "derp_osk", %error, enabled, "osk a11y setting failed");
             }
         }
     }
@@ -98,6 +131,8 @@ impl CompositorState {
             Ok(Some(status)) => {
                 tracing::warn!(target: "derp_osk", ?status, "osk exited");
                 self.session_services.osk_child = None;
+                Self::set_squeekboard_a11y_enabled(false);
+                self.unmap_osk_layer_surfaces();
                 self.session_services.osk_visible = None;
                 self.session_services.osk_visibility_override = None;
                 self.session_services.osk_last_text_input_active = false;
@@ -108,6 +143,8 @@ impl CompositorState {
             Err(error) => {
                 tracing::warn!(target: "derp_osk", %error, "osk status failed");
                 self.session_services.osk_child = None;
+                Self::set_squeekboard_a11y_enabled(false);
+                self.unmap_osk_layer_surfaces();
                 self.session_services.osk_visible = None;
                 self.session_services.osk_visibility_override = None;
                 self.session_services.osk_last_text_input_active = false;
@@ -175,6 +212,7 @@ impl CompositorState {
         }
         self.reap_osk_child();
         if self.session_services.osk_child.is_none() {
+            self.unmap_osk_layer_surfaces();
             return;
         }
         let mut active = false;
@@ -199,10 +237,14 @@ impl CompositorState {
     }
 
     fn set_osk_visible(&mut self, visible: bool) {
-        if self.session_services.osk_visible == Some(visible)
-            && (!visible || self.osk_layer_surface_visible_now())
-        {
-            return;
+        if self.session_services.osk_visible == Some(visible) {
+            if visible {
+                if self.osk_layer_surface_visible_on_preferred_output_now() {
+                    return;
+                }
+            } else if !self.osk_layer_surface_visible_now() {
+                return;
+            }
         }
         let settings = crate::session::settings_config::read_osk_settings();
         if settings.provider != "squeekboard" {
@@ -232,6 +274,11 @@ impl CompositorState {
         match command.spawn() {
             Ok(mut child) => {
                 self.session_services.osk_visible = Some(visible);
+                if visible {
+                    self.remap_osk_layer_surfaces();
+                } else {
+                    self.unmap_osk_layer_surfaces();
+                }
                 self.refresh_usable_area_dependent_window_layouts();
                 std::thread::spawn(move || match child.wait() {
                     Ok(status) if status.success() => {}
@@ -247,6 +294,7 @@ impl CompositorState {
                 tracing::warn!(target: "derp_osk", %error, visible, "osk visibility request failed");
                 self.session_services.osk_visible = if visible { None } else { Some(false) };
                 if !visible {
+                    self.unmap_osk_layer_surfaces();
                     self.refresh_usable_area_dependent_window_layouts();
                 }
             }
@@ -254,13 +302,65 @@ impl CompositorState {
     }
 
     pub(crate) fn osk_layer_namespace(namespace: &str) -> bool {
-        namespace.eq_ignore_ascii_case("squeekboard")
-            || namespace.to_ascii_lowercase().contains("squeekboard")
+        let namespace = namespace.to_ascii_lowercase();
+        namespace == "squeekboard"
+            || namespace.contains("squeekboard")
+            || namespace == "osk"
+            || namespace.contains("keyboard")
+    }
+
+    fn unmap_osk_layer_surfaces(&mut self) {
+        let outputs: Vec<_> = self.output_topology.space.outputs().cloned().collect();
+        let mut layers = self.session_services.osk_layer_surfaces.clone();
+        for output in &outputs {
+            let map = layer_map_for_output(output);
+            for layer in map.layers() {
+                if !Self::osk_layer_namespace(layer.namespace()) {
+                    continue;
+                }
+                if !layers
+                    .iter()
+                    .any(|existing| existing.wl_surface() == layer.wl_surface())
+                {
+                    layers.push(layer.clone());
+                }
+            }
+        }
+        self.session_services.osk_layer_surfaces = layers.clone();
+        let mut changed_outputs = Vec::new();
+        for output in &outputs {
+            let mut map = layer_map_for_output(output);
+            let mut changed = false;
+            for layer in &layers {
+                if map.layers().any(|candidate| candidate == layer) {
+                    map.unmap_layer(layer);
+                    changed = true;
+                }
+            }
+            if changed {
+                changed_outputs.push(output.clone());
+            }
+        }
+        if !changed_outputs.is_empty() {
+            for output in changed_outputs {
+                layer_map_for_output(&output).arrange();
+            }
+            self.refresh_usable_area_dependent_window_layouts();
+        }
     }
 
     pub(crate) fn register_osk_layer_surface(&mut self, layer: DesktopLayerSurface) {
-        self.session_services.osk_layer_surfaces.push(layer.clone());
-        self.remap_osk_layer_surfaces();
+        if !self
+            .session_services
+            .osk_layer_surfaces
+            .iter()
+            .any(|existing| existing.wl_surface() == layer.wl_surface())
+        {
+            self.session_services.osk_layer_surfaces.push(layer.clone());
+        }
+        if self.session_services.osk_visible == Some(true) {
+            self.remap_osk_layer_surfaces();
+        }
     }
 
     pub(crate) fn unregister_osk_layer_surface(&mut self, root: &WlSurface) {
@@ -270,7 +370,21 @@ impl CompositorState {
         self.refresh_usable_area_dependent_window_layouts();
     }
 
+    pub(crate) fn reconcile_hidden_osk_layer_surfaces(&mut self) {
+        if self.session_services.osk_visible == Some(false) && self.osk_layer_surface_visible_now()
+        {
+            self.unmap_osk_layer_surfaces();
+        }
+    }
+
     pub(crate) fn point_in_osk_layer_surface(&self, pos: Point<f64, Logical>) -> bool {
+        self.osk_layer_global_for_point(pos).is_some()
+    }
+
+    fn osk_layer_global_for_point(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<Rectangle<i32, Logical>> {
         let pos = pos.to_i32_round();
         for output in self.output_topology.space.outputs() {
             let Some(output_geo) = self.output_topology.space.output_geometry(output) else {
@@ -289,45 +403,53 @@ impl CompositorState {
                 }
                 let global = Rectangle::new(output_geo.loc + geo.loc, geo.size);
                 if global.contains(pos) {
-                    return true;
+                    return Some(global);
                 }
+            }
+        }
+        None
+    }
+
+    fn osk_layer_surface_visible_now(&self) -> bool {
+        for output in self.output_topology.space.outputs() {
+            if Self::osk_layer_surface_visible_on_output(output) {
+                return true;
             }
         }
         false
     }
 
-    fn osk_layer_surface_visible_now(&self) -> bool {
-        for output in self.output_topology.space.outputs() {
-            let map = layer_map_for_output(output);
-            for layer in map.layers() {
-                if !Self::osk_layer_namespace(layer.namespace()) {
-                    continue;
-                }
-                let Some(geo) = map.layer_geometry(layer) else {
-                    continue;
-                };
-                if geo.size.w > 0 && geo.size.h > 0 {
-                    return true;
-                }
+    pub(crate) fn osk_layer_surface_visible_on_preferred_output_now(&self) -> bool {
+        let Some(output) = self.preferred_osk_output() else {
+            return false;
+        };
+        Self::osk_layer_surface_visible_on_output(&output)
+    }
+
+    fn osk_layer_surface_visible_on_output(output: &Output) -> bool {
+        let map = layer_map_for_output(output);
+        for layer in map.layers() {
+            if !Self::osk_layer_namespace(layer.namespace()) {
+                continue;
+            }
+            let Some(geo) = map.layer_geometry(layer) else {
+                continue;
+            };
+            if geo.size.w > 0 && geo.size.h > 0 {
+                return true;
             }
         }
         false
     }
 
     pub(crate) fn point_in_osk_fallback_touch_area(&self, pos: Point<f64, Logical>) -> bool {
-        if self.point_in_osk_layer_surface(pos) {
-            return false;
-        }
-        let Some(window_id) = self.shell_osr.shell_focused_ui_window_id else {
-            return false;
-        };
-        if !self.windows.window_registry.is_shell_hosted(window_id) {
-            return false;
-        }
         if self.session_services.osk_visible != Some(true)
             || !self.session_services.osk_shell_text_input_active
         {
             return false;
+        }
+        if self.osk_layer_global_for_point(pos).is_some() {
+            return true;
         }
         let Some(output) = self.preferred_osk_output() else {
             return false;
@@ -341,18 +463,18 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_osk_key_for_point(&self, pos: Point<f64, Logical>) -> Option<char> {
-        let window_id = self.shell_osr.shell_focused_ui_window_id?;
-        if !self.windows.window_registry.is_shell_hosted(window_id) {
-            return None;
-        }
         if self.session_services.osk_visible != Some(true)
             || !self.session_services.osk_shell_text_input_active
         {
             return None;
         }
-        let output = self.preferred_osk_output()?;
-        let geo = self.output_topology.space.output_geometry(&output)?;
         let pos = pos.to_i32_round();
+        let geo = if let Some(layer_geo) = self.osk_layer_global_for_point(pos.to_f64()) {
+            layer_geo
+        } else {
+            let output = self.preferred_osk_output()?;
+            self.output_topology.space.output_geometry(&output)?
+        };
         if !geo.contains(pos) {
             return None;
         }
@@ -373,6 +495,7 @@ impl CompositorState {
         self.session_services.osk_text_input_visibility_allowed = true;
         self.session_services.osk_visibility_override = None;
         self.set_osk_preferred_output_for_point(pos);
+        self.update_osk_visibility_from_text_input();
     }
 
     pub(crate) fn disallow_osk_for_pointer_text_input(&mut self) {
@@ -466,10 +589,16 @@ impl CompositorState {
         };
         let name = output.name();
         if self.session_services.osk_preferred_output_name.as_deref() == Some(name.as_str()) {
+            if self.session_services.osk_visible == Some(true) {
+                self.set_osk_visible(true);
+            }
             return;
         }
         self.session_services.osk_preferred_output_name = Some(name);
         self.remap_osk_layer_surfaces();
+        if self.session_services.osk_visible == Some(true) {
+            self.set_osk_visible(true);
+        }
     }
 
     pub(crate) fn keep_shell_hosted_windows_above_osk(&mut self) {
@@ -571,11 +700,26 @@ impl CompositorState {
         let Some(target) = self.preferred_osk_output() else {
             return;
         };
-        let layers = self.session_services.osk_layer_surfaces.clone();
+        let outputs: Vec<_> = self.output_topology.space.outputs().cloned().collect();
+        let mut layers = self.session_services.osk_layer_surfaces.clone();
+        for output in &outputs {
+            let map = layer_map_for_output(output);
+            for layer in map.layers() {
+                if !Self::osk_layer_namespace(layer.namespace()) {
+                    continue;
+                }
+                if !layers
+                    .iter()
+                    .any(|existing| existing.wl_surface() == layer.wl_surface())
+                {
+                    layers.push(layer.clone());
+                }
+            }
+        }
+        self.session_services.osk_layer_surfaces = layers.clone();
         if layers.is_empty() {
             return;
         }
-        let outputs: Vec<_> = self.output_topology.space.outputs().cloned().collect();
         let mut changed_outputs = Vec::new();
         for layer in layers {
             for output in &outputs {
@@ -636,11 +780,12 @@ impl CompositorState {
                 continue;
             }
             if overlap.loc.y > output_geo.loc.y + output_geo.size.h / 2 {
-                let bottom = output_geo.loc.y + output_geo.size.h;
+                let bottom = usable.loc.y.saturating_add(usable.size.h);
                 let reserve = bottom.saturating_sub(overlap.loc.y).max(0);
                 usable.size.h = usable.size.h.saturating_sub(reserve).max(1);
             } else if overlap.loc.y <= output_geo.loc.y {
-                let reserve = overlap.size.h.max(0);
+                let overlap_bottom = overlap.loc.y.saturating_add(overlap.size.h);
+                let reserve = overlap_bottom.saturating_sub(usable.loc.y).max(0);
                 usable.loc.y = usable.loc.y.saturating_add(reserve);
                 usable.size.h = usable.size.h.saturating_sub(reserve).max(1);
             }

@@ -1958,14 +1958,30 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await closeTaskbarWindow(base, initialShell, SHELL_UI_SETTINGS_WINDOW_ID);
       await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID);
     }
-    const idleShell = await getJson<ShellSnapshot>(base, "/test/state/shell");
-    const toggle = idleShell.controls?.taskbar_settings_toggle;
-    assert(toggle, "missing taskbar settings toggle before idle wake test");
+    await waitFor(
+      "wait for taskbar settings toggle before idle wake test",
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+        return shell.controls?.taskbar_settings_toggle ? shell : null;
+      },
+      1500,
+      50,
+    );
+    await waitForPointerIdle(base);
+    const idleShell = await waitFor(
+      "wait for taskbar settings toggle after idle",
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+        return shell.controls?.taskbar_settings_toggle ? shell : null;
+      },
+      1500,
+      50,
+    );
+    const toggle = idleShell.controls!.taskbar_settings_toggle!;
     const target = {
       x: toggle.global_x + toggle.width / 2,
       y: toggle.global_y + toggle.height / 2,
     };
-    await waitForPointerIdle(base);
     await movePoint(base, target.x, target.y);
     const awake = await waitFor(
       "pointer reaches taskbar settings after idle move",

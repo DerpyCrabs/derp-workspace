@@ -109,7 +109,11 @@ impl OutputTopologyState {
         let mut usable = base;
         for layer in map.layers() {
             let namespace = layer.namespace().to_ascii_lowercase();
-            if !namespace.contains("squeekboard") {
+            if namespace != "squeekboard"
+                && !namespace.contains("squeekboard")
+                && namespace != "osk"
+                && !namespace.contains("keyboard")
+            {
                 continue;
             }
             let Some(geo) = map.layer_geometry(layer) else {
@@ -126,11 +130,12 @@ impl OutputTopologyState {
                 continue;
             }
             if overlap.loc.y > output_geo.loc.y + output_geo.size.h / 2 {
-                let bottom = output_geo.loc.y + output_geo.size.h;
+                let bottom = usable.loc.y.saturating_add(usable.size.h);
                 let reserve = bottom.saturating_sub(overlap.loc.y).max(0);
                 usable.size.h = usable.size.h.saturating_sub(reserve).max(1);
             } else if overlap.loc.y <= output_geo.loc.y {
-                let reserve = overlap.size.h.max(0);
+                let overlap_bottom = overlap.loc.y.saturating_add(overlap.size.h);
+                let reserve = overlap_bottom.saturating_sub(usable.loc.y).max(0);
                 usable.loc.y = usable.loc.y.saturating_add(reserve);
                 usable.size.h = usable.size.h.saturating_sub(reserve).max(1);
             }

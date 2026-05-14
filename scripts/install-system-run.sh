@@ -74,6 +74,31 @@ ensure_runtime_packages() {
 
 ensure_runtime_packages
 
+ensure_squeekboard_layouts() {
+  command -v squeekboard >/dev/null 2>&1 || return 0
+  local src="$REPO_ROOT/resources/squeekboard/keyboards"
+  [[ -d "$src" ]] || return 0
+  local dst="$INSTALL_PREFIX/share/squeekboard/keyboards"
+  local user_data="${XDG_DATA_HOME:-}"
+  if [[ -z "$user_data" && -n "${HOME:-}" ]]; then
+    user_data="$HOME/.local/share"
+  fi
+  echo "=== install squeekboard layouts ==="
+  sudo install -d "$dst"
+  sudo install -m 0644 "$src"/*.yaml "$dst/"
+  sudo install -d "$dst/terminal"
+  sudo install -m 0644 "$src"/*.yaml "$dst/terminal/"
+  if [[ -n "$user_data" ]]; then
+    local user_dst="$user_data/squeekboard/keyboards"
+    install -d "$user_dst"
+    install -m 0644 "$src"/*.yaml "$user_dst/"
+    install -d "$user_dst/terminal"
+    install -m 0644 "$src"/*.yaml "$user_dst/terminal/"
+  fi
+}
+
+ensure_squeekboard_layouts
+
 if [[ "$SHELL_ONLY" -eq 0 ]]; then
   echo "=== cargo fetch + smithay shell OSK patch ==="
   cargo fetch

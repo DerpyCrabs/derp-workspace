@@ -462,6 +462,7 @@ impl CompositorState {
         &mut self,
         bump_revision: bool,
     ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
+        self.reconcile_hidden_osk_layer_surfaces();
         self.recompute_shell_canvas_from_outputs();
         self.output_topology
             .shell_output_layout_message_with_revision(

@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
+use smithay::desktop::layer_map_for_output;
 use smithay::input::pointer::AxisFrame;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
@@ -197,6 +198,22 @@ struct E2eOutputWindowStackSnapshot {
 }
 
 #[derive(Serialize)]
+struct E2eOskLayerSnapshot {
+    surface_id: u32,
+    output_name: String,
+    namespace: String,
+    global: E2eRectSnapshot,
+}
+
+#[derive(Serialize)]
+struct E2eLayerSurfaceSnapshot {
+    surface_id: u32,
+    output_name: String,
+    namespace: String,
+    global: Option<E2eRectSnapshot>,
+}
+
+#[derive(Serialize)]
 struct E2eInteractionVisualSnapshot {
     x: i32,
     y: i32,
@@ -224,6 +241,9 @@ struct E2eCompositorSnapshot {
     osk_text_input_visibility_allowed: bool,
     osk_shell_text_input_active: bool,
     osk_preferred_output_name: Option<String>,
+    osk_layer_visible_on_preferred_output: bool,
+    osk_layer_surfaces: Vec<E2eOskLayerSnapshot>,
+    layer_surfaces: Vec<E2eLayerSurfaceSnapshot>,
     shell_keyboard_focus: bool,
     screenshot_selection_active: bool,
     shell_context_menu_visible: bool,
@@ -558,6 +578,7 @@ impl CompositorState {
 
     pub(crate) fn e2e_compositor_snapshot_json(&mut self) -> Result<String, String> {
         self.handle_pending_wayland_client_disconnects();
+        self.reconcile_hidden_osk_layer_surfaces();
         self.sync_shell_shared_state_for_input();
         let pointer = self
             .input_routing
@@ -780,6 +801,41 @@ impl CompositorState {
                 global: Self::e2e_rect_snapshot(*rect),
             })
             .collect();
+        let mut osk_layer_surfaces = Vec::new();
+        let mut layer_surfaces = Vec::new();
+        for output in self.output_topology.space.outputs() {
+            let Some(output_geo) = self.output_topology.space.output_geometry(output) else {
+                continue;
+            };
+            let output_name = output.name();
+            let map = layer_map_for_output(output);
+            for layer in map.layers() {
+                let geo = map.layer_geometry(layer);
+                layer_surfaces.push(E2eLayerSurfaceSnapshot {
+                    surface_id: layer.wl_surface().id().protocol_id(),
+                    output_name: output_name.clone(),
+                    namespace: layer.namespace().to_string(),
+                    global: geo.map(|geo| {
+                        Self::e2e_rect_snapshot(Rectangle::new(output_geo.loc + geo.loc, geo.size))
+                    }),
+                });
+                if !Self::osk_layer_namespace(layer.namespace()) {
+                    continue;
+                }
+                let Some(geo) = geo else {
+                    continue;
+                };
+                osk_layer_surfaces.push(E2eOskLayerSnapshot {
+                    surface_id: layer.wl_surface().id().protocol_id(),
+                    output_name: output_name.clone(),
+                    namespace: layer.namespace().to_string(),
+                    global: Self::e2e_rect_snapshot(Rectangle::new(
+                        output_geo.loc + geo.loc,
+                        geo.size,
+                    )),
+                });
+            }
+        }
         let shell_context_menu_global = if shell_floating_layers.is_empty() {
             None
         } else {
@@ -834,6 +890,10 @@ impl CompositorState {
                 .osk_text_input_visibility_allowed,
             osk_shell_text_input_active: self.session_services.osk_shell_text_input_active,
             osk_preferred_output_name: self.session_services.osk_preferred_output_name.clone(),
+            osk_layer_visible_on_preferred_output: self
+                .osk_layer_surface_visible_on_preferred_output_now(),
+            osk_layer_surfaces,
+            layer_surfaces,
             shell_keyboard_focus: self.shell_keyboard_capture_active(),
             screenshot_selection_active: self.capture.screenshot_selection_active(),
             shell_context_menu_visible: self.shell_osr.shell_exclusion_overlay_open

@@ -265,9 +265,9 @@ impl
     }
 }
 
-#[derive(Default)]
 pub(crate) struct XdgToplevelDragState {
-    attached_window_id: Mutex<Option<u32>>,
+    data_source: WlDataSource,
+    source_state: Arc<XdgToplevelDragSourceState>,
 }
 
 impl smithay::reexports::wayland_server::GlobalDispatch<XdgToplevelDragManager, (), CompositorState>
@@ -289,9 +289,9 @@ impl smithay::reexports::wayland_server::Dispatch<XdgToplevelDragManager, (), Co
     for CompositorState
 {
     fn request(
-        _state: &mut CompositorState,
+        state: &mut CompositorState,
         _client: &Client,
-        _resource: &XdgToplevelDragManager,
+        resource: &XdgToplevelDragManager,
         request: XdgToplevelDragManagerRequest,
         _data: &(),
         _dh: &DisplayHandle,
@@ -299,8 +299,29 @@ impl smithay::reexports::wayland_server::Dispatch<XdgToplevelDragManager, (), Co
     ) {
         match request {
             XdgToplevelDragManagerRequest::GetXdgToplevelDrag { id, data_source } => {
-                let _ = data_source;
-                data_init.init(id, XdgToplevelDragState::default());
+                if state
+                    .input_routing
+                    .xdg_toplevel_drag_sources
+                    .contains_key(&data_source)
+                {
+                    resource.post_error(
+                        smithay::reexports::wayland_protocols::xdg::toplevel_drag::v1::server::xdg_toplevel_drag_manager_v1::Error::InvalidSource,
+                        "invalid_source: data_source already used for xdg_toplevel_drag",
+                    );
+                    return;
+                }
+                let source_state = Arc::new(XdgToplevelDragSourceState::new());
+                state
+                    .input_routing
+                    .xdg_toplevel_drag_sources
+                    .insert(data_source.clone(), source_state.clone());
+                data_init.init(
+                    id,
+                    XdgToplevelDragState {
+                        data_source,
+                        source_state,
+                    },
+                );
             }
             XdgToplevelDragManagerRequest::Destroy => {}
             _ => unreachable!(),
@@ -330,6 +351,9 @@ impl
                 x_offset,
                 y_offset,
             } => {
+                if data.source_state.phase() != XdgToplevelDragPhase::Active {
+                    return;
+                }
                 let Some(toplevel) = state.xdg_shell_state.get_toplevel(&toplevel) else {
                     return;
                 };
@@ -338,30 +362,50 @@ impl
                 else {
                     return;
                 };
-                let Ok(mut attached) = data.attached_window_id.lock() else {
+                let Ok(mut attached) = data.source_state.attached_window_id.lock() else {
                     return;
                 };
-                if attached.is_some_and(|attached_window_id| attached_window_id != window_id) {
+                if attached.is_some() {
                     resource.post_error(
                         smithay::reexports::wayland_protocols::xdg::toplevel_drag::v1::server::xdg_toplevel_drag_v1::Error::ToplevelAttached,
-                        "a different toplevel is already attached",
+                        "toplevel_attached: a toplevel is already attached",
                     );
                     return;
                 }
                 *attached = Some(window_id);
-                if let Some(allow_no_target_drop) = state
-                    .input_routing
-                    .xdg_toplevel_drag_allow_no_target_drop
-                    .as_ref()
-                {
-                    allow_no_target_drop.store(true, Ordering::SeqCst);
-                }
+                data.source_state
+                    .allow_no_target_drop
+                    .store(true, Ordering::SeqCst);
                 state.xdg_force_map_pending_deferred_toplevel(&wl);
                 state.shell_toplevel_drag_attach(window_id, x_offset, y_offset);
             }
-            XdgToplevelDragRequest::Destroy => {}
+            XdgToplevelDragRequest::Destroy => {
+                if data.source_state.phase() != XdgToplevelDragPhase::Ended {
+                    resource.post_error(
+                        smithay::reexports::wayland_protocols::xdg::toplevel_drag::v1::server::xdg_toplevel_drag_v1::Error::OngoingDrag,
+                        "ongoing_drag: drag has not ended",
+                    );
+                    return;
+                }
+                state
+                    .input_routing
+                    .xdg_toplevel_drag_sources
+                    .remove(&data.data_source);
+            }
             _ => unreachable!(),
         }
+    }
+
+    fn destroyed(
+        state: &mut CompositorState,
+        _client: ClientId,
+        _resource: &XdgToplevelDrag,
+        data: &XdgToplevelDragState,
+    ) {
+        state
+            .input_routing
+            .xdg_toplevel_drag_sources
+            .remove(&data.data_source);
     }
 }
 

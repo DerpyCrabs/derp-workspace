@@ -52,7 +52,7 @@ use smithay::{
         },
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
-            protocol::{wl_output::WlOutput, wl_surface::WlSurface},
+            protocol::{wl_data_source::WlDataSource, wl_output::WlOutput, wl_surface::WlSurface},
             Client, Display, DisplayHandle,
         },
     },
@@ -1157,6 +1157,7 @@ impl CompositorState {
             .any(|info| self.keyboard_focused_window_id() == Some(info.window_id));
         for info in &infos {
             self.clear_pointer_focus_for_window(info.window_id);
+            self.cancel_shell_move_resize_for_window(info.window_id);
         }
         let doomed_windows: Vec<_> = self
             .output_topology

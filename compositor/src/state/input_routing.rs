@@ -7,6 +7,57 @@ pub(crate) struct XdgToplevelDragMoveState {
     pub(crate) y_offset: i32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum XdgToplevelDragPhase {
+    Pending,
+    Active,
+    Ended,
+}
+
+pub(crate) struct XdgToplevelDragSourceState {
+    pub(crate) phase: Mutex<XdgToplevelDragPhase>,
+    pub(crate) attached_window_id: Mutex<Option<u32>>,
+    pub(crate) allow_no_target_drop: Arc<AtomicBool>,
+}
+
+impl XdgToplevelDragSourceState {
+    pub(crate) fn new() -> Self {
+        Self {
+            phase: Mutex::new(XdgToplevelDragPhase::Pending),
+            attached_window_id: Mutex::new(None),
+            allow_no_target_drop: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub(crate) fn phase(&self) -> XdgToplevelDragPhase {
+        self.phase
+            .lock()
+            .map(|phase| *phase)
+            .unwrap_or(XdgToplevelDragPhase::Ended)
+    }
+
+    pub(crate) fn mark_active(&self) -> bool {
+        let Ok(mut phase) = self.phase.lock() else {
+            return false;
+        };
+        match *phase {
+            XdgToplevelDragPhase::Pending => {
+                *phase = XdgToplevelDragPhase::Active;
+                true
+            }
+            XdgToplevelDragPhase::Active => true,
+            XdgToplevelDragPhase::Ended => false,
+        }
+    }
+
+    pub(crate) fn mark_ended(&self) {
+        if let Ok(mut phase) = self.phase.lock() {
+            *phase = XdgToplevelDragPhase::Ended;
+        }
+        self.allow_no_target_drop.store(false, Ordering::SeqCst);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum TouchRoute {
     Native {
@@ -66,7 +117,7 @@ pub(crate) struct InputRoutingState {
     pub(crate) shell_move_proxy: Option<ShellMoveProxyState>,
     pub(crate) shell_toplevel_drag: Option<XdgToplevelDragMoveState>,
     pub(crate) shell_toplevel_drag_drop_pending_window_id: Option<u32>,
-    pub(crate) xdg_toplevel_drag_allow_no_target_drop: Option<Arc<AtomicBool>>,
+    pub(crate) xdg_toplevel_drag_sources: HashMap<WlDataSource, Arc<XdgToplevelDragSourceState>>,
     pub(crate) shell_native_drag_preview: Option<NativeDragPreviewState>,
     pub(crate) shell_native_drag_preview_generation: u32,
     pub(crate) shell_backed_move_candidate: Option<(u32, Point<f64, Logical>)>,
@@ -135,7 +186,7 @@ impl InputRoutingState {
             shell_move_proxy: None,
             shell_toplevel_drag: None,
             shell_toplevel_drag_drop_pending_window_id: None,
-            xdg_toplevel_drag_allow_no_target_drop: None,
+            xdg_toplevel_drag_sources: HashMap::new(),
             shell_native_drag_preview: None,
             shell_native_drag_preview_generation: 0,
             shell_backed_move_candidate: None,

@@ -899,21 +899,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
     base,
     state,
   }) => {
-    const compositor = await getJson<CompositorSnapshot>(
-      base,
-      "/test/state/compositor",
-    );
-    const output = [...compositor.outputs].sort(
-      (a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name),
-    )[0];
-    assert(output, "missing output");
-    const pointer = {
-      x: output.x + Math.min(420, Math.max(180, Math.floor(output.width / 2))),
-      y: output.y + Math.min(320, Math.max(160, Math.floor(output.height / 2))),
-    };
+    const stamp = Date.now();
     const offset = { x: 72, y: 44 };
-    const title = `Derp Xdg Toplevel Drag ${Date.now()}`;
-    const command = [
+    const title = `Derp Xdg Toplevel Drag ${stamp}`;
+    const outputPath = path.join(
+      artifactDir(),
+      `xdg-toplevel-drag-attach-${stamp}.txt`,
+    );
+    const clientCommand = [
       shellQuote(nativeBin()),
       "--title",
       shellQuote(title),
@@ -928,16 +921,57 @@ export default defineGroup(import.meta.url, ({ test }) => {
       "--height",
       "220",
       "--xdg-toplevel-drag-attach",
+      "--xdg-toplevel-drag-source",
       "--xdg-toplevel-drag-x-offset",
       String(offset.x),
       "--xdg-toplevel-drag-y-offset",
       String(offset.y),
     ].join(" ");
+    const command = [
+      clientCommand,
+      ">",
+      shellQuote(outputPath),
+      "2>&1;",
+      "printf",
+      shellQuote("\\nexit:%s\\n"),
+      "$?",
+      ">>",
+      shellQuote(outputPath),
+    ].join(" ");
     let windowId: number | null = null;
-    await movePoint(base, pointer.x, pointer.y);
-    await pointerButton(base, BTN_LEFT, "press");
     try {
-      await spawnCommand(base, command);
+      await spawnCommand(base, `sh -lc ${shellQuote(command)}`);
+      const spawned = await waitForSpawnedWindow(
+        base,
+        state.knownWindowIds,
+        {
+          title,
+          appId: "derp.e2e.xdg.toplevel.drag",
+          command: clientCommand,
+        },
+      );
+      windowId = spawned.window.window_id;
+      const readyWindow = await waitFor(
+        "wait for xdg-toplevel-drag native geometry",
+        async () => {
+          const snapshot = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = compositorWindowById(snapshot, windowId ?? 0);
+          if (!window) return null;
+          if (window.width < 100 || window.height < 100) return null;
+          return window;
+        },
+        5000,
+        40,
+      );
+      const start = {
+        x: readyWindow.x + Math.max(24, Math.floor(readyWindow.width / 2)),
+        y: readyWindow.y + Math.max(96, Math.floor(readyWindow.height / 2)),
+      };
+      await movePoint(base, start.x, start.y);
+      await pointerButton(base, BTN_LEFT, "press");
       const attached = await waitFor(
         "wait for xdg-toplevel-drag attached window",
         async () => {
@@ -949,29 +983,226 @@ export default defineGroup(import.meta.url, ({ test }) => {
             (entry) => !entry.shell_hosted && entry.title === title,
           );
           if (!window) return null;
-          const expectedX = pointer.x - offset.x;
-          const expectedY = pointer.y - offset.y;
+          const expectedX = start.x - offset.x;
+          const expectedY = start.y - offset.y;
           if (Math.abs(window.x - expectedX) > 12) return null;
           if (Math.abs(window.y - expectedY) > 12) return null;
+          return { snapshot, window, expectedX, expectedY };
+        },
+        5000,
+        40,
+      );
+      const movedPointer = { x: start.x + 96, y: start.y + 54 };
+      await movePoint(base, movedPointer.x, movedPointer.y);
+      const moved = await waitFor(
+        "wait for xdg-toplevel-drag move update",
+        async () => {
+          const snapshot = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = compositorWindowById(snapshot, windowId ?? 0);
+          if (!window) return null;
+          const expectedX = movedPointer.x - offset.x;
+          const expectedY = movedPointer.y - offset.y;
+          if (Math.abs(window.x - expectedX) > 12) return null;
+          if (Math.abs(window.y - expectedY) > 12) return null;
+          if (snapshot.shell_move_window_id !== window.window_id) return null;
           if (snapshot.shell_move_visual?.x !== window.x) return null;
           return { snapshot, window, expectedX, expectedY };
         },
         5000,
         40,
       );
-      windowId = attached.window.window_id;
-      state.knownWindowIds.add(windowId);
       await writeJsonArtifact("xdg-toplevel-drag-attach.json", {
-        command,
-        pointer,
+        command: clientCommand,
+        outputPath,
+        pointer: start,
+        movedPointer,
         offset,
         attached: attached.window,
+        moved: moved.window,
       });
+    } catch (error) {
+      let output = "";
+      try {
+        output = await readFile(outputPath, "utf8");
+      } catch {
+      }
+      await writeJsonArtifact("xdg-toplevel-drag-attach-failure.json", {
+        command: clientCommand,
+        outputPath,
+        output,
+        windowId,
+      });
+      if (output) {
+        throw new Error(`${(error as Error).message}\n${output}`);
+      }
+      throw error;
     } finally {
       await pointerButton(base, BTN_LEFT, "release");
       if (windowId !== null) {
         await closeWindow(base, windowId);
         await waitForWindowGone(base, windowId, 5000);
+      }
+    }
+  });
+
+  test("xdg-toplevel-drag rejects reused native drag sources", async ({
+    base,
+  }) => {
+    const stamp = Date.now();
+    const outputPath = path.join(
+      artifactDir(),
+      `xdg-toplevel-drag-reused-source-${stamp}.txt`,
+    );
+    const command = [
+      shellQuote(nativeBin()),
+      "--title",
+      shellQuote(`Derp Xdg Toplevel Drag Reused ${stamp}`),
+      "--app-id",
+      "derp.e2e.xdg.toplevel.drag.reused",
+      "--token",
+      `xdg-toplevel-drag-reused-${stamp}`,
+      "--strip",
+      "green",
+      "--width",
+      "260",
+      "--height",
+      "160",
+      "--xdg-toplevel-drag-attach",
+      "--xdg-toplevel-drag-reuse-source",
+      ">",
+      shellQuote(outputPath),
+      "2>&1;",
+      "printf",
+      shellQuote("\\nexit:%s\\n"),
+      "$?",
+      ">>",
+      shellQuote(outputPath),
+    ].join(" ");
+    await spawnCommand(base, `sh -lc ${shellQuote(command)}`);
+    const output = await waitFor(
+      "wait for xdg-toplevel-drag reused source protocol error",
+      async () => {
+        try {
+          const text = await readFile(outputPath, "utf8");
+          return text.includes("\nexit:") ? text : null;
+        } catch {
+          return null;
+        }
+      },
+      5000,
+      100,
+    );
+    assert(!output.includes("\nexit:0\n"), output);
+    assert(
+      output.includes("invalid_source") || output.includes("InvalidSource"),
+      output,
+    );
+    await writeJsonArtifact("xdg-toplevel-drag-reused-source.json", {
+      outputPath,
+      output,
+    });
+  });
+
+  test("xdg-toplevel-drag rejects destroy while native DnD is active", async ({
+    base,
+    state,
+  }) => {
+    const stamp = Date.now();
+    const title = `Derp Xdg Toplevel Drag Destroy ${stamp}`;
+    const outputPath = path.join(
+      artifactDir(),
+      `xdg-toplevel-drag-ongoing-destroy-${stamp}.txt`,
+    );
+    const clientCommand = [
+      shellQuote(nativeBin()),
+      "--title",
+      shellQuote(title),
+      "--app-id",
+      "derp.e2e.xdg.toplevel.drag.destroy",
+      "--token",
+      `xdg-toplevel-drag-destroy-${stamp}`,
+      "--strip",
+      "green",
+      "--width",
+      "320",
+      "--height",
+      "190",
+      "--xdg-toplevel-drag-attach",
+      "--xdg-toplevel-drag-source",
+      "--xdg-toplevel-drag-destroy-on-start",
+      ">",
+      shellQuote(outputPath),
+      "2>&1;",
+      "printf",
+      shellQuote("\\nexit:%s\\n"),
+      "$?",
+      ">>",
+      shellQuote(outputPath),
+    ].join(" ");
+    let windowId: number | null = null;
+    await spawnCommand(base, `sh -lc ${shellQuote(clientCommand)}`);
+    try {
+      const window = await waitForSpawnedWindow(
+        base,
+        state.knownWindowIds,
+        {
+          title,
+          appId: "derp.e2e.xdg.toplevel.drag.destroy",
+          command: clientCommand,
+        },
+      );
+      windowId = window.window.window_id;
+      const readyWindow = await waitFor(
+        "wait for xdg-toplevel-drag destroy native geometry",
+        async () => {
+          const snapshot = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const entry = compositorWindowById(snapshot, windowId ?? 0);
+          if (!entry) return null;
+          if (entry.width < 100 || entry.height < 100) return null;
+          return entry;
+        },
+        5000,
+        40,
+      );
+      await movePoint(
+        base,
+        readyWindow.x + Math.max(24, Math.floor(readyWindow.width / 2)),
+        readyWindow.y + Math.max(96, Math.floor(readyWindow.height / 2)),
+      );
+      await pointerButton(base, BTN_LEFT, "press");
+      const output = await waitFor(
+        "wait for xdg-toplevel-drag ongoing destroy protocol error",
+        async () => {
+          try {
+            const text = await readFile(outputPath, "utf8");
+            return text.includes("\nexit:") ? text : null;
+          } catch {
+            return null;
+          }
+        },
+        5000,
+        100,
+      );
+      assert(!output.includes("\nexit:0\n"), output);
+      assert(
+        output.includes("ongoing_drag") || output.includes("OngoingDrag"),
+        output,
+      );
+      await writeJsonArtifact("xdg-toplevel-drag-ongoing-destroy.json", {
+        outputPath,
+        output,
+        windowId,
+      });
+    } finally {
+      await pointerButton(base, BTN_LEFT, "release");
+      if (windowId !== null) {
+        await closeWindow(base, windowId).catch(() => undefined);
       }
     }
   });
@@ -1255,6 +1486,20 @@ export default defineGroup(import.meta.url, ({ test }) => {
     });
     await waitForSqueekboardStopped();
     let textClient: Awaited<ReturnType<typeof spawnNativeWindow>> | null = null;
+    let applied: OskSettings | null = null;
+    let started: { pid: string; env: string } | null = null;
+    let trayShell: ShellSnapshot | null = null;
+    let mouseFocused: CompositorSnapshot | null = null;
+    let touchFocused: {
+      compositor: CompositorSnapshot;
+      output: CompositorSnapshot["outputs"][number];
+    } | null = null;
+    let taskbarMoved: {
+      compositor: CompositorSnapshot;
+      output: CompositorSnapshot["outputs"][number];
+      taskbar: ShellSnapshot["taskbars"][number];
+    } | null = null;
+    let textWindow: CompositorSnapshot["windows"][number] | null = null;
     try {
       textClient = await spawnNativeWindow(base, state.knownWindowIds, {
         title: `Derp Text Input OSK ${stamp}`,
@@ -1272,16 +1517,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
         base,
         "/test/state/compositor",
       );
-      let textWindow =
+      textWindow =
         compositorWindowById(compositor, textClient.window.window_id) ??
         textClient.window;
       await clickPoint(base, textWindow.x + 70, textWindow.y + 78);
 
-      const applied = await setOskEnabledThroughSettings(base, true);
+      applied = await setOskEnabledThroughSettings(base, true);
       await closeWindow(base, SHELL_UI_SETTINGS_WINDOW_ID);
       await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID, 5000);
       const expectedDisplay = `WAYLAND_DISPLAY=wayland-d${process.getuid?.() ?? ""}`;
-      const started = await waitFor(
+      started = await waitFor(
         "wait for settings-launched squeekboard",
         async () => {
           const envs = await squeekboardProcessEnvs();
@@ -1290,7 +1535,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         5000,
         100,
       );
-      const trayShell = await waitFor(
+      trayShell = await waitFor(
         "wait for taskbar OSK toggle",
         async () => {
           const { shell } = await getSnapshots(base);
@@ -1306,6 +1551,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       textWindow =
         compositorWindowById(compositor, textClient.window.window_id) ??
         textWindow;
+      assert(textWindow, "missing text input window after settings apply");
       await clickPoint(base, textWindow.x + 70, textWindow.y + 78);
       await waitForNativeFocus(base, textClient.window.window_id);
       await waitForStatusJson<TextInputProbeStatus>(
@@ -1313,7 +1559,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         "wait for mouse-focused text-input enable",
         (status) => status.enter >= 1 && status.enable >= 1,
       );
-      const mouseFocused = await waitFor(
+      mouseFocused = await waitFor(
         "wait for OSK to stay hidden after mouse text focus",
         async () => {
           const next = await getJson<CompositorSnapshot>(
@@ -1328,8 +1574,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
         5000,
         100,
       );
-      await touchTap(base, textWindow.x + 70, textWindow.y + 78, 7);
-      const touchFocused = await waitFor(
+      const focusedTextWindow = textWindow;
+      await touchTap(base, focusedTextWindow.x + 70, focusedTextWindow.y + 78, 7);
+      touchFocused = await waitFor(
         "wait for touch-focused text-input OSK",
         async () => {
           const next = await getJson<CompositorSnapshot>(
@@ -1337,10 +1584,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
             "/test/state/compositor",
           );
           const output = next.outputs.find((entry) =>
-            textWindow.x >= entry.x &&
-            textWindow.x < entry.x + entry.width &&
-            textWindow.y >= entry.y &&
-            textWindow.y < entry.y + entry.height
+            focusedTextWindow.x >= entry.x &&
+            focusedTextWindow.x < entry.x + entry.width &&
+            focusedTextWindow.y >= entry.y &&
+            focusedTextWindow.y < entry.y + entry.height
           );
           return next.osk_text_input_visibility_allowed === true &&
             next.osk_visible === true &&
@@ -1352,33 +1599,39 @@ export default defineGroup(import.meta.url, ({ test }) => {
         5000,
         100,
       );
-      const taskbarMoved = await waitFor(
+      const activeTouchFocused = touchFocused;
+      taskbarMoved = await waitFor(
         "wait for taskbar above OSK usable area",
         async () => {
           const { compositor: nextCompositor, shell } = await getSnapshots(base);
-          const output = nextCompositor.outputs.find((entry) => entry.name === touchFocused.output.name);
-          const taskbar = shell.taskbars.find((entry) => entry.monitor === touchFocused.output.name);
+          const output = nextCompositor.outputs.find((entry) => entry.name === activeTouchFocused.output.name);
+          const taskbar = shell.taskbars.find((entry) => entry.monitor === activeTouchFocused.output.name);
           if (!output || !taskbar?.rect) return null;
           const usableBottom = (output.usable_y ?? output.y) + (output.usable_height ?? output.height);
           if ((output.usable_height ?? output.height) >= output.height) return null;
+          if (nextCompositor.osk_layer_visible_on_preferred_output !== true) return null;
           if (taskbar.rect.global_y + taskbar.rect.height > usableBottom + 2) return null;
-          return { output, taskbar };
+          return { compositor: nextCompositor, output, taskbar };
         },
         5000,
         100,
       );
       const busPrefix = `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus`;
-      const output = touchFocused.output;
+      const output = taskbarMoved.output;
       assert(output, "missing output for OSK commit probe");
+      const oskLayer = taskbarMoved.compositor.osk_layer_surfaces?.find(
+        (layer) => layer.output_name === output.name && layer.global.width > 0 && layer.global.height > 0,
+      );
+      assert(oskLayer, "missing visible OSK layer for commit probe");
       const screenshot = await captureScreenshotRect(base, {
         x: output.x,
         y: output.y,
         width: output.width,
         height: output.height,
       });
-      const tapY = output.y + Math.round(output.height * 0.82);
-      const tapXs = [0.12, 0.22, 0.32, 0.42].map((ratio) =>
-        output.x + Math.round(output.width * ratio),
+      const tapY = oskLayer.global.y + Math.round(oskLayer.global.height * 0.23);
+      const tapXs = [0.36, 0.42, 0.48, 0.54].map((ratio) =>
+        oskLayer.global.x + Math.round(oskLayer.global.width * ratio),
       );
       for (const [index, tapX] of tapXs.entries()) {
         await touchTap(base, tapX, tapY, index);
@@ -1418,7 +1671,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             `wait_error=${commitError instanceof Error ? commitError.message : String(commitError)}`,
           ].join("; "),
         applied,
-        started: { pid: started.pid, env: started.env },
+        started: started ? { pid: started.pid, env: started.env } : null,
         taskbarOskToggle: trayShell.controls?.taskbar_osk_toggle,
         mouseFocused,
         touchFocused,
@@ -1434,6 +1687,68 @@ export default defineGroup(import.meta.url, ({ test }) => {
       assert(committed.done >= 1, JSON.stringify(committed));
       assert(committed.last_commit_string.length > 0, JSON.stringify(committed));
       assert(trayShell.controls?.taskbar_osk_toggle, "missing OSK tray toggle");
+    } catch (error) {
+      const compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      ).catch(() => null);
+      const shell = await getJson<ShellSnapshot>(
+        base,
+        "/test/state/shell",
+      ).catch(() => null);
+      const textStatus = await readStatusJson<TextInputProbeStatus>(
+        textStatusPath,
+      ).catch((statusError) => ({
+        error: statusError instanceof Error ? statusError.message : String(statusError),
+      }));
+      const envs = await squeekboardProcessEnvs().catch((envError) => [
+        {
+          pid: "error",
+          env: envError instanceof Error ? envError.message : String(envError),
+        },
+      ]);
+      const output =
+        touchFocused?.output ??
+        (textWindow && compositor
+          ? compositor.outputs.find(
+            (entry) =>
+              textWindow !== null &&
+              textWindow.x >= entry.x &&
+              textWindow.x < entry.x + entry.width &&
+              textWindow.y >= entry.y &&
+              textWindow.y < entry.y + entry.height,
+          )
+          : null) ??
+        compositor?.outputs.find(
+          (entry) => entry.name === compositor.osk_preferred_output_name,
+        ) ??
+        null;
+      const screenshot = output
+        ? await captureScreenshotRect(base, {
+          x: output.x,
+          y: output.y,
+          width: output.width,
+          height: output.height,
+        }).catch((screenshotError) => ({
+          error: screenshotError instanceof Error ? screenshotError.message : String(screenshotError),
+        }))
+        : null;
+      await writeJsonArtifact(`native-text-input-osk-failure-${stamp}.json`, {
+        error: error instanceof Error ? error.message : String(error),
+        applied,
+        started,
+        taskbarOskToggle: trayShell?.controls?.taskbar_osk_toggle,
+        mouseFocused,
+        touchFocused,
+        taskbarMoved,
+        textWindow,
+        compositor,
+        shell,
+        textStatus,
+        envs,
+        screenshot,
+      });
+      throw error;
     } finally {
       if (textClient) {
         await closeWindow(base, textClient.window.window_id);
@@ -1528,15 +1843,21 @@ export default defineGroup(import.meta.url, ({ test }) => {
             next.osk_visible === true &&
             output &&
             next.osk_preferred_output_name === output.name
-            ? { compositor: next, output }
+            ? (() => {
+              const oskLayer = next.osk_layer_surfaces?.find(
+                (layer) => layer.output_name === output.name && layer.global.width > 0 && layer.global.height > 0,
+              );
+              return oskLayer ? { compositor: next, output, oskLayer } : null;
+            })()
             : null;
         },
         5000,
         100,
       );
-      const tapPoints = [0.12, 0.22, 0.32, 0.42].map((xRatio) => ({
-        x: shellTouchFocused.output.x + Math.round(shellTouchFocused.output.width * xRatio),
-        y: shellTouchFocused.output.y + Math.round(shellTouchFocused.output.height * 0.82),
+      const shellOskLayer = shellTouchFocused.oskLayer;
+      const tapPoints = [0.36, 0.42, 0.48, 0.54].map((xRatio) => ({
+        x: shellOskLayer.global.x + Math.round(shellOskLayer.global.width * xRatio),
+        y: shellOskLayer.global.y + Math.round(shellOskLayer.global.height * 0.23),
       }));
       const shellWindowAboveOsk = await waitFor(
         "wait for shell window above OSK",
@@ -1643,21 +1964,54 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const paletteTouchFocused = await waitFor(
         "wait for touch-focused command palette OSK",
         async () => {
-          const next = await getJson<CompositorSnapshot>(
-            base,
-            "/test/state/compositor",
+          const { compositor, shell } = await getSnapshots(base);
+          const search = shell.controls?.programs_menu_search;
+          if (!search || !shell.programs_menu_open) {
+            return null;
+          }
+          if (compositor.osk_shell_text_input_active !== true || compositor.osk_visible !== true) {
+            return null;
+          }
+          const output = compositor.outputs.find((entry) =>
+            search.x >= entry.x &&
+            search.x < entry.x + entry.width &&
+            search.y >= entry.y &&
+            search.y < entry.y + entry.height
+          ) ?? shellTouchFocused.output;
+          const oskLayer = compositor.osk_layer_surfaces?.find((layer) =>
+            layer.output_name === output.name &&
+            layer.global.width > 0 &&
+            layer.global.height > 0
           );
-          return next.osk_shell_text_input_active === true &&
-            next.osk_visible === true
-            ? next
-            : null;
+          return oskLayer ? { compositor, shell, output, oskLayer } : null;
         },
         5000,
         100,
       );
-      for (const [index, point] of tapPoints.entries()) {
+      assert(paletteTouchFocused.shell.controls.programs_menu_search, "missing focused programs menu search");
+      const paletteOutput = paletteTouchFocused.output;
+      const paletteOskLayer = paletteTouchFocused.oskLayer;
+      const paletteTapPoints = [0.36, 0.42, 0.48, 0.54].map((xRatio) => ({
+        x: paletteOskLayer.global.x + Math.round(paletteOskLayer.global.width * xRatio),
+        y: paletteOskLayer.global.y + Math.round(paletteOskLayer.global.height * 0.23),
+      }));
+      await writeJsonArtifact("shell-editable-osk-before-palette-taps.json", {
+        paletteTouchFocused,
+        paletteOutput,
+        paletteOskLayer,
+        paletteTapPoints,
+      });
+      for (const [index, point] of paletteTapPoints.entries()) {
         await touchTap(base, point.x, point.y, 40 + index);
       }
+      await writeJsonArtifact("shell-editable-osk-after-palette-taps.json", {
+        compositor: await getJson<CompositorSnapshot>(
+          base,
+          "/test/state/compositor",
+        ),
+        shell: await getJson<ShellSnapshot>(base, "/test/state/shell"),
+        paletteTapPoints,
+      });
       const typedPalette = await waitFor(
         "wait for OSK text in command palette",
         async () => {
@@ -1679,6 +2033,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         typedShellInput,
         programsMenuQuery: typedPalette.programs_menu_query,
         tapPoints,
+        paletteTapPoints,
       });
       assert(typedShellInput.value.length > 0, JSON.stringify(typedShellInput));
       assert(typedPalette.programs_menu_query.length > 0, typedPalette.programs_menu_query);

@@ -243,6 +243,27 @@ async function waitForShellTracksCompositor(base: string, windowId: number, labe
   )
 }
 
+async function waitForRestoredShellTracksCompositor(base: string, windowId: number, label: string) {
+  return waitFor(
+    `${label} restored shell compositor parity`,
+    async () => {
+      const snapshots = await getSnapshots(base)
+      try {
+        assertShellTracksCompositor(snapshots.compositor, snapshots.shell, windowId, label)
+      } catch {
+        return null
+      }
+      const compositorWindow = compositorWindowById(snapshots.compositor, windowId)
+      const shellWindow = shellWindowById(snapshots.shell, windowId)
+      if (!compositorWindow || !shellWindow) return null
+      if (compositorWindow.minimized || shellWindow.minimized) return null
+      return snapshots
+    },
+    5000,
+    40,
+  )
+}
+
 async function waitForResizeRightRect(base: string, windowId: number, label: string) {
   return waitFor(
     `${label} right resize control`,
@@ -449,26 +470,20 @@ async function runFootMaximizeWithoutForcedSync(context: TestContext) {
   state.spawnedNativeWindowIds.add(opened.window_id)
   const maximizeRect = await clickMaximizeWithoutSync(base, opened.window_id, 'foot raw')
   const maximizedScreenshot = await captureScreenshotRect(base, maximizeRect)
-  const maximizedShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  const maximizedCompositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-  assertShellTracksCompositor(maximizedCompositor, maximizedShell, opened.window_id, 'foot raw maximized')
-  assertCompositorFrameContract(maximizedShell, opened.window_id, 'foot raw maximized')
+  const maximizedSnapshots = await waitForShellTracksCompositor(base, opened.window_id, 'foot raw maximized')
+  assertCompositorFrameContract(maximizedSnapshots.shell, opened.window_id, 'foot raw maximized')
 
   const restoreRect = await clickMaximizeWithoutSync(base, opened.window_id, 'foot raw restored')
   const restoredScreenshot = await captureScreenshotRect(base, restoreRect)
-  const restoredShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  const restoredCompositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-  assertShellTracksCompositor(restoredCompositor, restoredShell, opened.window_id, 'foot raw restored')
-  assertCompositorFrameContract(restoredShell, opened.window_id, 'foot raw restored')
+  const restoredSnapshots = await waitForShellTracksCompositor(base, opened.window_id, 'foot raw restored')
+  assertCompositorFrameContract(restoredSnapshots.shell, opened.window_id, 'foot raw restored')
 
   const minimizeRect = await clickMinimizeWithoutSync(base, opened.window_id, 'foot raw minimized')
   await waitForWindowMinimized(base, opened.window_id)
   const restoreTaskbarRect = await restoreFromTaskbarWithoutSync(base, opened.window_id, 'foot raw taskbar restored')
   const taskbarRestoredScreenshot = await captureScreenshotRect(base, restoreTaskbarRect)
-  const taskbarRestoredShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  const taskbarRestoredCompositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-  assertShellTracksCompositor(taskbarRestoredCompositor, taskbarRestoredShell, opened.window_id, 'foot raw taskbar restored')
-  assertCompositorFrameContract(taskbarRestoredShell, opened.window_id, 'foot raw taskbar restored')
+  const taskbarRestoredSnapshots = await waitForRestoredShellTracksCompositor(base, opened.window_id, 'foot raw taskbar restored')
+  assertCompositorFrameContract(taskbarRestoredSnapshots.shell, opened.window_id, 'foot raw taskbar restored')
 
   await writeJsonArtifact('window-parity-foot-raw-maximize-restore.json', {
     windowId: opened.window_id,
@@ -476,9 +491,9 @@ async function runFootMaximizeWithoutForcedSync(context: TestContext) {
     restoredScreenshot,
     taskbarRestoredScreenshot,
     minimizeRect,
-    shell: shellWindowById(taskbarRestoredShell, opened.window_id),
-    compositor: compositorWindowById(taskbarRestoredCompositor, opened.window_id),
-    controls: windowControls(taskbarRestoredShell, opened.window_id),
+    shell: shellWindowById(taskbarRestoredSnapshots.shell, opened.window_id),
+    compositor: compositorWindowById(taskbarRestoredSnapshots.compositor, opened.window_id),
+    controls: windowControls(taskbarRestoredSnapshots.shell, opened.window_id),
   })
 }
 

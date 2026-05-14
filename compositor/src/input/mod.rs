@@ -992,7 +992,9 @@ impl CompositorState {
         if self.screenshot_selection_active() {
             return TouchRoute::PointerEmulation { last_pos: pos };
         }
+        let in_osk_fallback = self.point_in_osk_fallback_touch_area(pos);
         if self.shell_osr.shell_exclusion_overlay_open
+            && !in_osk_fallback
             && !self.shell_point_in_shell_floating_overlay_global(pos)
             && !self.shell_pointer_route_to_cef(pos)
         {
@@ -1001,7 +1003,7 @@ impl CompositorState {
         }
         let in_excl = self.point_in_shell_exclusion_zones(pos);
         let in_shell_ui = self.shell_ui_placement_topmost_for_input_at(pos).is_some();
-        if !in_excl && !in_shell_ui && self.point_in_osk_fallback_touch_area(pos) {
+        if !in_excl && !in_shell_ui && in_osk_fallback {
             if self.session_services.osk_shell_text_input_active {
                 return TouchRoute::ShellOskKey { last_pos: pos };
             }

@@ -5,9 +5,22 @@ impl CompositorState {
         self.shell_osr.shell_cef_active()
     }
 
-    pub(crate) fn shell_send_to_cef(&mut self, msg: shell_wire::DecodedCompositorToShellMessage) {
+    pub(crate) fn shell_send_to_cef(
+        &mut self,
+        mut msg: shell_wire::DecodedCompositorToShellMessage,
+    ) {
         if !self.shell_osr.prepare_shell_send_to_cef(&msg) {
             return;
+        }
+        if self.shell_prune_stale_interaction_refs() {
+            self.sync_shell_interaction_serial();
+            self.next_shell_interaction_revision();
+            if matches!(
+                msg,
+                shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
+            ) {
+                msg = self.shell_interaction_state_message();
+            }
         }
         let workspace_changed = self.workspace_sync_from_registry();
         if workspace_changed {

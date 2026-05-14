@@ -66,11 +66,34 @@ function taskbarPin(shell: ShellSnapshot, id: string, monitor?: string): ShellTa
   return shell.taskbar_pins?.find((pin) => pin.id === id && (!monitor || pin.monitor === monitor)) ?? null
 }
 
+function taskbarAlignedWithCompositor(shell: ShellSnapshot, compositor: CompositorSnapshot, monitor: string): boolean {
+  const taskbar = taskbarForMonitor(shell, monitor)
+  if (!taskbar?.rect) return false
+  const output = compositor.outputs.find((entry) => entry.name === monitor)
+  if (!output) return false
+  if (compositor.osk_visible !== true) {
+    const usableHeight = output.usable_height ?? output.height
+    const usableWidth = output.usable_width ?? output.width
+    if (output.height - usableHeight > 64 || output.width - usableWidth > 64) return false
+  }
+  const usableX = output.usable_x ?? output.x
+  const usableY = output.usable_y ?? output.y
+  const usableWidth = output.usable_width ?? output.width
+  const usableHeight = output.usable_height ?? output.height
+  const usableRight = usableX + usableWidth
+  const usableBottom = usableY + usableHeight
+  if (taskbar.side === 'bottom') return Math.abs(taskbar.rect.global_y + taskbar.rect.height - usableBottom) <= 2
+  if (taskbar.side === 'top') return Math.abs(taskbar.rect.global_y - usableY) <= 2
+  if (taskbar.side === 'left') return Math.abs(taskbar.rect.global_x - usableX) <= 2
+  return Math.abs(taskbar.rect.global_x + taskbar.rect.width - usableRight) <= 2
+}
+
 async function waitForTaskbarPin(base: string, id: string, monitor: string): Promise<{ shell: ShellSnapshot; pin: ShellTaskbarPin }> {
   return waitFor(
     `wait for taskbar pin ${id}`,
     async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const { compositor, shell } = await getSnapshots(base)
+      if (!taskbarAlignedWithCompositor(shell, compositor, monitor)) return null
       const pin = taskbarPin(shell, id, monitor)
       return pin?.rect ? { shell, pin } : null
     },
@@ -179,6 +202,7 @@ async function launchAppPin(base: string, pinId: string, monitor: string): Promi
       if (!window) return null
       if (window.output_name !== monitor) return null
       if (window.width < 160 || window.height < 48) return null
+      if (!taskbarAlignedWithCompositor(shell, compositor, monitor)) return null
       if (!taskbarEntry(shell, window.window_id)?.activate) return null
       const pin = taskbarPin(shell, pinId, monitor)
       return pin?.rect ? { compositor, shell, window, pin } : null
@@ -213,7 +237,8 @@ async function launchFolderPin(base: string, pinId: string, monitor: string, fol
   return waitFor(
     `wait for pinned folder launch ${folderPath}`,
     async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const { compositor, shell } = await getSnapshots(base)
+      if (!taskbarAlignedWithCompositor(shell, compositor, monitor)) return null
       const window = shell.windows.find((entry) => entry.shell_hosted && entry.app_id === FILE_BROWSER_APP_ID && !known.has(entry.window_id))
       if (!window) return null
       if (window.output_name !== monitor) return null

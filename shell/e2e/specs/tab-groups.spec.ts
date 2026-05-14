@@ -2585,11 +2585,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       }
       await timing.step('raise spawned foot above file browser', async () => {
         const snapshots = await getSnapshots(base)
-        if (
-          !compositorFootAboveFileBrowser(snapshots.compositor) &&
-          snapshots.compositor.focused_window_id !== footWindowId &&
-          snapshots.shell.focused_window_id !== footWindowId
-        ) {
+        if (!compositorFootAboveFileBrowser(snapshots.compositor)) {
           const shellWithTaskbarRow = await waitFor(
             `wait for foot taskbar row ${footWindowId}`,
             async () => {
@@ -2600,6 +2596,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
             40,
           )
           await activateTaskbarWindow(base, shellWithTaskbarRow, footWindowId!)
+          await waitFor(
+            `wait for foot above file browser ${footWindowId}`,
+            async () => {
+              const { compositor } = await getSnapshots(base)
+              return compositorFootAboveFileBrowser(compositor)
+            },
+            2000,
+            40,
+          )
         }
       })
       await timing.step('merge foot window into file browser tab', async () => {

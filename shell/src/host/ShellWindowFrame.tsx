@@ -88,6 +88,55 @@ type ShellWindowFrameProps = {
 };
 
 export function ShellWindowFrame(props: ShellWindowFrameProps) {
+  let pendingTitlebarDrag:
+    | {
+        pointerId: number;
+        windowId: number;
+        clientX: number;
+        clientY: number;
+        timer: number;
+      }
+    | null = null;
+  const clearPendingTitlebarDrag = () => {
+    const pending = pendingTitlebarDrag;
+    if (!pending) return;
+    window.clearTimeout(pending.timer);
+    window.removeEventListener("pointermove", onPendingTitlebarPointerMove, true);
+    window.removeEventListener("pointerup", onPendingTitlebarPointerDone, true);
+    window.removeEventListener("pointercancel", onPendingTitlebarPointerDone, true);
+    pendingTitlebarDrag = null;
+  };
+  const startPendingTitlebarDrag = (
+    pending: {
+      pointerId: number;
+      windowId: number;
+      clientX: number;
+      clientY: number;
+      timer: number;
+    },
+    clientX: number,
+    clientY: number,
+  ) => {
+    if (pendingTitlebarDrag !== pending) return;
+    titlebarLastClickByWindow.delete(pending.windowId);
+    clearPendingTitlebarDrag();
+    props.onTitlebarPointerDown(pending.pointerId, clientX, clientY);
+  };
+  function onPendingTitlebarPointerMove(e: PointerEvent) {
+    const pending = pendingTitlebarDrag;
+    if (!pending || pending.pointerId !== e.pointerId) return;
+    if (
+      Math.abs(e.clientX - pending.clientX) < 1 &&
+      Math.abs(e.clientY - pending.clientY) < 1
+    )
+      return;
+    startPendingTitlebarDrag(pending, e.clientX, e.clientY);
+  }
+  function onPendingTitlebarPointerDone(e: PointerEvent) {
+    if (pendingTitlebarDrag?.pointerId === e.pointerId) {
+      clearPendingTitlebarDrag();
+    }
+  }
   const requestFocus = () => {
     props.onFocusRequest?.();
   };
@@ -267,7 +316,46 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
               x: e.clientX,
               y: e.clientY,
             });
-            props.onTitlebarPointerDown(e.pointerId, e.clientX, e.clientY);
+            const pending = {
+              pointerId: e.pointerId,
+              windowId,
+              clientX: e.clientX,
+              clientY: e.clientY,
+              timer: 0,
+            };
+            pending.timer = window.setTimeout(() => {
+              startPendingTitlebarDrag(pending, pending.clientX, pending.clientY);
+            }, 80);
+            pendingTitlebarDrag = pending;
+            window.addEventListener("pointermove", onPendingTitlebarPointerMove, true);
+            window.addEventListener("pointerup", onPendingTitlebarPointerDone, true);
+            window.addEventListener("pointercancel", onPendingTitlebarPointerDone, true);
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {}
+          }}
+          onPointerMove={(e) => {
+            const pending = pendingTitlebarDrag;
+            if (!pending || pending.pointerId !== e.pointerId) return;
+            if (
+              Math.abs(e.clientX - pending.clientX) < 1 &&
+              Math.abs(e.clientY - pending.clientY) < 1
+            )
+              return;
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            }
+            startPendingTitlebarDrag(pending, e.clientX, e.clientY);
+          }}
+          onPointerUp={(e) => {
+            if (pendingTitlebarDrag?.pointerId === e.pointerId) {
+              clearPendingTitlebarDrag();
+            }
+          }}
+          onPointerCancel={(e) => {
+            if (pendingTitlebarDrag?.pointerId === e.pointerId) {
+              clearPendingTitlebarDrag();
+            }
           }}
           onDblClick={(e) => {
             if (e.button !== 0) return;

@@ -1177,6 +1177,7 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_send_interaction_state(&mut self) {
+        self.shell_prune_stale_interaction_refs();
         self.sync_shell_interaction_serial();
         self.next_shell_interaction_revision();
         self.input_routing.shell_interaction_last_sent_at = Some(Instant::now());
@@ -1190,8 +1191,104 @@ impl CompositorState {
         ) {
             return;
         }
+        self.shell_prune_stale_interaction_refs();
         self.sync_shell_interaction_serial();
         self.next_shell_interaction_revision();
         self.shell_send_to_cef(self.shell_interaction_state_message());
+    }
+
+    pub(crate) fn shell_prune_stale_interaction_refs(&mut self) -> bool {
+        let mut changed = false;
+        if self
+            .input_routing
+            .shell_move_window_id
+            .is_some_and(|window_id| {
+                self.windows
+                    .window_registry
+                    .window_info(window_id)
+                    .is_none()
+            })
+        {
+            self.input_routing.shell_move_clear_active_state();
+            changed = true;
+        }
+        if self
+            .input_routing
+            .shell_resize_window_id
+            .is_some_and(|window_id| {
+                self.windows
+                    .window_registry
+                    .window_info(window_id)
+                    .is_none()
+            })
+        {
+            self.input_routing.shell_resize_clear_active_state();
+            changed = true;
+        }
+        if self
+            .input_routing
+            .shell_resize_shell_grab
+            .is_some_and(|window_id| {
+                self.windows
+                    .window_registry
+                    .window_info(window_id)
+                    .is_none()
+            })
+        {
+            self.input_routing.shell_resize_shell_grab = None;
+            changed = true;
+        }
+        if self
+            .input_routing
+            .shell_move_proxy
+            .as_ref()
+            .is_some_and(|proxy| {
+                self.windows
+                    .window_registry
+                    .window_info(proxy.window_id)
+                    .is_none()
+            })
+        {
+            self.input_routing.shell_move_proxy = None;
+            changed = true;
+        }
+        if self
+            .input_routing
+            .shell_native_drag_preview
+            .as_ref()
+            .is_some_and(|preview| {
+                self.windows
+                    .window_registry
+                    .window_info(preview.window_id)
+                    .is_none()
+            })
+        {
+            self.input_routing.shell_native_drag_preview = None;
+            changed = true;
+        }
+        if self.input_routing.shell_toplevel_drag.is_some_and(|drag| {
+            self.windows
+                .window_registry
+                .window_info(drag.window_id)
+                .is_none()
+        }) {
+            self.input_routing.shell_toplevel_drag = None;
+            changed = true;
+        }
+        if self
+            .input_routing
+            .shell_toplevel_drag_drop_pending_window_id
+            .is_some_and(|window_id| {
+                self.windows
+                    .window_registry
+                    .window_info(window_id)
+                    .is_none()
+            })
+        {
+            self.input_routing
+                .shell_toplevel_drag_drop_pending_window_id = None;
+            changed = true;
+        }
+        changed
     }
 }

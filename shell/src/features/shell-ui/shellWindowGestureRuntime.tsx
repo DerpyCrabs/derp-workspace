@@ -1084,6 +1084,9 @@ export function createShellWindowGestureRuntime(
     } else if (window) {
       startedTiled = prepareWindowMoveUntile(windowId, window, null);
     }
+    if (window?.maximized) {
+      options.shellWireSend("set_maximized", windowId, 0);
+    }
     if (window && (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) === 0) {
       options.clearNativeDragPreview();
     }

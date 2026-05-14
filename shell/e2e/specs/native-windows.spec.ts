@@ -2394,7 +2394,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const t = index / steps
       await movePoint(base, startX + dx * t, startY + dy * t)
     }
-    const duringDrag = await waitFor(
+    await waitFor(
       'wait for transparent CSD drag visual',
       async () => {
         const { compositor, shell } = await getSnapshots(base)
@@ -2411,7 +2411,25 @@ export default defineGroup(import.meta.url, ({ test }) => {
       1000,
       20,
     )
-    const visual = duringDrag.window
+    await syncTest(base)
+    const syncedDrag = await waitFor(
+      'wait for transparent CSD synced drag visual',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const window = compositorWindowById(compositor, windowId)
+        if (shell.compositor_interaction_state?.move_window_id !== windowId) return null
+        if (!window?.client_side_decoration) return null
+        const alpha = window.render_alpha ?? 1
+        if (alpha < 0.7 || alpha > 0.82) return null
+        if (compositor.shell_native_drag_preview_window_id != null) return null
+        const controls = windowControls(shell, windowId)
+        if (controls?.titlebar) return null
+        return { compositor, shell, controls, window }
+      },
+      1000,
+      20,
+    )
+    const visual = syncedDrag.window
     assert(visual.width >= 120 && visual.height >= 120, `transparent CSD drag visual too small ${JSON.stringify(visual)}`)
     const capture = {
       x: Math.floor(visual.x - 10),
@@ -2420,7 +2438,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       height: Math.ceil(visual.height + 20),
     }
     const screenshot = await captureScreenshotRect(base, capture)
-    const pointer = duringDrag.compositor.pointer
+    const pointer = syncedDrag.compositor.pointer
     if (!pointer) throw new Error('transparent CSD drag pointer snapshot missing')
     const transparentCorners = await assertRoundedCsdTransparentOutside(
       screenshot.path,
@@ -2435,7 +2453,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       {
         x: pointer.x,
         y: pointer.y,
-        size: duringDrag.compositor.cursor_size,
+        size: syncedDrag.compositor.cursor_size,
       },
     )
     await pointerButton(base, BTN_LEFT, 'release')
@@ -2448,8 +2466,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       screenshot,
       screenshotArtifact: await copyArtifactFile('csd-native-drag-transparent-corners.png', screenshot.path),
       transparentCorners,
-      compositorDuringDrag: duringDrag.compositor,
-      shellDuringDrag: duringDrag.shell,
+      compositorDuringDrag: syncedDrag.compositor,
+      shellDuringDrag: syncedDrag.shell,
     })
   })
 

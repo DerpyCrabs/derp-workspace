@@ -30,7 +30,7 @@ done
 remote_args_str="${remote_args[*]:-}"
 
 DERP_E2E_REMOTE_SNAPSHOT="$SCRIPT_DIR/.derp-e2e-remote-snapshot"
-DERP_E2E_SOFTWARE_SESSION="${DERP_E2E_SOFTWARE_RENDERING:-0}"
+DERP_E2E_SOFTWARE_SESSION="${DERP_E2E_SOFTWARE_RENDERING:-1}"
 DERP_E2E_VALIDATE_BACKUP="scripts/.derp-session.local.env.e2e-validate-backup"
 DERP_E2E_VALIDATE_HAD_ENV="scripts/.derp-session.local.env.e2e-validate-had-env"
 

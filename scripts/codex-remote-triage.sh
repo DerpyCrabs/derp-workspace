@@ -17,6 +17,7 @@ else
 fi
 
 MODEL="${DERP_CODEX_TRIAGE_MODEL:-gpt-5.3-codex-spark}"
+FALLBACK_MODELS="${DERP_CODEX_TRIAGE_FALLBACK_MODELS:-gpt-5.2}"
 CODEX_BIN="${DERP_CODEX_TRIAGE_CODEX_BIN:-codex}"
 OUT_DIR="${DERP_CODEX_TRIAGE_OUT_DIR:-$REPO_ROOT/.artifacts/remote-triage}"
 CLEAN_ENV="${DERP_CODEX_TRIAGE_CLEAN_ENV:-0}"
@@ -298,24 +299,30 @@ else
   cmd_prefix=(env)
 fi
 
-cmd=("${cmd_prefix[@]}")
-for assignment in ${env_assignments+"${env_assignments[@]}"}; do
-  cmd+=("$assignment")
-done
-cmd+=("$CODEX_BIN" --ask-for-approval never exec --model "$MODEL" --cd "$REPO_ROOT" --sandbox danger-full-access --color never --output-last-message "$MESSAGE_FILE")
-if [[ "$LOAD_USER_CONFIG" != "1" ]]; then
-  cmd+=(--ignore-user-config)
-fi
-if [[ "$LOAD_RULES" != "1" ]]; then
-  cmd+=(--ignore-rules)
-fi
-if [[ "$PERSIST_SESSION" != "1" ]]; then
-  cmd+=(--ephemeral)
-fi
-for config_arg in ${codex_config+"${codex_config[@]}"}; do
-  cmd+=("$config_arg")
-done
-cmd+=("-")
+build_cmd() {
+  local model="$1"
+  local message_file="$2"
+  cmd=("${cmd_prefix[@]}")
+  for assignment in ${env_assignments+"${env_assignments[@]}"}; do
+    cmd+=("$assignment")
+  done
+  cmd+=("$CODEX_BIN" --ask-for-approval never exec --model "$model" --cd "$REPO_ROOT" --sandbox danger-full-access --color never --output-last-message "$message_file")
+  if [[ "$LOAD_USER_CONFIG" != "1" ]]; then
+    cmd+=(--ignore-user-config)
+  fi
+  if [[ "$LOAD_RULES" != "1" ]]; then
+    cmd+=(--ignore-rules)
+  fi
+  if [[ "$PERSIST_SESSION" != "1" ]]; then
+    cmd+=(--ephemeral)
+  fi
+  for config_arg in ${codex_config+"${codex_config[@]}"}; do
+    cmd+=("$config_arg")
+  done
+  cmd+=("-")
+}
+
+build_cmd "$MODEL" "$MESSAGE_FILE"
 
 if [[ "$DRY_RUN" == "1" ]]; then
   printf 'repo=%s\n' "$REPO_ROOT"
@@ -333,6 +340,28 @@ if [[ "$STREAM" == "1" ]]; then
   "${cmd[@]}" <"$PROMPT_FILE" 2>&1 | tee "$LOG_FILE" || status=$?
 else
   "${cmd[@]}" <"$PROMPT_FILE" >"$LOG_FILE" 2>&1 || status=$?
+fi
+
+if [[ ! -f "$MESSAGE_FILE" ]] && grep -qi "usage limit" "$LOG_FILE" && [[ -n "$FALLBACK_MODELS" ]]; then
+  fallback_raw="${FALLBACK_MODELS//,/ }"
+  for fallback_model in $fallback_raw; do
+    [[ -n "$fallback_model" && "$fallback_model" != "$MODEL" ]] || continue
+    fallback_safe="${fallback_model//[^A-Za-z0-9_.-]/_}"
+    fallback_log_file="$OUT_DIR/$RUN_ID.$fallback_safe.log"
+    fallback_message_file="$OUT_DIR/$RUN_ID.$fallback_safe.md"
+    build_cmd "$fallback_model" "$fallback_message_file"
+    status=0
+    if [[ "$STREAM" == "1" ]]; then
+      "${cmd[@]}" <"$PROMPT_FILE" 2>&1 | tee "$fallback_log_file" || status=$?
+    else
+      "${cmd[@]}" <"$PROMPT_FILE" >"$fallback_log_file" 2>&1 || status=$?
+    fi
+    LOG_FILE="$fallback_log_file"
+    if [[ -f "$fallback_message_file" ]]; then
+      cp "$fallback_message_file" "$MESSAGE_FILE"
+      break
+    fi
+  done
 fi
 
 if [[ -f "$MESSAGE_FILE" ]]; then

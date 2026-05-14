@@ -3,6 +3,7 @@ mod layer_shell;
 mod xdg_shell;
 
 use std::{
+    any::Any,
     io::Write,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -10,6 +11,7 @@ use std::{
     },
 };
 
+use crate::state::XdgToplevelDragSourceState;
 use crate::{
     chrome_bridge::{ChromeEvent, WindowIconBufferInfo, WindowIconInfo, WindowInfo},
     CompositorState,
@@ -26,7 +28,9 @@ use smithay::input::{
     pointer::Focus,
     Seat, SeatHandler, SeatState,
 };
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::protocol::{
+    wl_data_source::WlDataSource, wl_surface::WlSurface,
+};
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{IsAlive, Logical, Point, Rectangle, Serial};
 use smithay::wayland::input_method::{InputMethodHandler, PopupSurface as InputMethodPopupSurface};
@@ -53,6 +57,7 @@ use smithay::{
 struct XdgToplevelDragAwareSource<S: Source> {
     inner: S,
     allow_no_target_drop: Arc<AtomicBool>,
+    xdg_toplevel_drag: Option<Arc<XdgToplevelDragSourceState>>,
 }
 
 impl<S: Source> IsAlive for XdgToplevelDragAwareSource<S> {
@@ -62,7 +67,7 @@ impl<S: Source> IsAlive for XdgToplevelDragAwareSource<S> {
 }
 
 impl<S: Source> Source for XdgToplevelDragAwareSource<S> {
-    fn is_client_local(&self, target: &dyn std::any::Any) -> bool {
+    fn is_client_local(&self, target: &dyn Any) -> bool {
         let allow_no_target_drop = self.allow_no_target_drop.load(Ordering::SeqCst);
         let metadata = self.metadata();
         let chromium_window_drag = metadata.as_ref().is_some_and(|metadata| {
@@ -90,14 +95,23 @@ impl<S: Source> Source for XdgToplevelDragAwareSource<S> {
     }
 
     fn drop_performed(&self) {
+        if let Some(drag) = self.xdg_toplevel_drag.as_ref() {
+            drag.mark_ended();
+        }
         self.inner.drop_performed();
     }
 
     fn cancel(&self) {
         if self.allow_no_target_drop.swap(false, Ordering::SeqCst) {
+            if let Some(drag) = self.xdg_toplevel_drag.as_ref() {
+                drag.mark_ended();
+            }
             self.inner.drop_performed();
             self.inner.finished();
         } else {
+            if let Some(drag) = self.xdg_toplevel_drag.as_ref() {
+                drag.mark_ended();
+            }
             self.inner.cancel();
         }
     }
@@ -633,7 +647,6 @@ impl DndGrabHandler for CompositorState {
             self.input_routing
                 .shell_toplevel_drag_drop_pending_window_id = Some(drag.window_id);
         }
-        self.input_routing.xdg_toplevel_drag_allow_no_target_drop = None;
     }
 }
 
@@ -646,12 +659,23 @@ impl WaylandDndGrabHandler for CompositorState {
         serial: Serial,
         type_: GrabType,
     ) {
-        let allow_no_target_drop = Arc::new(AtomicBool::new(false));
-        self.input_routing.xdg_toplevel_drag_allow_no_target_drop =
-            Some(allow_no_target_drop.clone());
+        let xdg_toplevel_drag = (&source as &dyn Any)
+            .downcast_ref::<WlDataSource>()
+            .and_then(|source| {
+                self.input_routing
+                    .xdg_toplevel_drag_sources
+                    .get(source)
+                    .cloned()
+            })
+            .filter(|drag| drag.mark_active());
+        let allow_no_target_drop = xdg_toplevel_drag
+            .as_ref()
+            .map(|drag| drag.allow_no_target_drop.clone())
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let source = XdgToplevelDragAwareSource {
             inner: source,
             allow_no_target_drop,
+            xdg_toplevel_drag,
         };
         drop(icon);
         match type_ {
