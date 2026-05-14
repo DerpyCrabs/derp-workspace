@@ -10,17 +10,17 @@ Rules:
 - user can't change environment so you need to change scripts
 - for shell styling use inline tailwind classes only, don't extract style constants or reintroduce custom shell css classes
 - keep tailwind/style lint clean when editing shell ui files
-- on Windows run repo `.sh` scripts through Git Bash explicitly, e.g. `& 'C:\Program Files\Git\bin\bash.exe' ./scripts/codex-remote-triage.sh`
-- after changes run ./scripts/codex-remote-triage.sh so codex-spark performs the remote update, verify, e2e, log fetch and triage
+- on Windows run repo `.sh` scripts through Git Bash explicitly, e.g. `& 'C:\Program Files\Git\bin\bash.exe' ./scripts/e2e-remote.sh`
+- after changes run ./scripts/e2e-remote.sh
 - if compositor crashes or remote update leaves no compositor running, restart gdm on the remote to start it again
-- use ./scripts/codex-remote-triage.sh for remote verification; only run ./scripts/remote-update-and-restart.sh, ./scripts/remote-verify.sh, ./scripts/e2e-remote.sh or ./scripts/fetch-logs.sh directly when changing those scripts or debugging the triage helper itself
+- use ./scripts/e2e-remote.sh for remote verification; only run ./scripts/remote-update-and-restart.sh, ./scripts/remote-verify.sh or ./scripts/fetch-logs.sh directly when changing or debugging those scripts
 - for compositor, native window lifecycle, or e2e harness changes add or update a remote e2e test and keep fetched local artifacts under .artifacts/e2e
-- if you need logs use ./scripts/codex-remote-triage.sh; direct ./scripts/fetch-logs.sh is only for changing or debugging the triage helper itself
+- if you need logs use ./scripts/e2e-remote.sh; direct ./scripts/fetch-logs.sh is only for changing or debugging that script itself
 - debug everything yourself on remote machine (but if you add logs use warn and delete after debugging)
 - if you see that test is flaky or broken - check that it wasn't broken by you and always fix it even if you have unrelated task
 - tests should use real user interactions where possible, if they don't work it can indicate bugs and needs to be fixed, not replaced with some test only api
 - flaky tests can be bugs in existing code, make sure that test is really flaky and not uncovering some bug. Tests should never be run in parallel
-- always run full ./scripts/codex-remote-triage.sh if you think you are done with the task
+- always run full ./scripts/e2e-remote.sh if you think you are done with the task
 
 Architecture:
 1) compositor owns windows, screens and other state. It shares it using SharedMemory with CEF
