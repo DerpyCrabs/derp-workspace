@@ -1621,6 +1621,16 @@ fn handle_one(
         return Ok(());
     }
 
+    if req_path == "/test/output/ui_scale" {
+        let scale = v
+            .get("scale")
+            .and_then(|x| x.as_f64())
+            .ok_or_else(|| "output ui_scale: missing scale".to_string())?;
+        uplink.shell_set_ui_scale(scale);
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if req_path == "/test/screenshot" {
         let rect = match (
             v.get("x").and_then(|x| x.as_i64()),

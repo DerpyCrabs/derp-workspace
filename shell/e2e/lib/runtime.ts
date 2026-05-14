@@ -3276,6 +3276,7 @@ export function buildNativeSpawnCommand({
   inputMethodProbe = false,
   inputMethodStatusJson,
   keyboardStatusJson,
+  xdgConfigureStatusJson,
 }: {
   title: string
   appId?: string
@@ -3316,6 +3317,7 @@ export function buildNativeSpawnCommand({
   inputMethodProbe?: boolean
   inputMethodStatusJson?: string
   keyboardStatusJson?: string
+  xdgConfigureStatusJson?: string
 }): string {
   const parts = [
     nativeBin(),
@@ -3361,6 +3363,7 @@ export function buildNativeSpawnCommand({
   if (inputMethodProbe) parts.push('--input-method-probe')
   if (inputMethodStatusJson) parts.push('--input-method-status-json', shellQuote(inputMethodStatusJson))
   if (keyboardStatusJson) parts.push('--keyboard-status-json', shellQuote(keyboardStatusJson))
+  if (xdgConfigureStatusJson) parts.push('--xdg-configure-status-json', shellQuote(xdgConfigureStatusJson))
   if (spawnOnPressCommand) {
     parts.push('--spawn-on-press-command', shellQuote(spawnOnPressCommand))
   }
@@ -3418,6 +3421,7 @@ export async function spawnNativeWindow(
     inputMethodProbe,
     inputMethodStatusJson,
     keyboardStatusJson,
+    xdgConfigureStatusJson,
   }: {
     title: string
     appId?: string
@@ -3458,6 +3462,7 @@ export async function spawnNativeWindow(
     inputMethodProbe?: boolean
     inputMethodStatusJson?: string
     keyboardStatusJson?: string
+    xdgConfigureStatusJson?: string
   },
 ): Promise<NativeSpawnResult> {
   const command = buildNativeSpawnCommand({
@@ -3500,6 +3505,7 @@ export async function spawnNativeWindow(
     inputMethodProbe,
     inputMethodStatusJson,
     keyboardStatusJson,
+    xdgConfigureStatusJson,
   })
   await spawnCommand(base, command)
   return waitForSpawnedWindow(base, knownWindowIds, { title, appId, command })

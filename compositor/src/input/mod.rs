@@ -901,7 +901,7 @@ impl CompositorState {
                 self.output_topology.space.elements().for_each(|e| {
                     e.set_activate(false);
                     if let DerpSpaceElem::Wayland(w) = e {
-                        w.toplevel().unwrap().send_pending_configure();
+                        self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
                     }
                 });
                 let _ = window.set_activated(true);
@@ -920,7 +920,7 @@ impl CompositorState {
                 }
                 self.output_topology.space.elements().for_each(|e| {
                     if let DerpSpaceElem::Wayland(w) = e {
-                        w.toplevel().unwrap().send_pending_configure();
+                        self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
                     }
                 });
             }
@@ -932,7 +932,7 @@ impl CompositorState {
                         self.output_topology.space.elements().for_each(|e| {
                             e.set_activate(false);
                             if let DerpSpaceElem::Wayland(w) = e {
-                                w.toplevel().unwrap().send_pending_configure();
+                                self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
                             }
                         });
                         self.output_topology
@@ -947,7 +947,7 @@ impl CompositorState {
                         }
                         self.output_topology.space.elements().for_each(|e| {
                             if let DerpSpaceElem::Wayland(w) = e {
-                                w.toplevel().unwrap().send_pending_configure();
+                                self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
                             }
                         });
                     }
@@ -1386,7 +1386,7 @@ impl CompositorState {
                     self.output_topology.space.elements().for_each(|e| {
                         e.set_activate(false);
                         if let DerpSpaceElem::Wayland(w) = e {
-                            w.toplevel().unwrap().send_pending_configure();
+                            self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
                         }
                     });
                     keyboard.set_focus(self, Option::<WlSurface>::None, serial);
@@ -1498,7 +1498,7 @@ impl CompositorState {
                         self.output_topology.space.elements().for_each(|e| {
                             e.set_activate(false);
                             if let DerpSpaceElem::Wayland(w) = e {
-                                w.toplevel().unwrap().send_pending_configure();
+                                self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
                             }
                         });
                         let _ = window.set_activated(true);
@@ -1517,7 +1517,7 @@ impl CompositorState {
                         }
                         self.output_topology.space.elements().for_each(|e| {
                             if let DerpSpaceElem::Wayland(w) = e {
-                                w.toplevel().unwrap().send_pending_configure();
+                                self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
                             }
                         });
                     }
@@ -1530,7 +1530,10 @@ impl CompositorState {
                                 self.output_topology.space.elements().for_each(|e| {
                                     e.set_activate(false);
                                     if let DerpSpaceElem::Wayland(w) = e {
-                                        w.toplevel().unwrap().send_pending_configure();
+                                        self.send_xdg_toplevel_configure(
+                                            &w.toplevel().unwrap(),
+                                            None,
+                                        );
                                     }
                                 });
                                 self.output_topology
@@ -1545,7 +1548,10 @@ impl CompositorState {
                                 }
                                 self.output_topology.space.elements().for_each(|e| {
                                     if let DerpSpaceElem::Wayland(w) = e {
-                                        w.toplevel().unwrap().send_pending_configure();
+                                        self.send_xdg_toplevel_configure(
+                                            &w.toplevel().unwrap(),
+                                            None,
+                                        );
                                     }
                                 });
                             }
@@ -1558,7 +1564,7 @@ impl CompositorState {
                     self.output_topology.space.elements().for_each(|e| {
                         e.set_activate(false);
                         if let DerpSpaceElem::Wayland(w) = e {
-                            w.toplevel().unwrap().send_pending_configure();
+                            self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
                         }
                     });
                     keyboard.set_focus(self, Option::<WlSurface>::None, serial);

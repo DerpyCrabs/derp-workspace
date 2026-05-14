@@ -238,6 +238,7 @@ impl CompositorState {
             (info.x, info.y),
             false,
         );
+        self.refresh_x11_surface_fractional_scale(&x11);
         if !self.shell_restore_tray_hidden_x11_window(window_id, &x11) {
             return false;
         }
@@ -270,6 +271,7 @@ impl CompositorState {
         let result =
             self.windows
                 .sync_registry_from_x11_surface(window, location, in_space, output_name)?;
+        self.refresh_x11_surface_fractional_scale(window);
         let info = &result.info;
         self.capture_refresh_window_source_cache(info.window_id);
         Some(result)
@@ -521,6 +523,7 @@ impl CompositorState {
             (rect.loc.x, rect.loc.y),
             raise,
         );
+        self.refresh_x11_surface_fractional_scale(window);
         self.emit_x11_window_updates(window, true, false);
         true
     }

@@ -104,6 +104,9 @@ impl XdgShellHandler for CompositorState {
             .snapshot_for_wl_surface(&wl0)
             .expect("just registered");
         self.capture_refresh_window_source_cache(reg.window_id);
+        if let Some(toplevel) = window.toplevel() {
+            self.prepare_xdg_toplevel_configure(&toplevel, None);
+        }
         let initial_client_rect = if map_at_output_origin {
             None
         } else {
@@ -191,7 +194,7 @@ impl XdgShellHandler for CompositorState {
                         )));
                     });
                 }
-                tl.send_pending_configure();
+                self.send_xdg_toplevel_configure(&tl, None);
             }
             tracing::warn!(
                 target: "derp_toplevel",

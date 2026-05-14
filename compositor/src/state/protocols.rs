@@ -671,22 +671,8 @@ impl KdeDecorationHandler for CompositorState {
 
 impl FractionalScaleHandler for CompositorState {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
-        let scale = if let Some(x11) = self.x11_window_containing_surface(&surface) {
-            self.xwayland_scale_for_space_element(&DerpSpaceElem::X11(x11))
-        } else {
-            self.wayland_window_containing_surface(&surface)
-                .map(|w| self.fractional_scale_for_space_element(&DerpSpaceElem::Wayland(w)))
-                .unwrap_or_else(|| {
-                    self.leftmost_output()
-                        .map(|o| o.current_scale().fractional_scale())
-                        .unwrap_or(1.0)
-                })
-        };
-        smithay::wayland::compositor::with_states(&surface, |states| {
-            smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
-                fs.set_preferred_scale(scale);
-            });
-        });
+        let scale = self.preferred_fractional_scale_for_surface(&surface);
+        Self::set_surface_fractional_preferred_scale(&surface, scale);
     }
 }
 

@@ -672,7 +672,8 @@ impl CompositorState {
         let presentation_state = PresentationState::new::<Self>(&dh, libc::CLOCK_MONOTONIC as u32);
         let content_type_state = ContentTypeState::new::<Self>(&dh);
         let tearing_control_state = TearingControlState::new::<Self>(&dh);
-        let xdg_shell_state = XdgShellState::new::<Self>(&dh);
+        let xdg_shell_state =
+            XdgShellState::new_with_capabilities::<Self>(&dh, Self::xdg_toplevel_wm_capabilities());
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
         let xdg_foreign_state = XdgForeignState::new::<Self>(&dh);
         dh.create_global::<Self, wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1, _>(1, ());
@@ -1044,6 +1045,7 @@ impl CompositorState {
             self.cleanup_disconnected_wayland_client(client_id);
         }
         self.cleanup_dead_native_client_processes();
+        self.cleanup_orphaned_wayland_space_elements();
     }
 
     pub(crate) fn cleanup_dead_native_client_processes(&mut self) {
@@ -1105,6 +1107,32 @@ impl CompositorState {
         {
             self.shell_emit_chrome_window_unmapped(removed.window_id, Some(removed));
             self.try_refocus_after_closed_window(info.window_id, keyboard_had_focus);
+        }
+    }
+
+    pub(crate) fn cleanup_orphaned_wayland_space_elements(&mut self) {
+        let orphaned_windows: Vec<_> = self
+            .output_topology
+            .space
+            .elements()
+            .filter_map(|elem| {
+                let DerpSpaceElem::Wayland(window) = elem else {
+                    return None;
+                };
+                let Some(toplevel) = window.toplevel() else {
+                    return Some(window.clone());
+                };
+                self.windows
+                    .window_registry
+                    .window_id_for_wl_surface(toplevel.wl_surface())
+                    .is_none()
+                    .then_some(window.clone())
+            })
+            .collect();
+        for window in orphaned_windows {
+            self.output_topology
+                .space
+                .unmap_elem(&DerpSpaceElem::Wayland(window));
         }
     }
 
@@ -1590,6 +1618,59 @@ impl CompositorState {
 
     pub(crate) fn xwayland_scale_for_space_element(&self, elem: &DerpSpaceElem) -> f64 {
         Self::xwayland_scale_for_fractional_output(self.fractional_scale_for_space_element(elem))
+    }
+
+    pub(crate) fn preferred_fractional_scale_for_surface(&self, surface: &WlSurface) -> f64 {
+        if let Some(x11) = self.x11_window_containing_surface(surface) {
+            return self.xwayland_scale_for_space_element(&DerpSpaceElem::X11(x11));
+        }
+        if let Some(window) = self.wayland_window_containing_surface(surface) {
+            return self.fractional_scale_for_space_element(&DerpSpaceElem::Wayland(window));
+        }
+        self.leftmost_output()
+            .map(|o| o.current_scale().fractional_scale())
+            .unwrap_or(1.0)
+    }
+
+    pub(crate) fn set_surface_fractional_preferred_scale(surface: &WlSurface, scale: f64) {
+        smithay::wayland::compositor::with_states(surface, |states| {
+            smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
+                fs.set_preferred_scale(scale);
+            });
+        });
+    }
+
+    pub(crate) fn refresh_wayland_window_fractional_scale(&self, window: &Window) {
+        let scale =
+            self.fractional_scale_for_space_element(&DerpSpaceElem::Wayland(window.clone()));
+        window.with_surfaces(|_, states| {
+            smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
+                fs.set_preferred_scale(scale);
+            });
+        });
+    }
+
+    pub(crate) fn refresh_x11_surface_fractional_scale(&self, x11: &X11Surface) {
+        let scale = self.xwayland_scale_for_space_element(&DerpSpaceElem::X11(x11.clone()));
+        if let Some(surface) = x11.wl_surface() {
+            with_surfaces_surface_tree(&surface, |_, states| {
+                smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
+                    fs.set_preferred_scale(scale);
+                });
+            });
+        }
+    }
+
+    pub(crate) fn refresh_window_fractional_scales(&self) {
+        let elems: Vec<DerpSpaceElem> = self.output_topology.space.elements().cloned().collect();
+        for elem in elems {
+            match elem {
+                DerpSpaceElem::Wayland(window) => {
+                    self.refresh_wayland_window_fractional_scale(&window)
+                }
+                DerpSpaceElem::X11(x11) => self.refresh_x11_surface_fractional_scale(&x11),
+            }
+        }
     }
 
     pub(crate) fn xwayland_client_scale_for_output_scale(output_scale: f64) -> f64 {
@@ -2109,7 +2190,7 @@ impl CompositorState {
             st.states.unset(xdg_toplevel::State::Maximized);
             st.size = Some(Size::from((width, height)));
         });
-        tl.send_pending_configure();
+        self.send_xdg_toplevel_configure(&tl, None);
         true
     }
 
@@ -2252,7 +2333,7 @@ impl CompositorState {
                         state.size = Some(Size::from((rect.size.w.max(1), rect.size.h.max(1))));
                     });
                 }
-                tl.send_pending_configure();
+                self.send_xdg_toplevel_configure(&tl, None);
             }
         }
         let (ready_to_map, title, app_id, retry_initial_resize) = {
@@ -2298,7 +2379,7 @@ impl CompositorState {
                         state.states.unset(xdg_toplevel::State::Maximized);
                         state.size = Some(Size::from((rect.size.w.max(1), rect.size.h.max(1))));
                     });
-                    tl.send_pending_configure();
+                    self.send_xdg_toplevel_configure(&tl, None);
                 }
             }
         }
@@ -2348,6 +2429,7 @@ impl CompositorState {
                 (map_x, map_y),
                 false,
             );
+            self.refresh_wayland_window_fractional_scale(&pending.window);
             if let Some(window_id) = self.windows.window_registry.window_id_for_wl_surface(&wl0) {
                 if self
                     .windows
@@ -2491,6 +2573,7 @@ impl CompositorState {
             (map_x, map_y),
             false,
         );
+        self.refresh_wayland_window_fractional_scale(&pending.window);
         if let Some(window_id) = self.windows.window_registry.window_id_for_wl_surface(&wl0) {
             let geo = pending.window.geometry();
             let width = pending
@@ -2683,6 +2766,7 @@ impl CompositorState {
                 false,
             );
         }
+        self.refresh_wayland_window_fractional_scale(window);
         self.capture_refresh_window_source_cache(window_id);
         let tiling_changed = self
             .windows
@@ -2819,6 +2903,89 @@ impl CompositorState {
         output.client_outputs(&client).next()
     }
 
+    pub(crate) fn xdg_toplevel_wm_capabilities() -> [xdg_toplevel::WmCapabilities; 4] {
+        [
+            xdg_toplevel::WmCapabilities::WindowMenu,
+            xdg_toplevel::WmCapabilities::Maximize,
+            xdg_toplevel::WmCapabilities::Fullscreen,
+            xdg_toplevel::WmCapabilities::Minimize,
+        ]
+    }
+
+    pub(crate) fn xdg_toplevel_bounds_output(&self, toplevel: &ToplevelSurface) -> Option<Output> {
+        let wl = toplevel.wl_surface();
+        self.windows
+            .window_registry
+            .snapshot_for_wl_surface(wl)
+            .and_then(|info| {
+                (!info.output_name.is_empty())
+                    .then(|| {
+                        self.output_topology
+                            .space
+                            .outputs()
+                            .find(|output| output.name() == info.output_name)
+                            .cloned()
+                    })
+                    .flatten()
+            })
+            .or_else(|| {
+                self.output_topology.space.elements().find_map(|elem| {
+                    let DerpSpaceElem::Wayland(window) = elem else {
+                        return None;
+                    };
+                    let Some(candidate) = window.toplevel() else {
+                        return None;
+                    };
+                    if candidate.wl_surface() != wl {
+                        return None;
+                    }
+                    self.toplevel_rect_snapshot(window)
+                        .and_then(|(x, y, w, h)| self.output_for_global_xywh(x, y, w, h))
+                })
+            })
+            .or_else(|| {
+                let parent = toplevel.parent();
+                self.new_toplevel_placement_output(parent.as_ref())
+            })
+            .or_else(|| self.leftmost_output())
+    }
+
+    pub(crate) fn prepare_xdg_toplevel_configure(
+        &self,
+        toplevel: &ToplevelSurface,
+        output_hint: Option<&Output>,
+    ) {
+        let wl = toplevel.wl_surface();
+        let window_id = self.windows.window_registry.window_id_for_wl_surface(wl);
+        let output = output_hint
+            .cloned()
+            .or_else(|| self.xdg_toplevel_bounds_output(toplevel));
+        let bounds = output.as_ref().and_then(|output| {
+            window_id
+                .and_then(|window_id| {
+                    self.shell_maximize_work_area_global_for_window(output, window_id)
+                })
+                .or_else(|| self.shell_maximize_work_area_global_for_output(output))
+        });
+        toplevel.with_pending_state(|state| {
+            if let Some(bounds) = bounds {
+                state.bounds = Some(Size::from((bounds.size.w.max(1), bounds.size.h.max(1))));
+            }
+            state
+                .capabilities
+                .replace(Self::xdg_toplevel_wm_capabilities());
+        });
+    }
+
+    pub(crate) fn send_xdg_toplevel_configure(
+        &self,
+        toplevel: &ToplevelSurface,
+        output_hint: Option<&Output>,
+    ) {
+        self.prepare_xdg_toplevel_configure(toplevel, output_hint);
+        toplevel.send_pending_configure();
+    }
+
     pub(crate) fn toplevel_rect_snapshot(&self, window: &Window) -> Option<(i32, i32, i32, i32)> {
         self.windows
             .toplevel_rect_snapshot(&self.output_topology.space, window)
@@ -2878,7 +3045,7 @@ impl CompositorState {
         let Some(window_id) = self.windows.window_registry.window_id_for_wl_surface(wl) else {
             return false;
         };
-        let (geo, output_name) = {
+        let (geo, output) = {
             let o = self
                 .toplevel_rect_snapshot(window)
                 .and_then(|(x, y, w, h)| self.output_for_global_xywh(x, y, w, h))
@@ -2889,8 +3056,9 @@ impl CompositorState {
             let Some(g) = self.shell_maximize_work_area_global_for_window(out, window_id) else {
                 return false;
             };
-            (g, out.name().to_string())
+            (g, out.clone())
         };
+        let output_name = output.name().to_string();
         self.windows
             .pending_gnome_initial_toplevels
             .remove(&window_id);
@@ -2915,7 +3083,8 @@ impl CompositorState {
         self.output_topology
             .space
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
-        tl.send_pending_configure();
+        self.refresh_wayland_window_fractional_scale(window);
+        self.send_xdg_toplevel_configure(&tl, Some(&output));
         self.shell_emit_requested_native_geometry(
             window_id,
             map_x,
@@ -2980,7 +3149,8 @@ impl CompositorState {
         self.output_topology
             .space
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
-        tl.send_pending_configure();
+        self.refresh_wayland_window_fractional_scale(window);
+        self.send_xdg_toplevel_configure(&tl, Some(&sm_out));
         self.shell_emit_requested_native_geometry(
             window_id,
             map_x,
@@ -3023,7 +3193,8 @@ impl CompositorState {
         self.output_topology
             .space
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
-        tl.send_pending_configure();
+        self.refresh_wayland_window_fractional_scale(window);
+        self.send_xdg_toplevel_configure(&tl, None);
         let output_name = self
             .output_for_window_position(x, y, w, h)
             .unwrap_or_default();
@@ -3062,7 +3233,8 @@ impl CompositorState {
             (x, y),
             true,
         );
-        tl.send_pending_configure();
+        self.refresh_wayland_window_fractional_scale(window);
+        self.send_xdg_toplevel_configure(&tl, None);
         let output_name = self
             .output_for_window_position(
                 x,
@@ -3119,7 +3291,8 @@ impl CompositorState {
                 (x, y),
                 true,
             );
-            tl.send_pending_configure();
+            self.refresh_wayland_window_fractional_scale(window);
+            self.send_xdg_toplevel_configure(&tl, None);
             let output_name = self
                 .output_for_window_position(
                     x,

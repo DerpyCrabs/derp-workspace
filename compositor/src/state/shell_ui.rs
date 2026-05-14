@@ -437,7 +437,7 @@ impl CompositorState {
             e.set_activate(false);
             if let DerpSpaceElem::Wayland(w) = e {
                 if let Some(toplevel) = w.toplevel() {
-                    toplevel.send_pending_configure();
+                    self.send_xdg_toplevel_configure(&toplevel, None);
                 }
             }
         });

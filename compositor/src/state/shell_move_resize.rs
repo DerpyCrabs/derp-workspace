@@ -582,6 +582,7 @@ impl CompositorState {
                 rect.loc,
                 true,
             );
+            self.refresh_wayland_window_fractional_scale(&window);
             let output_name = self
                 .output_for_window_position(
                     rect.loc.x,
@@ -691,7 +692,7 @@ impl CompositorState {
             self.output_topology.space.elements().for_each(|e| {
                 if let DerpSpaceElem::Wayland(w) = e {
                     if let Some(toplevel) = w.toplevel() {
-                        toplevel.send_pending_configure();
+                        self.send_xdg_toplevel_configure(&toplevel, None);
                     }
                 }
             });
@@ -720,7 +721,7 @@ impl CompositorState {
             }
             self.output_topology.space.elements().for_each(|e| {
                 if let DerpSpaceElem::Wayland(w) = e {
-                    w.toplevel().unwrap().send_pending_configure();
+                    self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
                 }
             });
 
@@ -783,6 +784,7 @@ impl CompositorState {
                 after,
                 true,
             );
+            self.refresh_wayland_window_fractional_scale(&window);
             self.input_routing.shell_move_pending_delta = (0, 0);
             self.notify_geometry_for_window(&window, true);
             self.shell_send_interaction_state();
@@ -828,6 +830,7 @@ impl CompositorState {
         self.output_topology
             .space
             .map_element(DerpSpaceElem::X11(x11.clone()), after, true);
+        self.refresh_x11_surface_fractional_scale(&x11);
         self.input_routing.shell_move_pending_delta = (0, 0);
         self.emit_x11_window_updates(&x11, true, false);
         self.shell_send_interaction_state();
@@ -1141,7 +1144,7 @@ impl CompositorState {
             tl.with_pending_state(|state| {
                 state.states.set(xdg_toplevel::State::Resizing);
             });
-            tl.send_pending_configure();
+            self.send_xdg_toplevel_configure(&tl, None);
 
             self.input_routing
                 .shell_resize_begin_state(window_id, edges, initial_rect);
@@ -1303,7 +1306,7 @@ impl CompositorState {
                 state.states.set(xdg_toplevel::State::Resizing);
                 state.size = Some(last_size);
             });
-            tl.send_pending_configure();
+            self.send_xdg_toplevel_configure(&tl, None);
             self.shell_emit_interactive_resize_geometry(
                 wid,
                 initial_rect,
@@ -1392,7 +1395,7 @@ impl CompositorState {
                 state.states.unset(xdg_toplevel::State::Resizing);
                 state.size = Some(last_size);
             });
-            tl.send_pending_configure();
+            self.send_xdg_toplevel_configure(&tl, None);
             resize_tracking_set_waiting_last_commit(wl, edges, initial_rect);
             self.shell_emit_interactive_resize_geometry(
                 window_id,

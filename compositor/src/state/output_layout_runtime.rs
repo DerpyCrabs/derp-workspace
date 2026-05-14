@@ -28,6 +28,7 @@ impl CompositorState {
             return;
         }
         self.apply_xwayland_client_scale();
+        self.refresh_window_fractional_scales();
         self.send_shell_output_layout();
         if !self.output_topology.display_config_save_suppressed {
             self.display_config_request_save();
@@ -65,6 +66,7 @@ impl CompositorState {
                         (nx, ny),
                         true,
                     );
+                    self.refresh_wayland_window_fractional_scale(&w);
                     self.notify_geometry_for_window(&w, true);
                 }
                 DerpSpaceElem::X11(x) => {
@@ -77,6 +79,7 @@ impl CompositorState {
                         (nx, ny),
                         false,
                     );
+                    self.refresh_x11_surface_fractional_scale(&x);
                 }
             }
         }
@@ -217,6 +220,7 @@ impl CompositorState {
                         (nx, ny),
                         true,
                     );
+                    self.refresh_wayland_window_fractional_scale(&w);
                     self.notify_geometry_for_window(&w, true);
                 }
                 DerpSpaceElem::X11(x) => {
@@ -253,6 +257,7 @@ impl CompositorState {
                         (nx, ny),
                         false,
                     );
+                    self.refresh_x11_surface_fractional_scale(&x);
                 }
             }
         }
@@ -320,7 +325,8 @@ impl CompositorState {
         self.output_topology
             .space
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
-        tl.send_pending_configure();
+        self.refresh_wayland_window_fractional_scale(window);
+        self.send_xdg_toplevel_configure(&tl, Some(target));
         let tn = target.name().to_string();
         self.shell_emit_requested_native_geometry(
             window_id, map_x, map_y, content_w, content_h, tn, false, false,
@@ -370,6 +376,7 @@ impl CompositorState {
         self.output_topology
             .space
             .map_element(DerpSpaceElem::X11(x.clone()), (nx, ny), false);
+        self.refresh_x11_surface_fractional_scale(x);
         self.core.loop_signal.wakeup();
     }
 
@@ -661,6 +668,7 @@ impl CompositorState {
             "shell_after_drm_topology_changed enter"
         );
         self.send_shell_output_layout();
+        self.refresh_window_fractional_scales();
         self.shell_seed_initial_pointer_position();
         self.shell_reply_window_list();
         self.shell_nudge_cef_repaint();
@@ -691,6 +699,7 @@ impl CompositorState {
         self.shift_mapped_toplevels_for_output_moves(&before_outputs);
         self.resync_wayland_window_registry_from_space();
         self.workspace_apply_auto_layout_for_all_outputs();
+        self.refresh_window_fractional_scales();
         self.recompute_shell_canvas_from_outputs();
         self.send_shell_output_layout();
         self.display_config_request_save();

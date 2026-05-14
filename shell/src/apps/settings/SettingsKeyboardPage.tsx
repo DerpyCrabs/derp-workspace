@@ -392,7 +392,7 @@ export function SettingsKeyboardPage(props: {
           </div>
         </div>
         <div class="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,10rem)_minmax(0,1fr)]">
-          <label class="space-y-1 text-xs text-(--shell-text-muted)">
+          <div class="space-y-1 text-xs text-(--shell-text-muted)">
             <span>Enabled</span>
             <Select
               options={ENABLED_OPTIONS}
@@ -404,8 +404,8 @@ export function SettingsKeyboardPage(props: {
               triggerAttrs={{ 'data-settings-osk-enabled': '' }}
               optionAttrs={(value) => ({ 'data-settings-osk-enabled-option': String(value) })}
             />
-          </label>
-          <label class="space-y-1 text-xs text-(--shell-text-muted)">
+          </div>
+          <div class="space-y-1 text-xs text-(--shell-text-muted)">
             <span>Provider</span>
             <Select
               options={OSK_PROVIDER_OPTIONS}
@@ -417,7 +417,7 @@ export function SettingsKeyboardPage(props: {
               triggerAttrs={{ 'data-settings-osk-provider': '' }}
               optionAttrs={(value) => ({ 'data-settings-osk-provider-option': String(value) })}
             />
-          </label>
+          </div>
         </div>
         <div class="mt-3 flex flex-wrap items-center gap-2">
           <button
@@ -481,7 +481,7 @@ export function SettingsKeyboardPage(props: {
                       onInput={(event) => setHotkeys((current) => updateHotkeyBinding(current, index(), { ...binding, chord: event.currentTarget.value }))}
                     />
                   </label>
-                  <label class="space-y-1 text-xs text-(--shell-text-muted)">
+                  <div class="space-y-1 text-xs text-(--shell-text-muted)">
                     <span>Enabled</span>
                     <Select
                       options={ENABLED_OPTIONS}
@@ -493,8 +493,8 @@ export function SettingsKeyboardPage(props: {
                       triggerAttrs={{ 'data-settings-hotkey-enabled': binding.id }}
                       optionAttrs={(value) => ({ 'data-settings-hotkey-enabled-option': String(value) })}
                     />
-                  </label>
-                  <label class="space-y-1 text-xs text-(--shell-text-muted)">
+                  </div>
+                  <div class="space-y-1 text-xs text-(--shell-text-muted)">
                     <span>Action</span>
                     <Select
                       options={ACTION_OPTIONS}
@@ -506,7 +506,7 @@ export function SettingsKeyboardPage(props: {
                       triggerAttrs={{ 'data-settings-hotkey-action': binding.id }}
                       optionAttrs={(value) => ({ 'data-settings-hotkey-action-option': String(value) })}
                     />
-                  </label>
+                  </div>
                   <button
                     type="button"
                     class="self-end rounded-md border border-(--shell-border) bg-(--shell-control-muted-bg) px-2 py-1.5 text-xs text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
@@ -516,7 +516,7 @@ export function SettingsKeyboardPage(props: {
                   </button>
                 </div>
                 <Show when={binding.action === 'builtin'}>
-                  <label class="mt-2 block space-y-1 text-xs text-(--shell-text-muted)">
+                  <div class="mt-2 block space-y-1 text-xs text-(--shell-text-muted)">
                     <span>Built-in command</span>
                     <Select
                       options={BUILTIN_HOTKEY_ACTIONS.map((action) => action.value)}
@@ -529,11 +529,11 @@ export function SettingsKeyboardPage(props: {
                       triggerAttrs={{ 'data-settings-hotkey-builtin': binding.id }}
                       optionAttrs={(value) => ({ 'data-settings-hotkey-builtin-option': String(value) })}
                     />
-                  </label>
+                  </div>
                 </Show>
                 <Show when={binding.action === 'launch'}>
                   <div class="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                    <label class="min-w-0 space-y-1 text-xs text-(--shell-text-muted)">
+                    <div class="min-w-0 space-y-1 text-xs text-(--shell-text-muted)">
                       <span>Application</span>
                       <Select
                         options={['', ...props.desktopApps.items().map((app) => app.desktop_id)]}
@@ -558,7 +558,7 @@ export function SettingsKeyboardPage(props: {
                         triggerAttrs={{ 'data-settings-hotkey-app': binding.id }}
                         optionAttrs={(value) => ({ 'data-settings-hotkey-app-option': String(value) })}
                       />
-                    </label>
+                    </div>
                     <label class="min-w-0 space-y-1 text-xs text-(--shell-text-muted)">
                       <span>Command</span>
                       <input

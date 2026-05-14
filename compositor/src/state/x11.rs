@@ -108,6 +108,7 @@ impl XwmHandler for CompositorState {
         self.output_topology
             .space
             .map_element(elem, (geo.loc.x, geo.loc.y), false);
+        self.refresh_x11_surface_fractional_scale(&window);
         if let Some(surface) = window.wl_surface() {
             if let Some(info) = self.ensure_x11_window_registered(&surface, &window) {
                 let restored = self.shell_restore_tray_hidden_x11_window(info.window_id, &window);
@@ -162,6 +163,7 @@ impl XwmHandler for CompositorState {
             (geo.loc.x, geo.loc.y),
             false,
         );
+        self.refresh_x11_surface_fractional_scale(&window);
         self.core.loop_signal.wakeup();
     }
 
@@ -264,6 +266,7 @@ impl XwmHandler for CompositorState {
             self.output_topology
                 .space
                 .map_element(elem, (geometry.loc.x, geometry.loc.y), false);
+            self.refresh_x11_surface_fractional_scale(&window);
         }
         self.emit_x11_window_updates(&window, true, false);
     }

@@ -169,6 +169,13 @@ type KeyboardStatus = {
   last_utf8: string;
 };
 
+type FractionalScaleStatus = {
+  count: number;
+  last: number;
+  last_scale: number;
+  values: number[];
+};
+
 type TouchStatus = {
   device_ready: boolean;
   down: number;
@@ -192,6 +199,17 @@ type LayerPanelStatus = {
   touch_motion: number;
   touch_up: number;
   last_position: [number, number];
+};
+
+type XdgConfigureStatus = {
+  configure_count: number;
+  suggested_bounds: [number, number] | null;
+  capabilities: {
+    window_menu: boolean;
+    maximize: boolean;
+    fullscreen: boolean;
+    minimize: boolean;
+  };
 };
 
 async function readStatusJson<T>(filePath: string): Promise<T | null> {
@@ -515,6 +533,30 @@ async function derpctl(args: string[]): Promise<void> {
   );
 }
 
+async function setTestUiScale(base: string, scale: number) {
+  await postJson(base, "/test/output/ui_scale", { scale });
+  await waitFor(
+    `wait for UI scale ${scale}`,
+    async () => {
+      const compositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      return compositor.outputs.every(
+        (output) => Math.abs((output.scale ?? 1) - scale) < 0.001,
+      )
+        ? compositor
+        : null;
+    },
+    5000,
+    100,
+  );
+}
+
+function fractionalScaleWire(scale: number) {
+  return Math.round(scale * 120);
+}
+
 async function dominantInteriorColor(
   base: string,
   window: { x: number; y: number; width: number; height: number },
@@ -798,6 +840,160 @@ export default defineGroup(import.meta.url, ({ test }) => {
     );
     assert(output.includes("xdg_toplevel_drag_manager_v1 1"), output);
     assert(output.includes("\nexit:0\n"), output);
+  });
+
+  test("wp-fractional-scale updates after monitor move layout and UI scale changes", async ({
+    base,
+    state,
+  }) => {
+    await syncTest(base);
+    const initialCompositor = await getJson<CompositorSnapshot>(
+      base,
+      "/test/state/compositor",
+    );
+    if (initialCompositor.outputs.length < 2) {
+      throw new SkipError("requires at least two outputs");
+    }
+    const originalScale = [1, 1.5, 2].find(
+      (scale) =>
+        Math.abs(scale - (initialCompositor.outputs[0]?.scale ?? 1.5)) < 0.001,
+    ) ?? 1.5;
+    const originalScreens = initialCompositor.outputs.map((output) => ({
+      name: output.name,
+      x: output.x,
+      y: output.y,
+      transform: 0,
+    }));
+    const firstScale = Math.abs(originalScale - 1.5) < 0.001 ? 2 : 1.5;
+    const secondScale = firstScale === 2 ? 1.5 : 2;
+    const title = `Derp Fractional Scale ${Date.now()}`;
+    const appId = "derp.e2e.fractional-scale";
+    const statusPath = artifactPath(`fractional-scale-status-${Date.now()}.json`);
+    const command = [
+      shellQuote(nativeBin()),
+      "--title",
+      shellQuote(title),
+      "--app-id",
+      shellQuote(appId),
+      "--token",
+      "fractional-scale",
+      "--width",
+      "420",
+      "--height",
+      "260",
+      "--fractional-scale-status-json",
+      shellQuote(statusPath),
+    ].join(" ");
+    let windowId: number | null = null;
+    try {
+      await spawnCommand(base, command);
+      const spawned = await waitForSpawnedWindow(base, state.knownWindowIds, {
+        title,
+        appId,
+        command,
+      });
+      windowId = spawned.window.window_id;
+      state.spawnedNativeWindowIds.add(windowId);
+      const initialStatus = await waitForStatusJson<FractionalScaleStatus>(
+        statusPath,
+        "wait for initial fractional scale",
+        (status) => status.count >= 1 && status.last > 0,
+        5000,
+      );
+      await setTestUiScale(base, firstScale);
+      const firstScaled = await waitForStatusJson<FractionalScaleStatus>(
+        statusPath,
+        `wait for fractional scale ${firstScale}`,
+        (status) => status.values.includes(fractionalScaleWire(firstScale)),
+        5000,
+      );
+      const afterScaleCompositor = await getJson<CompositorSnapshot>(
+        base,
+        "/test/state/compositor",
+      );
+      const currentWindow = compositorWindowById(afterScaleCompositor, windowId);
+      assert(currentWindow, "missing fractional-scale window after UI scale");
+      const outputs = [...afterScaleCompositor.outputs].sort(
+        (a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name),
+      );
+      const target =
+        outputs.find((output) => output.name !== currentWindow.output_name) ??
+        outputs[0];
+      assert(target, "missing target output for fractional-scale move");
+      await derpctl([
+        "window",
+        "move",
+        String(windowId),
+        "--x",
+        String(target.x + 96),
+        "--y",
+        String(target.y + 96),
+        "--width",
+        "420",
+        "--height",
+        "260",
+      ]);
+      const moved = await waitFor(
+        "wait for fractional-scale monitor move",
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = compositorWindowById(compositor, windowId!);
+          return window?.output_name === target.name ? { compositor, window } : null;
+        },
+        5000,
+        40,
+      );
+      const reversed = [...moved.compositor.outputs]
+        .sort((a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name))
+        .reverse();
+      let x = 0;
+      await postJson(base, "/test/output/layout", {
+        screens: reversed.map((output) => {
+          const screen = { name: output.name, x, y: 0, transform: 0 };
+          x += output.width;
+          return screen;
+        }),
+      });
+      await waitFor(
+        "wait for fractional-scale output layout reorder",
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const ordered = [...compositor.outputs].sort(
+            (a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name),
+          );
+          return ordered[0]?.name === reversed[0]?.name ? compositor : null;
+        },
+        5000,
+        100,
+      );
+      await setTestUiScale(base, secondScale);
+      const secondScaled = await waitForStatusJson<FractionalScaleStatus>(
+        statusPath,
+        `wait for fractional scale ${secondScale}`,
+        (status) => status.values.includes(fractionalScaleWire(secondScale)),
+        5000,
+      );
+      await writeJsonArtifact("wayland-fractional-scale-refresh.json", {
+        initialStatus,
+        firstScaled,
+        secondScaled,
+        target,
+        moved: moved.window,
+      });
+    } finally {
+      await setTestUiScale(base, originalScale);
+      await postJson(base, "/test/output/layout", { screens: originalScreens });
+      if (windowId !== null) {
+        await closeWindow(base, windowId);
+        await waitForWindowGone(base, windowId, 5000);
+      }
+    }
   });
 
   test("ext-image-copy-capture-v1 handles cursor options and cursor sessions", async ({
@@ -2611,6 +2807,87 @@ export default defineGroup(import.meta.url, ({ test }) => {
       }
       await closeWindow(base, launcherId);
       await waitForWindowGone(base, launcherId, 5000);
+    }
+  });
+
+  test("xdg toplevel configures advertise wm capabilities and work-area bounds", async ({
+    base,
+    state,
+  }) => {
+    const stamp = Date.now();
+    const statusPath = path.join(artifactDir(), `xdg-configure-status-${stamp}.json`);
+    const native = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp XDG Configure Probe ${stamp}`,
+      appId: "derp.e2e.xdg.configure",
+      token: `xdg-configure-probe-${stamp}`,
+      strip: "purple",
+      width: 420,
+      height: 260,
+      resizable: true,
+      xdgConfigureStatusJson: statusPath,
+    });
+    state.spawnedNativeWindowIds.add(native.window.window_id);
+    try {
+      const initial = await waitForStatusJson<XdgConfigureStatus>(
+        statusPath,
+        "wait for xdg toplevel configure status",
+        (status) =>
+          status.configure_count > 0 &&
+          status.suggested_bounds !== null &&
+          status.capabilities.window_menu &&
+          status.capabilities.maximize &&
+          status.capabilities.fullscreen &&
+          status.capabilities.minimize,
+      );
+      assert(
+        initial.suggested_bounds !== null &&
+          initial.suggested_bounds[0] > 0 &&
+          initial.suggested_bounds[1] > 0,
+        "expected positive xdg toplevel configure bounds",
+      );
+      await derpctl([
+        "window",
+        "maximize",
+        String(native.window.window_id),
+        "--enabled",
+        "true",
+      ]);
+      const maximized = await waitFor(
+        "wait for maximized xdg configure bounds",
+        async () => {
+          const status = await readStatusJson<XdgConfigureStatus>(statusPath);
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = compositorWindowById(
+            compositor,
+            native.window.window_id,
+          );
+          if (
+            !status?.suggested_bounds ||
+            !window?.maximized ||
+            status.configure_count <= initial.configure_count
+          ) {
+            return null;
+          }
+          return { status, window };
+        },
+        5000,
+        100,
+      );
+      assert(
+        maximized.status.suggested_bounds?.[0] === maximized.window.width &&
+          maximized.status.suggested_bounds?.[1] === maximized.window.height,
+        `expected configure bounds ${maximized.status.suggested_bounds?.join("x")} to match maximized work area ${maximized.window.width}x${maximized.window.height}`,
+      );
+      await writeJsonArtifact(
+        "wayland-protocols-xdg-configure-capabilities-bounds.json",
+        maximized,
+      );
+    } finally {
+      await closeWindow(base, native.window.window_id);
+      await waitForWindowGone(base, native.window.window_id, 5000);
     }
   });
 

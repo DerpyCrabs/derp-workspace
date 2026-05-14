@@ -377,10 +377,6 @@ impl CompositorState {
         }
     }
 
-    pub(crate) fn point_in_osk_layer_surface(&self, pos: Point<f64, Logical>) -> bool {
-        self.osk_layer_global_for_point(pos).is_some()
-    }
-
     fn osk_layer_global_for_point(
         &self,
         pos: Point<f64, Logical>,

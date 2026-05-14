@@ -380,6 +380,12 @@ impl CompositorState {
                     });
                 self.capture_refresh_window_source_cache(window_id);
                 let tl = window.toplevel().unwrap();
+                let output_hint = self
+                    .output_topology
+                    .space
+                    .outputs()
+                    .find(|output| output.name() == target_output_name)
+                    .cloned();
                 tl.with_pending_state(|state| {
                     state.states.unset(xdg_toplevel::State::Fullscreen);
                     state.fullscreen_output = None;
@@ -390,7 +396,7 @@ impl CompositorState {
                     }
                     state.size = Some(smithay::utils::Size::from((w.max(1), h.max(1))));
                 });
-                tl.send_pending_configure();
+                self.send_xdg_toplevel_configure(&tl, output_hint.as_ref());
                 self.workspace_relayout_auto_layout_outputs_after_geometry(
                     previous_output_name,
                     target_output_name,
@@ -557,6 +563,12 @@ impl CompositorState {
             let (map_x, map_y, content_w, content_h) = (target_x, target_y, target_w, target_h);
 
             let tl = window.toplevel().unwrap();
+            let output_hint = self
+                .output_topology
+                .space
+                .outputs()
+                .find(|output| output.name() == target_output_name)
+                .cloned();
             tl.with_pending_state(|state| {
                 state.states.unset(xdg_toplevel::State::Fullscreen);
                 state.fullscreen_output = None;
@@ -567,12 +579,13 @@ impl CompositorState {
                 }
                 state.size = Some(smithay::utils::Size::from((content_w, content_h)));
             });
-            tl.send_pending_configure();
+            self.send_xdg_toplevel_configure(&tl, output_hint.as_ref());
             self.output_topology.space.map_element(
                 DerpSpaceElem::Wayland(window.clone()),
                 (map_x, map_y),
                 true,
             );
+            self.refresh_wayland_window_fractional_scale(&window);
             self.shell_emit_requested_native_geometry(
                 window_id,
                 map_x,
@@ -1318,7 +1331,7 @@ impl CompositorState {
         self.output_topology.space.elements().for_each(|e| {
             e.set_activate(false);
             if let DerpSpaceElem::Wayland(w) = e {
-                w.toplevel().unwrap().send_pending_configure();
+                self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
             }
         });
         if let Some(window) = self.find_window_by_surface_id(sid) {
@@ -1344,7 +1357,7 @@ impl CompositorState {
             self.raise_shell_status_indicators();
             self.output_topology.space.elements().for_each(|e| {
                 if let DerpSpaceElem::Wayland(w) = e {
-                    w.toplevel().unwrap().send_pending_configure();
+                    self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
                 }
             });
             return;
@@ -1424,7 +1437,7 @@ impl CompositorState {
         }
         if let Some(window) = self.find_window_by_surface_id(sid) {
             let _ = window.set_activated(false);
-            window.toplevel().unwrap().send_pending_configure();
+            self.send_xdg_toplevel_configure(&window.toplevel().unwrap(), None);
             let _ = self
                 .windows
                 .window_registry
@@ -1514,7 +1527,7 @@ impl CompositorState {
                 self.output_topology.space.elements().for_each(|e| {
                     e.set_activate(false);
                     if let DerpSpaceElem::Wayland(w) = e {
-                        w.toplevel().unwrap().send_pending_configure();
+                        self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
                     }
                 });
 
@@ -1523,6 +1536,7 @@ impl CompositorState {
                     (info.x, info.y),
                     true,
                 );
+                self.refresh_wayland_window_fractional_scale(&window);
                 let _ = self
                     .windows
                     .window_registry
@@ -1541,7 +1555,7 @@ impl CompositorState {
                 );
                 self.output_topology.space.elements().for_each(|e| {
                     if let DerpSpaceElem::Wayland(w) = e {
-                        w.toplevel().unwrap().send_pending_configure();
+                        self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
                     }
                 });
 
@@ -1563,7 +1577,7 @@ impl CompositorState {
                 self.output_topology.space.elements().for_each(|e| {
                     e.set_activate(false);
                     if let DerpSpaceElem::Wayland(w) = e {
-                        w.toplevel().unwrap().send_pending_configure();
+                        self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
                     }
                 });
                 self.windows.shell_pending_native_focus_window_id = Some(window_id);
@@ -1583,6 +1597,7 @@ impl CompositorState {
                     (rect.loc.x, rect.loc.y),
                     false,
                 );
+                self.refresh_x11_surface_fractional_scale(&x11);
                 self.apply_x11_window_bounds(
                     window_id,
                     &x11,

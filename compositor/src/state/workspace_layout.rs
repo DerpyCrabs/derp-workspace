@@ -656,18 +656,25 @@ impl CompositorState {
             };
             if let Some(window) = self.find_window_by_surface_id(surface_id) {
                 let tl = window.toplevel().unwrap();
+                let output_hint = self
+                    .output_topology
+                    .space
+                    .outputs()
+                    .find(|output| output.name() == output_name)
+                    .cloned();
                 tl.with_pending_state(|state| {
                     state.states.unset(xdg_toplevel::State::Fullscreen);
                     state.fullscreen_output = None;
                     state.states.unset(xdg_toplevel::State::Maximized);
                     state.size = Some(Size::from((target_w, target_h)));
                 });
-                tl.send_pending_configure();
+                self.send_xdg_toplevel_configure(&tl, output_hint.as_ref());
                 self.output_topology.space.map_element(
                     DerpSpaceElem::Wayland(window.clone()),
                     (target_x, target_y),
                     false,
                 );
+                self.refresh_wayland_window_fractional_scale(&window);
                 self.shell_emit_requested_native_geometry(
                     window_id,
                     target_x,
@@ -798,12 +805,13 @@ impl CompositorState {
                     state.states.unset(xdg_toplevel::State::Maximized);
                     state.size = Some(Size::from((target_w, target_h)));
                 });
-                tl.send_pending_configure();
+                self.send_xdg_toplevel_configure(&tl, Some(&output));
                 self.output_topology.space.map_element(
                     DerpSpaceElem::Wayland(window.clone()),
                     (target_x, target_y),
                     false,
                 );
+                self.refresh_wayland_window_fractional_scale(&window);
                 self.shell_emit_requested_native_geometry(
                     window_id,
                     target_x,

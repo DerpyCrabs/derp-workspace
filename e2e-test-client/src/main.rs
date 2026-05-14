@@ -1,4 +1,5 @@
 use clap::Parser;
+use smithay_client_toolkit::reexports::csd_frame::WindowManagerCapabilities;
 use smithay_client_toolkit::{
     activation::{ActivationHandler, ActivationState, RequestData},
     compositor::{CompositorHandler, CompositorState},
@@ -76,6 +77,10 @@ use wayland_protocols::wp::{
         wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
     },
     fifo::v1::client::{wp_fifo_manager_v1::WpFifoManagerV1, wp_fifo_v1::WpFifoV1},
+    fractional_scale::v1::client::{
+        wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+        wp_fractional_scale_v1::{self, WpFractionalScaleV1},
+    },
     linux_dmabuf::zv1::client::{
         zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
     },
@@ -365,6 +370,10 @@ struct Args {
     virtual_keyboard_sequence: String,
     #[arg(long)]
     keyboard_status_json: Option<String>,
+    #[arg(long)]
+    fractional_scale_status_json: Option<String>,
+    #[arg(long)]
+    xdg_configure_status_json: Option<String>,
 }
 
 fn main() {
@@ -446,6 +455,15 @@ fn main() {
             globals
                 .bind::<WpCursorShapeManagerV1, _, _>(&qh, 1..=2, ())
                 .expect("bind wp_cursor_shape_manager_v1"),
+        )
+    } else {
+        None
+    };
+    let fractional_scale_manager = if args.fractional_scale_status_json.is_some() {
+        Some(
+            globals
+                .bind::<WpFractionalScaleManagerV1, _, _>(&qh, 1..=1, ())
+                .expect("bind wp_fractional_scale_manager_v1"),
         )
     } else {
         None
@@ -657,6 +675,9 @@ fn main() {
     let fifo = fifo_manager
         .as_ref()
         .map(|manager| manager.get_fifo(window.wl_surface(), &qh, ()));
+    let fractional_scale = fractional_scale_manager
+        .as_ref()
+        .map(|manager| manager.get_fractional_scale(window.wl_surface(), &qh, ()));
     let content_type = content_type_manager.as_ref().map(|manager| {
         let content_type = manager.get_surface_content_type(window.wl_surface(), &qh, ());
         content_type.set_content_type(content_type_arg.protocol());
@@ -713,6 +734,10 @@ fn main() {
         solid_client: args.solid_client,
         pointer_constraint_mode,
         fifo,
+        _fractional_scale_manager: fractional_scale_manager,
+        _fractional_scale: fractional_scale,
+        fractional_scale_status_json: args.fractional_scale_status_json,
+        fractional_scale_values: Vec::new(),
         presentation,
         _content_type: content_type,
         _tearing_control: tearing_control,
@@ -795,11 +820,17 @@ fn main() {
         input_method_serial: 0,
         keyboard_status_json: args.keyboard_status_json,
         keyboard_status: KeyboardStatus::default(),
+        xdg_configure_status_json: args.xdg_configure_status_json,
+        xdg_configure_count: 0,
+        xdg_configure_bounds: None,
+        xdg_configure_capabilities: WindowManagerCapabilities::empty(),
     };
     state.write_touch_status();
     state.write_text_input_status();
     state.write_input_method_status();
     state.write_keyboard_status();
+    state.write_fractional_scale_status();
+    state.write_xdg_configure_status();
     if state._xdg_toplevel_drag_data_device_manager.is_some()
         && state._xdg_toplevel_drag_data_device.is_none()
     {
@@ -1182,6 +1213,10 @@ struct TestClient {
     solid_client: bool,
     pointer_constraint_mode: PointerConstraintMode,
     fifo: Option<WpFifoV1>,
+    _fractional_scale_manager: Option<WpFractionalScaleManagerV1>,
+    _fractional_scale: Option<WpFractionalScaleV1>,
+    fractional_scale_status_json: Option<String>,
+    fractional_scale_values: Vec<u32>,
     presentation: Option<WpPresentation>,
     _content_type: Option<wp_content_type_v1::WpContentTypeV1>,
     _tearing_control: Option<wp_tearing_control_v1::WpTearingControlV1>,
@@ -1264,6 +1299,10 @@ struct TestClient {
     input_method_serial: u32,
     keyboard_status_json: Option<String>,
     keyboard_status: KeyboardStatus,
+    xdg_configure_status_json: Option<String>,
+    xdg_configure_count: u32,
+    xdg_configure_bounds: Option<(u32, u32)>,
+    xdg_configure_capabilities: WindowManagerCapabilities,
 }
 
 struct PopupProbeSurface {
@@ -1475,6 +1514,27 @@ impl TestClient {
             status.last_raw_code,
             Self::json_escape(&status.last_keysym),
             Self::json_escape(&status.last_utf8),
+        );
+        let _ = std::fs::write(path, json);
+    }
+
+    fn write_xdg_configure_status(&self) {
+        let Some(path) = self.xdg_configure_status_json.as_ref() else {
+            return;
+        };
+        let bounds = self
+            .xdg_configure_bounds
+            .map(|(width, height)| format!("[{width},{height}]"))
+            .unwrap_or_else(|| "null".to_string());
+        let capabilities = self.xdg_configure_capabilities;
+        let json = format!(
+            "{{\"configure_count\":{},\"suggested_bounds\":{},\"capabilities\":{{\"window_menu\":{},\"maximize\":{},\"fullscreen\":{},\"minimize\":{}}}}}",
+            self.xdg_configure_count,
+            bounds,
+            capabilities.contains(WindowManagerCapabilities::WINDOW_MENU),
+            capabilities.contains(WindowManagerCapabilities::MAXIMIZE),
+            capabilities.contains(WindowManagerCapabilities::FULLSCREEN),
+            capabilities.contains(WindowManagerCapabilities::MINIMIZE),
         );
         let _ = std::fs::write(path, json);
     }
@@ -1818,6 +1878,36 @@ impl TestClient {
         }
         self._xdg_toplevel_drag_data_source = Some(data_source);
         self._xdg_toplevel_drag = drag;
+    }
+
+    fn write_fractional_scale_status(&self) {
+        let Some(path) = self.fractional_scale_status_json.as_ref() else {
+            return;
+        };
+        let values = self
+            .fractional_scale_values
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let last = self.fractional_scale_values.last().copied().unwrap_or(0);
+        let last_scale = if last == 0 { 0.0 } else { last as f64 / 120.0 };
+        let body = format!(
+            "{{\"count\":{},\"last\":{},\"last_scale\":{:.6},\"values\":[{}]}}\n",
+            self.fractional_scale_values.len(),
+            last,
+            last_scale,
+            values,
+        );
+        let tmp = format!("{path}.tmp");
+        if std::fs::write(&tmp, body).is_ok() {
+            let _ = std::fs::rename(tmp, path);
+        }
+    }
+
+    fn record_fractional_scale(&mut self, scale: u32) {
+        self.fractional_scale_values.push(scale);
+        self.write_fractional_scale_status();
     }
 
     fn draw(&mut self, _conn: &Connection, qh: &QueueHandle<Self>) {
@@ -2814,7 +2904,7 @@ impl ExplicitSyncDmabufClient {
 impl CompositorHandler for ExplicitSyncDmabufClient {
     fn scale_factor_changed(
         &mut self,
-        conn: &Connection,
+        _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _new_factor: i32,
@@ -2823,7 +2913,7 @@ impl CompositorHandler for ExplicitSyncDmabufClient {
 
     fn transform_changed(
         &mut self,
-        conn: &Connection,
+        _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _new_transform: wl_output::Transform,
@@ -2832,7 +2922,7 @@ impl CompositorHandler for ExplicitSyncDmabufClient {
 
     fn frame(
         &mut self,
-        conn: &Connection,
+        _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _time: u32,
@@ -2865,7 +2955,7 @@ impl WindowHandler for ExplicitSyncDmabufClient {
 
     fn configure(
         &mut self,
-        conn: &Connection,
+        _conn: &Connection,
         qh: &QueueHandle<Self>,
         _window: &Window,
         _configure: WindowConfigure,
@@ -4022,6 +4112,24 @@ impl OutputHandler for TestClient {
     }
 }
 
+impl Dispatch<WpFractionalScaleV1, ()> for TestClient {
+    fn event(
+        state: &mut Self,
+        _proxy: &WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            wp_fractional_scale_v1::Event::PreferredScale { scale } => {
+                state.record_fractional_scale(scale);
+            }
+            _ => {}
+        }
+    }
+}
+
 impl WindowHandler for TestClient {
     fn request_close(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _window: &Window) {
         self.exit = true;
@@ -4042,8 +4150,12 @@ impl WindowHandler for TestClient {
         if let Some(height) = configure.new_size.1.map(|v| v.get()) {
             self.height = height;
         }
+        self.xdg_configure_count = self.xdg_configure_count.saturating_add(1);
+        self.xdg_configure_bounds = configure.suggested_bounds;
+        self.xdg_configure_capabilities = configure.capabilities;
         self.configured = true;
         self.needs_redraw = true;
+        self.write_xdg_configure_status();
         if !(self.drop_buffer_after_draw && !self.buffer_dropped) {
             self.pending_presentation_loops = 0;
         }
@@ -5216,6 +5328,7 @@ delegate_noop!(TestClient: ignore WpFifoManagerV1);
 delegate_noop!(TestClient: ignore WpFifoV1);
 delegate_noop!(TestClient: ignore WpCursorShapeManagerV1);
 delegate_noop!(TestClient: ignore WpCursorShapeDeviceV1);
+delegate_noop!(TestClient: ignore WpFractionalScaleManagerV1);
 delegate_noop!(TestClient: ignore WpPresentation);
 delegate_noop!(TestClient: ignore WpContentTypeManagerV1);
 delegate_noop!(TestClient: ignore wp_content_type_v1::WpContentTypeV1);
