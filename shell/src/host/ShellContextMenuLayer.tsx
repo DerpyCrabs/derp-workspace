@@ -22,9 +22,9 @@ export function ShellContextMenuLayer(props: ShellContextMenuLayerProps) {
       class="pointer-events-none fixed inset-0 z-[420000]"
       classList={{
         'pointer-events-auto':
-          props.ctxMenuOpen() || props.taskbarPortalMenusOpen() || props.chromeOverlayPointerUsers() > 0,
+          (props.ctxMenuOpen() && !props.taskbarPortalMenusOpen()) || props.chromeOverlayPointerUsers() > 0,
         'pointer-events-none':
-          !props.ctxMenuOpen() && !props.taskbarPortalMenusOpen() && props.chromeOverlayPointerUsers() === 0,
+          (!props.ctxMenuOpen() || props.taskbarPortalMenusOpen()) && props.chromeOverlayPointerUsers() === 0,
         'overflow-visible':
           props.ctxMenuOpen() || props.taskbarPortalMenusOpen() || props.chromeOverlayPointerUsers() > 0,
         'overflow-hidden':

@@ -42,6 +42,7 @@ import {
   touchTap,
   touchUp,
   waitFor,
+  waitForFileValue,
   waitForNativeFocus,
   waitForProgramsMenuClosed,
   waitForProgramsMenuOpen,
@@ -95,6 +96,26 @@ type ExtImageCopyStatus = {
     damage: Array<{ x: number; y: number; width: number; height: number }>;
   }>;
 };
+
+async function waitForExitOutput(
+  filePath: string,
+  description: string,
+  timeoutMs = 5000,
+): Promise<string> {
+  return waitForFileValue(
+    description,
+    filePath,
+    async () => {
+      try {
+        const text = await readFile(filePath, "utf8");
+        return text.includes("\nexit:") ? text : null;
+      } catch {
+        return null;
+      }
+    },
+    timeoutMs,
+  );
+}
 
 type TestRunCommandResult = {
   status: number | null;
@@ -408,18 +429,9 @@ async function squeekboardMissingReason(
     shellQuote(globalsPath),
   ].join(" ");
   await spawnCommand(base, `sh -lc ${shellQuote(globalsCommand)}`);
-  const globals = await waitFor(
+  const globals = await waitForExitOutput(
+    globalsPath,
     "wait for OSK text-input globals probe",
-    async () => {
-      try {
-        const text = await readFile(globalsPath, "utf8");
-        return text.includes("\nexit:") ? text : null;
-      } catch {
-        return null;
-      }
-    },
-    5000,
-    100,
   );
   if (!globals.includes("zwp_text_input_manager_v3")) {
     return `missing text-input protocol zwp_text_input_manager_v3; globals=${globals.trim()}`;
@@ -687,18 +699,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
       shellQuote(outputPath),
     ].join(" ");
     await spawnCommand(base, `sh -lc ${shellQuote(command)}`);
-    const output = await waitFor(
+    const output = await waitForExitOutput(
+      outputPath,
       "wait for linux-drm-syncobj-v1 registry probe",
-      async () => {
-        try {
-          const text = await readFile(outputPath, "utf8");
-          return text.includes("\nexit:") ? text : null;
-        } catch {
-          return null;
-        }
-      },
-      5000,
-      100,
     );
     assert(output.includes("wp_linux_drm_syncobj_manager_v1 1"), output);
     assert(output.includes("\nexit:0\n"), output);
@@ -738,18 +741,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
       shellQuote(outputPath),
     ].join(" ");
     await spawnCommand(base, `sh -lc ${shellQuote(command)}`);
-    const output = await waitFor(
+    const output = await waitForExitOutput(
+      outputPath,
       "wait for wayland protocol registry probe",
-      async () => {
-        try {
-          const text = await readFile(outputPath, "utf8");
-          return text.includes("\nexit:") ? text : null;
-        } catch {
-          return null;
-        }
-      },
-      5000,
-      100,
     );
     assert(output.includes("zwlr_layer_shell_v1 "), output);
     assert(output.includes("wp_presentation 2"), output);
@@ -947,18 +941,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
       shellQuote(paintOutputPath),
     ].join(" ");
     await spawnCommand(base, `sh -lc ${shellQuote(paintCommand)}`);
-    const paintOutput = await waitFor(
+    const paintOutput = await waitForExitOutput(
+      paintOutputPath,
       "wait for ext-image-copy paint-cursors probe",
-      async () => {
-        try {
-          const text = await readFile(paintOutputPath, "utf8");
-          return text.includes("\nexit:") ? text : null;
-        } catch {
-          return null;
-        }
-      },
-      5000,
-      100,
     );
     const paintStatus = JSON.parse(await readFile(paintStatusPath, "utf8"));
     assert(paintOutput.includes("\nexit:0\n"), paintOutput);
@@ -993,18 +978,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
       shellQuote(cursorOutputPath),
     ].join(" ");
     await spawnCommand(base, `sh -lc ${shellQuote(cursorCommand)}`);
-    const cursorOutput = await waitFor(
+    const cursorOutput = await waitForExitOutput(
+      cursorOutputPath,
       "wait for ext-image-copy cursor-session probe",
-      async () => {
-        try {
-          const text = await readFile(cursorOutputPath, "utf8");
-          return text.includes("\nexit:") ? text : null;
-        } catch {
-          return null;
-        }
-      },
-      5000,
-      100,
     );
     const cursorStatus = JSON.parse(await readFile(cursorStatusPath, "utf8"));
     assert(cursorOutput.includes("\nexit:0\n"), cursorOutput);
@@ -1200,18 +1176,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
       shellQuote(outputPath),
     ].join(" ");
     await spawnCommand(base, `sh -lc ${shellQuote(command)}`);
-    const output = await waitFor(
+    const output = await waitForExitOutput(
+      outputPath,
       "wait for xdg-toplevel-drag reused source protocol error",
-      async () => {
-        try {
-          const text = await readFile(outputPath, "utf8");
-          return text.includes("\nexit:") ? text : null;
-        } catch {
-          return null;
-        }
-      },
-      5000,
-      100,
     );
     assert(!output.includes("\nexit:0\n"), output);
     assert(
@@ -1294,18 +1261,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
         readyWindow.y + Math.max(96, Math.floor(readyWindow.height / 2)),
       );
       await pointerButton(base, BTN_LEFT, "press");
-      const output = await waitFor(
+      const output = await waitForExitOutput(
+        outputPath,
         "wait for xdg-toplevel-drag ongoing destroy protocol error",
-        async () => {
-          try {
-            const text = await readFile(outputPath, "utf8");
-            return text.includes("\nexit:") ? text : null;
-          } catch {
-            return null;
-          }
-        },
-        5000,
-        100,
       );
       assert(!output.includes("\nexit:0\n"), output);
       assert(
@@ -2188,18 +2146,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
       shellQuote(globalsPath),
     ].join(" ");
     await spawnCommand(base, `sh -lc ${shellQuote(globalsCommand)}`);
-    const globalsOutput = await waitFor(
+    const globalsOutput = await waitForExitOutput(
+      globalsPath,
       "wait for virtual keyboard registry probe",
-      async () => {
-        try {
-          const text = await readFile(globalsPath, "utf8");
-          return text.includes("\nexit:") ? text : null;
-        } catch {
-          return null;
-        }
-      },
-      5000,
-      100,
     );
     assert(globalsOutput.includes("zwp_virtual_keyboard_manager_v1"), globalsOutput);
     assert(globalsOutput.includes("\nexit:0\n"), globalsOutput);
@@ -2391,18 +2340,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
       shellQuote(outputPath),
     ].join(" ");
     await spawnCommand(base, `sh -lc ${shellQuote(globalsCommand)}`);
-    const globalsOutput = await waitFor(
+    const globalsOutput = await waitForExitOutput(
+      outputPath,
       "wait for pointer gestures registry probe",
-      async () => {
-        try {
-          const text = await readFile(outputPath, "utf8");
-          return text.includes("\nexit:") ? text : null;
-        } catch {
-          return null;
-        }
-      },
-      5000,
-      100,
     );
     assert(globalsOutput.includes("zwp_pointer_gestures_v1"), globalsOutput);
     assert(globalsOutput.includes("\nexit:0\n"), globalsOutput);

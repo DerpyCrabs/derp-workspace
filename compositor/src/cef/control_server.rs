@@ -1170,6 +1170,8 @@ fn handle_one(
         || req_path == "/settings_hotkeys"
     {
         64 * 1024
+    } else if req_path == "/test/input/pointer_moves" {
+        64 * 1024
     } else if req_path == "/file_browser/write" || req_path == "/file_browser/write_bytes" {
         (crate::cef::file_browser::FILE_BROWSER_READ_MAX_BYTES as usize).saturating_mul(2)
     } else {
@@ -1393,6 +1395,23 @@ fn handle_one(
 
     if req_path == "/test/input/pointer_move" {
         uplink.test_pointer_move(json_f64_field(&v, "x")?, json_f64_field(&v, "y")?)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/input/pointer_moves" {
+        let values = v
+            .get("points")
+            .and_then(|x| x.as_array())
+            .ok_or_else(|| "pointer_moves: missing points".to_string())?;
+        if values.len() > 512 {
+            return Err("pointer_moves: too many points".into());
+        }
+        let points = values
+            .iter()
+            .map(|point| Ok((json_f64_field(point, "x")?, json_f64_field(point, "y")?)))
+            .collect::<Result<Vec<_>, String>>()?;
+        uplink.test_pointer_moves(points)?;
         write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }

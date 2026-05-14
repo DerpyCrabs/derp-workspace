@@ -565,6 +565,16 @@ impl InputRoutingState {
         flags
     }
 
+    pub(crate) fn primary_pointer_pressed(&self) -> bool {
+        self.pointer_pressed_buttons.contains(&Self::BTN_LEFT)
+    }
+
+    pub(crate) fn shell_touch_active(&self) -> bool {
+        self.touch_routes
+            .values()
+            .any(|route| matches!(route, TouchRoute::ShellCef { .. }))
+    }
+
     pub(crate) fn cef_flags_from_modifiers(m: &ModifiersState) -> u32 {
         let mut f = 0u32;
         if m.caps_lock {

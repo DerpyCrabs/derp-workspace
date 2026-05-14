@@ -24,9 +24,11 @@ import {
   getJson,
   getShellHtml,
   getSnapshots,
+  linePoints,
   measurePointerInteractionPerf,
   minimizeWindow,
   movePoint,
+  movePoints,
   openShellTestWindow,
   outputForWindow,
   postJson,
@@ -451,11 +453,8 @@ async function dragWindowHandleToPoint(
   await movePoint(base, start.x, start.y)
   await pointerButton(base, BTN_LEFT, 'press')
   await movePoint(base, start.x + 28, start.y)
-  for (let step = 1; step <= 24; step += 1) {
-    const t = step / 24
-    await movePoint(base, start.x + 28 + (end.x - (start.x + 28)) * t, start.y + (end.y - start.y) * t)
-  }
-  return waitFor(
+  await movePoints(base, linePoints(start.x + 28, start.y, end.x, end.y, 24))
+  const drag = await waitFor(
     `wait for window drag ${sourceWindowId}`,
     async () => {
       const { compositor, shell } = await getSnapshots(base)
@@ -465,6 +464,11 @@ async function dragWindowHandleToPoint(
     2000,
     40,
   )
+  await movePoints(base, [
+    { x: end.x + 1, y: end.y },
+    { x: end.x, y: end.y },
+  ])
+  return drag
 }
 
 async function dragWindowHandleOntoTab(
@@ -506,10 +510,7 @@ async function dragWindowHandleOntoTab(
     slotRect = null
   }
   const end = dropPoint ?? (slotRect ? rectCenter(slotRect) : rectCenter(target.tab.rect!))
-  for (let step = 1; step <= 24; step += 1) {
-    const t = step / 24
-    await movePoint(base, start.x + 28 + (end.x - (start.x + 28)) * t, start.y + (end.y - start.y) * t)
-  }
+  await movePoints(base, linePoints(start.x + 28, start.y, end.x, end.y, 24))
   const dragTargetMatches = async () => {
     const { compositor, shell } = await getSnapshots(base)
     const currentTarget = tabGroupByWindow(shell, targetWindowId)
@@ -631,19 +632,13 @@ async function dragTabOntoTab(base: string, sourceWindowId: number, targetWindow
   let cx = pickX
   let cy = pickY
   let end = initialEnd
-  for (let step = 1; step <= 24; step += 1) {
-    const t = step / 24
-    cx = pickX + (end.x - pickX) * t
-    cy = pickY + (end.y - pickY) * t
-    await movePoint(base, cx, cy)
-  }
+  await movePoints(base, linePoints(pickX, pickY, end.x, end.y, 24))
+  cx = end.x
+  cy = end.y
   const midShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   const slot2 = tabDropSlotRect(midShell, targetWindowId)
   end = slot2 ? rectCenter(slot2) : tabMergeDropPointPx(source, target)
-  for (let step = 1; step <= 24; step += 1) {
-    const t = step / 24
-    await movePoint(base, cx + (end.x - cx) * t, cy + (end.y - cy) * t)
-  }
+  await movePoints(base, linePoints(cx, cy, end.x, end.y, 24))
   cx = end.x
   cy = end.y
   try {
@@ -2483,16 +2478,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
         x: tearOutPoint.x + 120,
         y: tearOutPoint.y - 24,
       }
-      await timing.step('continue moving grouped native torn-out tab', async () => {
-        for (let step = 1; step <= 12; step += 1) {
-          const t = step / 12
-          await movePoint(
-            base,
-            tearOutPoint.x + (continuedPoint.x - tearOutPoint.x) * t,
-            tearOutPoint.y + (continuedPoint.y - tearOutPoint.y) * t,
-          )
-        }
-      })
+      await timing.step('continue moving grouped native torn-out tab', () =>
+        movePoints(base, linePoints(tearOutPoint.x, tearOutPoint.y, continuedPoint.x, continuedPoint.y, 12)),
+      )
       const continued = await timing.step('wait for grouped native torn-out tab to keep moving', () =>
         waitFor(
           `wait for grouped native tab ${draggedWindowId} continued move`,
@@ -2836,16 +2824,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
         x: tearOutPoint.x + 120,
         y: tearOutPoint.y - 24,
       }
-      await timing.step('continue moving grouped foot torn-out tab', async () => {
-        for (let step = 1; step <= 12; step += 1) {
-          const t = step / 12
-          await movePoint(
-            base,
-            tearOutPoint.x + (continuedPoint.x - tearOutPoint.x) * t,
-            tearOutPoint.y + (continuedPoint.y - tearOutPoint.y) * t,
-          )
-        }
-      })
+      await timing.step('continue moving grouped foot torn-out tab', () =>
+        movePoints(base, linePoints(tearOutPoint.x, tearOutPoint.y, continuedPoint.x, continuedPoint.y, 12)),
+      )
       const continued = await timing.step('wait for grouped foot torn-out tab to keep moving', () =>
         waitFor(
           `wait for grouped foot ${footWindowId} continued move`,
@@ -3637,10 +3618,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await timing.step('pull right tab out of strip', async () => {
         const endX = previewPoint.x + 24
         const endY = rightTab.tab.rect!.global_y - 96
-        for (let step = 1; step <= 16; step += 1) {
-          const t = step / 16
-          await movePoint(base, previewPoint.x + (endX - previewPoint.x) * t, previewPoint.y + (endY - previewPoint.y) * t)
-        }
+        await movePoints(base, linePoints(previewPoint.x, previewPoint.y, endX, endY, 16))
       })
       const detachedDuringDrag = await timing.step('wait for right tab detached', () =>
         waitFor(
@@ -3664,16 +3642,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
         x: previewPoint.x + 96,
         y: rightTab.tab.rect!.global_y - 132,
       }
-      await timing.step('continue moving detached right tab', async () => {
-        for (let step = 1; step <= 12; step += 1) {
-          const t = step / 12
-          await movePoint(
-            base,
-            previewPoint.x + 24 + (continuedPoint.x - (previewPoint.x + 24)) * t,
-            rightTab.tab.rect!.global_y - 96 + (continuedPoint.y - (rightTab.tab.rect!.global_y - 96)) * t,
-          )
-        }
-      })
+      await timing.step('continue moving detached right tab', () =>
+        movePoints(
+          base,
+          linePoints(previewPoint.x + 24, rightTab.tab.rect!.global_y - 96, continuedPoint.x, continuedPoint.y, 12),
+        ),
+      )
       const continued = await timing.step('wait for detached right tab to keep following pointer', () =>
         waitFor(
           `wait for split right tab ${otherWindowId} continued move`,
@@ -3973,10 +3947,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await timing.step('pull tab out for tear-out', async () => {
         const endX = previewPoint.x + 24
         const endY = start.y - 120
-        for (let step = 1; step <= 16; step += 1) {
-          const t = step / 16
-          await movePoint(base, previewPoint.x + (endX - previewPoint.x) * t, previewPoint.y + (endY - previewPoint.y) * t)
-        }
+        await movePoints(base, linePoints(previewPoint.x, previewPoint.y, endX, endY, 16))
       })
       const torn = await timing.step('wait tear-out unminimized near pointer', () =>
         waitFor(

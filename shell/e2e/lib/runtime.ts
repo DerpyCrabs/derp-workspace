@@ -525,10 +525,15 @@ export interface FileBrowserWindowSnapshot extends FileBrowserSnapshot {
 export interface TextEditorWindowSnapshot {
   window_id: number
   markdown_img_rect: Rect | null
+  markdown_img_src: string | null
+  markdown_text: string | null
   markdown_img_dialog_open: boolean
   edit_rect: Rect | null
   save_rect: Rect | null
   textarea_rect: Rect | null
+  viewer_copy_path_rect: Rect | null
+  viewer_open_containing_folder_rect: Rect | null
+  viewer_open_external_rect: Rect | null
 }
 
 export interface ImageViewerWindowSnapshot {
@@ -1206,7 +1211,11 @@ export async function normalizePersistentShellState(base: string): Promise<Shell
     shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     const shellWindow = shellWindowById(shell, windowId)
     if (!shellWindow || shellWindow.minimized) continue
-    await closeTaskbarWindow(base, shell, windowId)
+    try {
+      await closeTaskbarWindow(base, shell, windowId)
+    } catch {
+      await closeWindow(base, windowId)
+    }
     await waitForWindowGone(base, windowId, 2000)
   }
   return getJson<ShellSnapshot>(base, '/test/state/shell')
@@ -2463,6 +2472,22 @@ export async function movePoint(base: string, x: number, y: number): Promise<voi
   await syncTest(base)
 }
 
+export async function movePoints(base: string, points: Array<{ x: number; y: number }>): Promise<void> {
+  if (points.length === 0) return
+  await postJson(base, '/test/input/pointer_moves', { points })
+  await syncTest(base)
+}
+
+export function linePoints(x0: number, y0: number, x1: number, y1: number, steps: number): Array<{ x: number; y: number }> {
+  const count = Math.max(1, steps)
+  const points: Array<{ x: number; y: number }> = []
+  for (let index = 1; index <= count; index += 1) {
+    const t = index / count
+    points.push({ x: x0 + (x1 - x0) * t, y: y0 + (y1 - y0) * t })
+  }
+  return points
+}
+
 export async function movePointRelative(base: string, dx: number, dy: number): Promise<void> {
   await postJson(base, '/test/input/pointer_move_relative', { dx, dy })
   await syncTest(base)
@@ -3391,16 +3416,7 @@ export async function openProgramsMenu(base: string, method: 'click' | 'keybind'
   }
 
   if (method === 'keybind') return openOnce(true)
-  try {
-    return await openOnce(false)
-  } catch (firstError) {
-    const afterFirstClick = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    if (afterFirstClick.programs_menu_open) return waitForProgramsMenuOpen(base)
-    if (!afterFirstClick.power_menu_open && !afterFirstClick.volume_menu_open) {
-      return openOnce(false)
-    }
-    throw firstError
-  }
+  return openOnce(false)
 }
 
 export async function openPowerMenu(base: string): Promise<ShellSnapshot> {

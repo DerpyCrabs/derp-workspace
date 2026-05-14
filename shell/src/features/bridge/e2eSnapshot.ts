@@ -727,18 +727,27 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     .map((el) => {
       const rawWindowId = shellHostedWindowIdFromElement(el)
       if (rawWindowId === null) return null
-      const img = el.querySelector('[data-text-editor-markdown] img')
+      const markdown = el.querySelector('[data-text-editor-markdown]')
+      const img = markdown?.querySelector('img')
       const editBtn = el.querySelector('[data-text-editor-edit]')
       const saveBtn = el.querySelector('[data-text-editor-save]')
       const ta = el.querySelector('[data-text-editor-textarea]')
       const zoomDlg = el.querySelector('[data-text-editor-markdown-image-dialog="1"]')
+      const copyPathBtn = el.querySelector('[data-viewer-copy-path]')
+      const folderBtn = el.querySelector('[data-viewer-open-containing-folder]')
+      const externalBtn = el.querySelector('[data-viewer-open-external]')
       return {
         window_id: rawWindowId,
         markdown_img_rect: img instanceof HTMLElement ? snapshotRect(img, args.origin) : null,
+        markdown_img_src: img instanceof HTMLImageElement ? img.currentSrc || img.src : null,
+        markdown_text: markdown instanceof HTMLElement ? markdown.textContent : null,
         markdown_img_dialog_open: zoomDlg instanceof HTMLElement,
         edit_rect: editBtn instanceof HTMLElement ? snapshotRect(editBtn, args.origin) : null,
         save_rect: saveBtn instanceof HTMLElement ? snapshotRect(saveBtn, args.origin) : null,
         textarea_rect: ta instanceof HTMLElement ? snapshotRect(ta, args.origin) : null,
+        viewer_copy_path_rect: copyPathBtn instanceof HTMLElement ? snapshotRect(copyPathBtn, args.origin) : null,
+        viewer_open_containing_folder_rect: folderBtn instanceof HTMLElement ? snapshotRect(folderBtn, args.origin) : null,
+        viewer_open_external_rect: externalBtn instanceof HTMLElement ? snapshotRect(externalBtn, args.origin) : null,
       }
     })
     .filter(
@@ -747,10 +756,15 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       ): entry is {
         window_id: number
         markdown_img_rect: ReturnType<typeof snapshotRect>
+        markdown_img_src: string | null
+        markdown_text: string | null
         markdown_img_dialog_open: boolean
         edit_rect: ReturnType<typeof snapshotRect>
         save_rect: ReturnType<typeof snapshotRect>
         textarea_rect: ReturnType<typeof snapshotRect>
+        viewer_copy_path_rect: ReturnType<typeof snapshotRect>
+        viewer_open_containing_folder_rect: ReturnType<typeof snapshotRect>
+        viewer_open_external_rect: ReturnType<typeof snapshotRect>
       } => entry !== null,
     )
   const imageViewerWindows = cache

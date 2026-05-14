@@ -359,7 +359,12 @@ impl CompositorState {
         )))
     }
 
-    pub(crate) fn e2e_pointer_move_global(&mut self, x: f64, y: f64) -> Result<(), String> {
+    fn e2e_pointer_move_global_with_sync(
+        &mut self,
+        x: f64,
+        y: f64,
+        sync_before_input: bool,
+    ) -> Result<(), String> {
         let pos = self
             .e2e_clamp_global_point(Point::from((x, y)))
             .ok_or_else(|| "no workspace bounds available".to_string())?;
@@ -373,9 +378,23 @@ impl CompositorState {
             .output_geometry(&output)
             .ok_or_else(|| "missing output geometry for pointer move".to_string())?;
         let local = pos - output_geo.loc.to_f64();
-        self.sync_shell_shared_state_for_input();
+        if sync_before_input {
+            self.sync_shell_shared_state_for_input();
+        }
         self.pointer_cursor_touch_reveal_for_pointer_motion();
         self.pointer_motion_output_local(output_geo, local, self.e2e_now_ms() as u32);
+        Ok(())
+    }
+
+    pub(crate) fn e2e_pointer_move_global(&mut self, x: f64, y: f64) -> Result<(), String> {
+        self.e2e_pointer_move_global_with_sync(x, y, true)
+    }
+
+    pub(crate) fn e2e_pointer_move_globals(&mut self, points: &[(f64, f64)]) -> Result<(), String> {
+        self.sync_shell_shared_state_for_input();
+        for (x, y) in points {
+            self.e2e_pointer_move_global_with_sync(*x, *y, false)?;
+        }
         Ok(())
     }
 

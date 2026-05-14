@@ -657,6 +657,12 @@ impl CompositorState {
         pointer_driven: bool,
         client_initiated: bool,
     ) {
+        if pointer_driven
+            && !self.input_routing.primary_pointer_pressed()
+            && !self.input_routing.shell_touch_active()
+        {
+            return;
+        }
         self.shell_resize_end_active();
         if self.shell_move_try_begin_backed(window_id, pointer_driven) {
             return;

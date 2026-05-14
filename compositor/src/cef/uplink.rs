@@ -533,6 +533,10 @@ impl UplinkToCompositor {
         self.run_result(move |s| s.e2e_pointer_move_global(x, y))
     }
 
+    pub fn test_pointer_moves(&self, points: Vec<(f64, f64)>) -> Result<(), String> {
+        self.run_result(move |s| s.e2e_pointer_move_globals(&points))
+    }
+
     pub fn test_pointer_move_relative(&self, dx: f64, dy: f64) -> Result<(), String> {
         self.run_result(move |s| s.e2e_pointer_move_relative(dx, dy))
     }

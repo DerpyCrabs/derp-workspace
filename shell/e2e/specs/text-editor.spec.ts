@@ -17,7 +17,6 @@ import {
   defineGroup,
   ensureWorkspaceTabShowsWindow,
   getJson,
-  getShellHtml,
   prepareFileBrowserFixtures,
   movePoint,
   rectCenter,
@@ -82,7 +81,17 @@ export default defineGroup(import.meta.url, ({ test }) => {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
         const id = resolveTextEditorWindowId(shell, (row) => {
           const r = row?.markdown_img_rect
-          return !!(r && r.width >= 4 && r.height >= 4)
+          return !!(
+            r &&
+            r.width >= 4 &&
+            r.height >= 4 &&
+            row?.markdown_text?.includes('Fixture image md') &&
+            row.markdown_img_src?.includes('file_browser/read') &&
+            row.markdown_img_src.includes('blue-image.png') &&
+            row.viewer_copy_path_rect &&
+            row.viewer_open_containing_folder_rect &&
+            row.viewer_open_external_rect
+          )
         })
         return id !== null ? { windowId: id } : null
       },
@@ -91,23 +100,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     state.spawnedShellWindowIds.add(editor.windowId)
     await ensureWorkspaceTabShowsWindow(base, editor.windowId)
-    const frameSel = `[data-shell-window-frame="${editor.windowId}"]`
-    const editorHtml = await waitFor(
-      'wait for markdown h1 and img',
-      async () => {
-        const h = await getShellHtml(base, frameSel)
-        if (!h.includes('data-text-editor-markdown')) return null
-        if (!h.includes('Fixture image md')) return null
-        if (!h.includes('file_browser/read')) return null
-        if (!h.includes('blue-image.png')) return null
-        return h
-      },
-      5000,
-      100,
-    )
-    assert(editorHtml.includes('data-viewer-copy-path'), 'expected text editor copy path action')
-    assert(editorHtml.includes('data-viewer-open-containing-folder'), 'expected text editor folder action')
-    assert(editorHtml.includes('data-viewer-open-external'), 'expected text editor external action')
     await ensureWorkspaceTabShowsWindow(base, editor.windowId)
     const withImg = await waitFor(
       'wait for markdown img snapshot rect',
