@@ -379,6 +379,38 @@ async function dragPointerToPoint(
   }
 }
 
+async function dragPointerToPointUntil<T>(
+  base: string,
+  x: number,
+  y: number,
+  steps: number,
+  label: string,
+  check: () => Promise<T | null>,
+): Promise<T> {
+  const compositor = await getJson<CompositorSnapshot>(
+    base,
+    "/test/state/compositor",
+  );
+  assert(compositor.pointer, "missing compositor pointer position");
+  const startX = compositor.pointer.x;
+  const startY = compositor.pointer.y;
+  const count = Math.max(1, steps);
+  let matched: T | null = null;
+  for (let index = 1; index <= count; index += 1) {
+    const t = index / count;
+    await movePoint(
+      base,
+      Math.round(startX + (x - startX) * t),
+      Math.round(startY + (y - startY) * t),
+    );
+    if (matched === null) matched = await check();
+  }
+  if (matched) return matched;
+  const result = await check();
+  if (result) return result;
+  throw new Error(`${label}: condition not met during drag`);
+}
+
 async function openPickerWhileDragging(
   base: string,
   windowId: number,
@@ -2378,29 +2410,33 @@ export default defineGroup(import.meta.url, ({ test }) => {
         2000,
         16,
       );
-      await dragPointerToPoint(base, untileEnd.x, untileEnd.y, 8);
-      const firstLiveUntile = await waitFor(
-        `wait for picker CSD first drag live restore ${csdId}`,
-        async () => {
-          const { compositor, shell } = await getSnapshots(base);
-          const window = compositorWindowById(compositor, csdId);
-          if (
-            shell.compositor_interaction_state?.move_window_id !== csdId &&
-            compositor.shell_move_window_id !== csdId
-          )
-            return null;
-          if (!isTranslucentDragWindow(window)) return null;
-          if (Math.abs(window.width - floating.width) > 2) return null;
-          if (Math.abs(window.height - floating.height) > 2) return null;
-          if (
-            Math.abs(window.x - snapped.window.x) <= 4 &&
-            Math.abs(window.y - snapped.window.y) <= 4
-          )
-            return null;
-          return { compositor, shell, window };
-        },
-        3000,
-        16,
+      const readFirstLiveUntile = async () => {
+        const { compositor, shell } = await getSnapshots(base);
+        const window = compositorWindowById(compositor, csdId);
+        const moving = !(
+          shell.compositor_interaction_state?.move_window_id !== csdId &&
+          compositor.shell_move_window_id !== csdId
+        );
+        if (!moving && shellSessionWindowHasMonitorTile(shell, csdId))
+          return null;
+        if (!window) return null;
+        if (moving && !isTranslucentDragWindow(window)) return null;
+        if (Math.abs(window.width - floating.width) > 2) return null;
+        if (Math.abs(window.height - floating.height) > 2) return null;
+        if (
+          Math.abs(window.x - snapped.window.x) <= 4 &&
+          Math.abs(window.y - snapped.window.y) <= 4
+        )
+          return null;
+        return { compositor, shell, window };
+      };
+      const firstLiveUntile = await dragPointerToPointUntil(
+        base,
+        untileEnd.x,
+        untileEnd.y,
+        8,
+        `picker CSD first drag live restore ${csdId}`,
+        readFirstLiveUntile,
       );
       await pointerButton(base, BTN_LEFT, "release");
       pointerReleased = true;

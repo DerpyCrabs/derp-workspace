@@ -343,6 +343,7 @@ export function SettingsAppearancePage(props: {
             {(mode) => (
               <button
                 type="button"
+                data-settings-theme-mode={mode.value}
                 class="cursor-pointer rounded-md px-3 py-1.5 text-[0.8rem] font-medium"
                 classList={{
                   'border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover)':
@@ -362,6 +363,7 @@ export function SettingsAppearancePage(props: {
             {(palette) => (
               <button
                 type="button"
+                data-settings-theme-palette={palette.value}
                 class="cursor-pointer rounded-lg border p-2 text-left transition-colors"
                 classList={{
                   'border-(--shell-accent-border) bg-(--shell-accent-soft)':

@@ -15,6 +15,7 @@ import {
   getJson,
   getSnapshots,
   ensureXtermWindow,
+  BTN_LEFT,
   KEY,
   NATIVE_APP_ID,
   outputForWindow,
@@ -204,7 +205,29 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const startX = controlsBeforeMove.titlebar.global_x + controlsBeforeMove.titlebar.width / 2
     const startY = controlsBeforeMove.titlebar.global_y + controlsBeforeMove.titlebar.height / 2
     const dragDx = 280
-    await dragBetweenPoints(base, startX, startY, startX + dragDx, startY, 28)
+    await movePoint(base, startX, startY)
+    await pointerButton(base, BTN_LEFT, 'press')
+    for (let index = 1; index <= 28; index += 1) {
+      const t = index / 28
+      await movePoint(base, startX + dragDx * t, startY)
+    }
+    const previewDuringMove = await waitFor(
+      'wait for x11 native drag preview',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const controls = windowControls(shell, windowId)
+        if (compositor.shell_move_window_id !== windowId) return null
+        if (compositor.shell_native_drag_preview_window_id !== windowId) return null
+        if (compositor.shell_native_drag_preview_shell_ready !== true) return null
+        if (!compositor.shell_native_drag_preview_image_path) return null
+        if (!compositor.shell_native_drag_preview_clip_rect) return null
+        if (!controls?.native_drag_preview_rect || controls.native_drag_preview_loaded !== true) return null
+        return { compositor, shell, controls }
+      },
+      3000,
+      40,
+    )
+    await pointerButton(base, BTN_LEFT, 'release')
     const moved = await waitFor(
       'wait for x11 move',
       async () => {
@@ -259,6 +282,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('x11-xterm-parity.json', {
       spawned: spawned.window,
       spawnedOutput,
+      previewDuringMove,
       moved: moved.window,
       fullscreenOn: fullscreenOn.window,
       fullscreenOff: fullscreenOff.window,

@@ -68,6 +68,13 @@ impl UplinkToCompositor {
         })
     }
 
+    pub fn settings_theme_apply(
+        &self,
+        settings: crate::session::settings_config::ThemeSettingsFile,
+    ) -> Result<(), String> {
+        self.run_result(move |s| s.apply_theme_settings(settings))
+    }
+
     pub fn settings_scratchpads_apply(
         &self,
         settings: crate::session::settings_config::ScratchpadSettingsFile,

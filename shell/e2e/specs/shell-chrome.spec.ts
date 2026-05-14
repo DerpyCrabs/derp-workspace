@@ -3112,14 +3112,31 @@ export default defineGroup(import.meta.url, ({ test }) => {
         x: Math.round(initialTitlebarCenter.x),
         y: Math.round(initialTitlebarCenter.y + downwardSteps * 12),
       };
-      await dragBetweenPoints(
-        base,
-        initialTitlebarCenter.x,
-        initialTitlebarCenter.y,
-        clippedTarget.x,
-        clippedTarget.y,
-        downwardSteps,
-      );
+      await movePoint(base, initialTitlebarCenter.x, initialTitlebarCenter.y);
+      await pointerButton(base, BTN_LEFT, "press");
+      try {
+        for (let step = 1; step <= downwardSteps + 48; step += 1) {
+          await movePoint(
+            base,
+            clippedTarget.x,
+            Math.round(initialTitlebarCenter.y + step * 12),
+          );
+          const snapshots = await getSnapshots(base);
+          const window = compositorWindowById(snapshots.compositor, windowId);
+          const taskbar = window
+            ? taskbarForMonitor(snapshots.shell, window.output_name)
+            : null;
+          if (
+            window &&
+            taskbar?.rect &&
+            window.y + window.height > taskbar.rect.global_y + 24
+          ) {
+            break;
+          }
+        }
+      } finally {
+        await pointerButton(base, BTN_LEFT, "release");
+      }
       positioned = await waitFor(
         "wait for shell test window taskbar-clipped after downward drag",
         async () => {

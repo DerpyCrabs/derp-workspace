@@ -1717,7 +1717,7 @@ fn handle_one(
             let theme =
                 serde_json::from_value::<crate::session::settings_config::ThemeSettingsFile>(v)
                     .map_err(|e| format!("invalid theme settings: {e}"))?;
-            crate::session::settings_config::write_theme_settings(theme)?;
+            uplink.settings_theme_apply(theme)?;
         }
         "/settings_cursor" => {
             let cursor =

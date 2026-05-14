@@ -3,6 +3,7 @@ use super::*;
 pub(crate) struct SessionServicesState {
     pub(crate) vt_session: Option<LibSeatSession>,
     pub(crate) osk_child: Option<std::process::Child>,
+    pub(crate) osk_gtk_theme: Option<String>,
     pub(crate) osk_monitor_active: bool,
     pub(crate) osk_visibility_monitor_active: bool,
     pub(crate) osk_visible: Option<bool>,
@@ -25,6 +26,7 @@ impl SessionServicesState {
         Self {
             vt_session: None,
             osk_child: None,
+            osk_gtk_theme: None,
             osk_monitor_active: false,
             osk_visibility_monitor_active: false,
             osk_visible: None,

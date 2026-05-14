@@ -15,6 +15,20 @@ impl CompositorState {
         Ok(())
     }
 
+    pub(crate) fn apply_theme_settings(
+        &mut self,
+        settings: crate::session::settings_config::ThemeSettingsFile,
+    ) -> Result<(), String> {
+        let settings = crate::session::settings_config::sanitize_theme_settings(settings);
+        let previous = crate::session::settings_config::read_theme_settings();
+        if previous == settings {
+            return Ok(());
+        }
+        crate::session::settings_config::write_theme_settings(settings.clone())?;
+        self.refresh_osk_theme(&settings);
+        Ok(())
+    }
+
     pub fn start_osk_from_settings(&mut self) {
         let settings = crate::session::settings_config::read_osk_settings();
         if settings.enabled {
@@ -26,6 +40,7 @@ impl CompositorState {
         self.set_osk_visible(false);
         Self::set_squeekboard_a11y_enabled(false);
         crate::sidecar::terminate_sidecar(&mut self.session_services.osk_child);
+        self.session_services.osk_gtk_theme = None;
         self.session_services.osk_visible = None;
         self.session_services.osk_visibility_override = None;
         self.session_services.osk_last_text_input_active = false;
@@ -65,6 +80,9 @@ impl CompositorState {
             }
         };
         let display = self.core.socket_name.to_string_lossy().into_owned();
+        let gtk_theme = crate::session::settings_config::squeekboard_gtk_theme_for_theme(
+            &crate::session::settings_config::read_theme_settings(),
+        );
         let mut command = std::process::Command::new("squeekboard");
         command
             .stdin(std::process::Stdio::null())
@@ -74,7 +92,8 @@ impl CompositorState {
             .env("XDG_RUNTIME_DIR", runtime)
             .env("XDG_SESSION_TYPE", "wayland")
             .env("GDK_BACKEND", "wayland")
-            .env("GSK_RENDERER", "cairo");
+            .env("GSK_RENDERER", "cairo")
+            .env("GTK_THEME", &gtk_theme);
         if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
             let uid = unsafe { libc::geteuid() };
             let bus = format!("/run/user/{uid}/bus");
@@ -85,13 +104,41 @@ impl CompositorState {
         match crate::sidecar::spawn_process_group(command) {
             Ok(child) => {
                 self.session_services.osk_child = Some(child);
+                self.session_services.osk_gtk_theme = Some(gtk_theme);
                 Self::set_squeekboard_a11y_enabled(true);
                 self.arm_osk_monitor();
                 self.arm_osk_visibility_monitor();
             }
             Err(error) => {
+                self.session_services.osk_gtk_theme = None;
                 tracing::warn!(target: "derp_osk", %error, "osk spawn failed");
             }
+        }
+    }
+
+    fn refresh_osk_theme(&mut self, theme: &crate::session::settings_config::ThemeSettingsFile) {
+        let settings = crate::session::settings_config::read_osk_settings();
+        if !settings.enabled || settings.provider != "squeekboard" {
+            return;
+        }
+        self.reap_osk_child();
+        if self.session_services.osk_child.is_none() {
+            self.session_services.osk_gtk_theme = None;
+            return;
+        }
+        let next = crate::session::settings_config::squeekboard_gtk_theme_for_theme(theme);
+        if self.session_services.osk_gtk_theme.as_deref() == Some(next.as_str()) {
+            return;
+        }
+        let visible =
+            self.session_services.osk_visible == Some(true) || self.osk_layer_surface_visible_now();
+        crate::sidecar::terminate_sidecar(&mut self.session_services.osk_child);
+        self.session_services.osk_gtk_theme = None;
+        self.session_services.osk_visible = None;
+        self.session_services.osk_layer_surfaces.clear();
+        self.start_osk(&settings.provider);
+        if visible {
+            self.set_osk_visible(true);
         }
     }
 
@@ -131,6 +178,7 @@ impl CompositorState {
             Ok(Some(status)) => {
                 tracing::warn!(target: "derp_osk", ?status, "osk exited");
                 self.session_services.osk_child = None;
+                self.session_services.osk_gtk_theme = None;
                 Self::set_squeekboard_a11y_enabled(false);
                 self.unmap_osk_layer_surfaces();
                 self.session_services.osk_visible = None;
@@ -143,6 +191,7 @@ impl CompositorState {
             Err(error) => {
                 tracing::warn!(target: "derp_osk", %error, "osk status failed");
                 self.session_services.osk_child = None;
+                self.session_services.osk_gtk_theme = None;
                 Self::set_squeekboard_a11y_enabled(false);
                 self.unmap_osk_layer_surfaces();
                 self.session_services.osk_visible = None;
@@ -371,10 +420,13 @@ impl CompositorState {
     }
 
     pub(crate) fn reconcile_hidden_osk_layer_surfaces(&mut self) {
-        if self.session_services.osk_visible == Some(false) && self.osk_layer_surface_visible_now()
-        {
+        if self.session_services.osk_visible != Some(true) && self.osk_layer_surface_visible_now() {
             self.unmap_osk_layer_surfaces();
         }
+    }
+
+    pub(crate) fn layer_surface_visible_during_render(&self, namespace: &str) -> bool {
+        !Self::osk_layer_namespace(namespace) || self.session_services.osk_visible == Some(true)
     }
 
     fn osk_layer_global_for_point(

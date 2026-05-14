@@ -1147,6 +1147,7 @@ export function createShellWindowGestureRuntime(
     }
     closeSnapAssistPicker();
     clearTilePreviewWire();
+    recentSnapCandidate = null;
     const window = readWindow(windowId);
     let startedTiled = false;
     const main = options.getMainRef();

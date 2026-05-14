@@ -342,7 +342,7 @@ fn trim_stdout(bytes: &[u8]) -> String {
         .to_string()
 }
 
-fn gnome_cursor_setting(key: &str) -> Option<String> {
+fn gnome_interface_setting(key: &str) -> Option<String> {
     let out = Command::new("gsettings")
         .args(["get", "org.gnome.desktop.interface", key])
         .output()
@@ -352,6 +352,10 @@ fn gnome_cursor_setting(key: &str) -> Option<String> {
     }
     let value = parse_gsettings_line(&trim_stdout(&out.stdout));
     (!value.is_empty()).then_some(value)
+}
+
+fn gnome_cursor_setting(key: &str) -> Option<String> {
+    gnome_interface_setting(key)
 }
 
 fn gnome_cursor_set(key: &str, value: &str) {
@@ -391,6 +395,25 @@ pub fn sanitize_theme_settings(theme: ThemeSettingsFile) -> ThemeSettingsFile {
         } else {
             ThemeSettingsFile::default().mode
         },
+    }
+}
+
+pub fn resolve_theme_mode_for_process(theme: &ThemeSettingsFile) -> &'static str {
+    match theme.mode.as_str() {
+        "dark" => "dark",
+        "light" => "light",
+        _ => match gnome_interface_setting("color-scheme").as_deref() {
+            Some("prefer-dark") => "dark",
+            _ => "light",
+        },
+    }
+}
+
+pub fn squeekboard_gtk_theme_for_theme(theme: &ThemeSettingsFile) -> String {
+    if resolve_theme_mode_for_process(theme) == "dark" {
+        "Adwaita:dark".into()
+    } else {
+        "Adwaita".into()
     }
 }
 
@@ -1392,10 +1415,11 @@ mod tests {
         normalize_hotkey_chord, read_cursor_settings, read_hotkey_settings, read_keyboard_settings,
         read_osk_settings, read_theme_settings, sanitize_cursor_settings,
         sanitize_hotkey_settings_for_write, sanitize_keyboard_settings, sanitize_osk_settings,
-        sanitize_theme_settings, settings_config_path, write_cursor_settings,
-        write_hotkey_settings, write_keyboard_settings, write_osk_settings, write_theme_settings,
-        CursorSettingsFile, HotkeyActionFile, HotkeyBindingFile, HotkeySettingsFile,
-        KeyboardLayoutEntryFile, KeyboardSettingsFile, OskSettingsFile, ThemeSettingsFile,
+        sanitize_theme_settings, settings_config_path, squeekboard_gtk_theme_for_theme,
+        write_cursor_settings, write_hotkey_settings, write_keyboard_settings, write_osk_settings,
+        write_theme_settings, CursorSettingsFile, HotkeyActionFile, HotkeyBindingFile,
+        HotkeySettingsFile, KeyboardLayoutEntryFile, KeyboardSettingsFile, OskSettingsFile,
+        ThemeSettingsFile,
     };
 
     fn env_lock() -> &'static Mutex<()> {
@@ -1421,6 +1445,24 @@ mod tests {
                 palette: "gray".into(),
                 mode: "dark".into(),
             }
+        );
+    }
+
+    #[test]
+    fn squeekboard_gtk_theme_follows_explicit_shell_theme_mode() {
+        assert_eq!(
+            squeekboard_gtk_theme_for_theme(&ThemeSettingsFile {
+                palette: "default".into(),
+                mode: "dark".into(),
+            }),
+            "Adwaita:dark"
+        );
+        assert_eq!(
+            squeekboard_gtk_theme_for_theme(&ThemeSettingsFile {
+                palette: "default".into(),
+                mode: "light".into(),
+            }),
+            "Adwaita"
         );
     }
 

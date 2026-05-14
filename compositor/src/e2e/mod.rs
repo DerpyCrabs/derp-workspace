@@ -240,6 +240,7 @@ struct E2eCompositorSnapshot {
     osk_visible: Option<bool>,
     osk_text_input_visibility_allowed: bool,
     osk_shell_text_input_active: bool,
+    osk_gtk_theme: Option<String>,
     osk_preferred_output_name: Option<String>,
     osk_layer_visible_on_preferred_output: bool,
     osk_layer_surfaces: Vec<E2eOskLayerSnapshot>,
@@ -889,6 +890,7 @@ impl CompositorState {
                 .session_services
                 .osk_text_input_visibility_allowed,
             osk_shell_text_input_active: self.session_services.osk_shell_text_input_active,
+            osk_gtk_theme: self.session_services.osk_gtk_theme.clone(),
             osk_preferred_output_name: self.session_services.osk_preferred_output_name.clone(),
             osk_layer_visible_on_preferred_output: self
                 .osk_layer_surface_visible_on_preferred_output_now(),

@@ -7,6 +7,7 @@ import fileBrowserGroup from './file-browser.spec.ts'
 import launcherMultimonitorGroup from './launcher-multimonitor.spec.ts'
 import nativeWindowsGroup from './native-windows.spec.ts'
 import notificationsGroup from './notifications.spec.ts'
+import oskThemeGroup from './osk-theme.spec.ts'
 import perfSmokeGroup from './perf-smoke.spec.ts'
 import restartInputGroup from './restart-input.spec.ts'
 import restartPersistenceGroup from './restart-persistence.spec.ts'
@@ -35,6 +36,7 @@ export const defaultGroups = [
   waylandProtocolsGroup,
   wleirdGroup,
   notificationsGroup,
+  oskThemeGroup,
   windowParityGroup,
   x11WindowsGroup,
   xdgActivationGroup,

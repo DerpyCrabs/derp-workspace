@@ -680,7 +680,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     state.spawnedShellWindowIds.add(tabOpened.imageWindowId)
-    const tabPerf = await getPerfCounters(base)
+    const tabPerf = await waitFor(
+      'wait for snapshot-authoritative tab open perf',
+      async () => {
+        const perf = await getPerfCounters(base)
+        return (perf.shell_runtime?.snapshot_apply_count ?? 0) >= 1 ? perf : null
+      },
+      3000,
+      100,
+    )
     assert(
       (tabPerf.shell_runtime?.snapshot_apply_count ?? 0) >= 1,
       `expected snapshot-authoritative tab open, got ${tabPerf.shell_runtime?.snapshot_apply_count ?? 0} applies`,
@@ -734,7 +742,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     state.spawnedShellWindowIds.add(splitOpened.imageWindowId)
-    const splitPerf = await getPerfCounters(base)
+    const splitPerf = await waitFor(
+      'wait for snapshot-authoritative split open perf',
+      async () => {
+        const perf = await getPerfCounters(base)
+        return (perf.shell_runtime?.snapshot_apply_count ?? 0) >= 1 ? perf : null
+      },
+      3000,
+      100,
+    )
     assert(
       (splitPerf.shell_runtime?.snapshot_apply_count ?? 0) >= 1,
       `expected snapshot-authoritative split open, got ${splitPerf.shell_runtime?.snapshot_apply_count ?? 0} applies`,

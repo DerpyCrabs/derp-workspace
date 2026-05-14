@@ -1359,7 +1359,7 @@ impl CompositorState {
                     crate::session::settings_config::ThemeSettingsFile,
                 >(value)
                 .map_err(|e| format!("invalid theme settings: {e}"))?;
-                crate::session::settings_config::write_theme_settings(settings)?;
+                self.apply_theme_settings(settings)?;
             }
             "cursor" => {
                 let settings = serde_json::from_value::<

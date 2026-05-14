@@ -48,6 +48,9 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
             .partition(|s| matches!(s.layer(), Layer::Background | Layer::Bottom));
 
         for surface in upper.into_iter() {
+            if !state.layer_surface_visible_during_render(surface.namespace()) {
+                continue;
+            }
             let Some(loc) = layer_map.layer_geometry(surface).map(|g| g.loc) else {
                 continue;
             };
@@ -131,6 +134,9 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
     }
 
     for surface in lower {
+        if !state.layer_surface_visible_during_render(surface.namespace()) {
+            continue;
+        }
         let Some(loc) = layer_map.layer_geometry(surface).map(|g| g.loc) else {
             continue;
         };

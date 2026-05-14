@@ -320,6 +320,45 @@ impl CompositorState {
         proxy.pending_capture = true;
     }
 
+    pub(crate) fn shell_move_proxy_prepare_native(&mut self, window_id: u32) {
+        if self
+            .input_routing
+            .shell_move_proxy
+            .as_ref()
+            .is_some_and(|proxy| proxy.window_id == window_id)
+        {
+            return;
+        }
+        let Some(info) = self.windows.window_registry.window_info(window_id) else {
+            self.input_routing.shell_move_proxy = None;
+            return;
+        };
+        if self.windows.window_registry.is_shell_hosted(window_id)
+            || !self.native_window_uses_shell_chrome(&info)
+        {
+            self.input_routing.shell_move_proxy = None;
+            return;
+        }
+        self.input_routing.shell_move_proxy = Some(ShellMoveProxyState {
+            window_id,
+            source_client_rect: Rectangle::new(
+                Point::from((info.x, info.y)),
+                Size::from((info.width.max(1), info.height.max(1))),
+            ),
+            source_global_rect: None,
+            texture_global_rect: None,
+            source_buffer_rect: None,
+            arm_after_shell_commit: None,
+            request_opaque_source: false,
+            pending_capture: false,
+            texture: None,
+            texture_id: Id::new(),
+            commit: CommitCounter::default(),
+            release_state: None,
+        });
+        self.shell_move_proxy_try_arm_capture();
+    }
+
     pub(crate) fn shell_move_proxy_target_global_rect(&self) -> Option<Rectangle<i32, Logical>> {
         let proxy = self.input_routing.shell_move_proxy.as_ref()?;
         let source_global_rect = proxy.source_global_rect?;
@@ -703,6 +742,7 @@ impl CompositorState {
                 (0, 0),
                 client_initiated,
             );
+            self.shell_move_proxy_prepare_native(window_id);
             self.shell_native_drag_preview_begin(window_id);
             self.shell_send_interaction_state();
             return;
@@ -731,6 +771,7 @@ impl CompositorState {
                 (0, 0),
                 client_initiated,
             );
+            self.shell_move_proxy_prepare_native(window_id);
             self.shell_native_drag_preview_begin(window_id);
             self.shell_send_interaction_state();
             return;
@@ -832,7 +873,7 @@ impl CompositorState {
             .map_element(DerpSpaceElem::X11(x11.clone()), after, true);
         self.refresh_x11_surface_fractional_scale(&x11);
         self.input_routing.shell_move_pending_delta = (0, 0);
-        self.emit_x11_window_updates(&x11, true, false);
+        let _ = self.sync_registry_from_x11_surface(&x11);
         self.shell_send_interaction_state();
         tracing::debug!(
             target: "derp_shell_move",

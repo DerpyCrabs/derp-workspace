@@ -2102,7 +2102,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
             const hiddenWindow = compositorWindowById(compositor, sourceTarget.windowId)
             const dragTarget = shell.tab_drag_target
             const targetGroup = tabGroupByWindow(shell, jsWindow.window.window_id)
-            if (!controls?.dragging || (controls.frame_opacity ?? 1) >= 0.99) return null
+            const nativePreviewLoaded =
+              controls?.native_drag_preview_rect != null &&
+              controls.native_drag_preview_loaded === true &&
+              compositor.shell_native_drag_preview_window_id === sourcePeerWindowId
+            if (!controls?.dragging) return null
+            if (!nativePreviewLoaded && (controls.frame_opacity ?? 1) >= 0.99) return null
             if (!sourceWindow || (sourceWindow.render_alpha ?? 1) >= 0.99) return null
             if (!hiddenWindow || hiddenWindow.workspace_visible !== false) return null
             if (compositor.shell_move_window_id !== sourcePeerWindowId) return null

@@ -206,6 +206,7 @@ export interface CompositorSnapshot {
   osk_visible?: boolean | null
   osk_text_input_visibility_allowed?: boolean
   osk_shell_text_input_active?: boolean
+  osk_gtk_theme?: string | null
   osk_preferred_output_name?: string | null
   osk_layer_visible_on_preferred_output?: boolean
   osk_layer_surfaces?: CompositorOskLayerSnapshot[]
@@ -372,7 +373,10 @@ export interface ShellControls {
   settings_tab_scratchpads?: Rect | null
   settings_tab_keyboard?: Rect | null
   settings_tab_notifications?: Rect | null
+  settings_tab_appearance?: Rect | null
   settings_vrr_toggle?: Rect | null
+  settings_theme_light?: Rect | null
+  settings_theme_dark?: Rect | null
   settings_taskbar_auto_hide_on?: Rect | null
   settings_taskbar_auto_hide_off?: Rect | null
   settings_taskbar_side_left?: Rect | null

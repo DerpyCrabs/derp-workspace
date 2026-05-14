@@ -118,4 +118,7 @@ pub(crate) fn handle_commit(state: &mut CompositorState, root: &WlSurface) {
     if !CompositorState::desktop_layer_surface_configured(&layer) {
         layer.layer_surface().send_configure();
     }
+    if CompositorState::osk_layer_namespace(layer.namespace()) {
+        state.reconcile_hidden_osk_layer_surfaces();
+    }
 }
