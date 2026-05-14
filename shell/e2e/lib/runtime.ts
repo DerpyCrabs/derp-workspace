@@ -1,4 +1,5 @@
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { watch, type FSWatcher } from 'node:fs'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -857,9 +858,11 @@ type TestTimingResult = {
   status: 'passed' | 'failed' | 'skipped'
   elapsedMs: number
   timings: TimingEvent[]
+  artifacts: string[]
 }
 
 let activeTimingSink: TimingEvent[] | null = null
+let activeArtifactSink: string[] | null = null
 let timingLogsEnabled = true
 
 function setActiveTimingSink(next: TimingEvent[] | null): void {
@@ -868,6 +871,14 @@ function setActiveTimingSink(next: TimingEvent[] | null): void {
 
 function recordTimingEvent(event: TimingEvent): void {
   activeTimingSink?.push(event)
+}
+
+function setActiveArtifactSink(next: string[] | null): void {
+  activeArtifactSink = next
+}
+
+function recordArtifactPath(filePath: string): void {
+  activeArtifactSink?.push(filePath)
 }
 
 export function setTimingLogsEnabled(enabled: boolean): void {
@@ -912,30 +923,33 @@ class Reporter {
     process.stdout.write(`  ${color(' RUN ', ANSI.bold, ANSI.black, ANSI.bgCyan)} ${color(`[${index}]`, ANSI.cyan)} ${name}\n`)
     const testStartedAt = Date.now()
     const timings: TimingEvent[] = []
+    const artifacts: string[] = []
     setActiveTimingSink(timings)
+    setActiveArtifactSink(artifacts)
     try {
       const value = await fn()
       const elapsedMs = Date.now() - testStartedAt
-      this.results.push({ groupName, name, status: 'passed', elapsedMs, timings })
+      this.results.push({ groupName, name, status: 'passed', elapsedMs, timings, artifacts })
       process.stdout.write(`  ${color(' PASS ', ANSI.bold, ANSI.green)} ${name} ${color(formatMs(elapsedMs), ANSI.dim)}\n`)
       this.printSlowTimings(timings)
       return value
     } catch (error) {
       const elapsedMs = Date.now() - testStartedAt
       if (error instanceof SkipError) {
-        this.results.push({ groupName, name, status: 'skipped', elapsedMs, timings })
+        this.results.push({ groupName, name, status: 'skipped', elapsedMs, timings, artifacts })
         process.stdout.write(
           `  ${color(' SKIP ', ANSI.bold, ANSI.yellow)} ${name} ${color(error.message, ANSI.dim)} ${color(formatMs(elapsedMs), ANSI.dim)}\n`,
         )
         this.printSlowTimings(timings)
         return null
       }
-      this.results.push({ groupName, name, status: 'failed', elapsedMs, timings })
+      this.results.push({ groupName, name, status: 'failed', elapsedMs, timings, artifacts })
       process.stdout.write(`  ${color(' FAIL ', ANSI.bold, ANSI.red)} ${name} ${color(formatMs(elapsedMs), ANSI.dim)}\n`)
       this.printSlowTimings(timings)
       throw error
     } finally {
       setActiveTimingSink(null)
+      setActiveArtifactSink(null)
     }
   }
 
@@ -962,6 +976,7 @@ class Reporter {
       status: result.status,
       elapsed_ms: result.elapsedMs,
       timings: result.timings,
+      artifacts: result.artifacts,
       slowest_timing:
         [...result.timings].sort((a, b) => b.elapsedMs - a.elapsedMs)[0] ?? null,
     }))
@@ -1237,6 +1252,14 @@ function syncTrackedWindows(state: E2eState, compositor: CompositorSnapshot): vo
   }
 }
 
+function e2eOwnedNativeWindow(window: WindowSnapshot): boolean {
+  if (window.shell_hosted) return false
+  if (window.app_id === NATIVE_APP_ID || window.app_id === X11_XTERM_APP_ID) return true
+  if (window.app_id.startsWith('derp.e2e')) return true
+  if (window.title.startsWith('Derp ') || window.title.startsWith('derp-')) return true
+  return false
+}
+
 function emptySessionStateBody(): Record<string, unknown> {
   return { version: 1, shell: {} }
 }
@@ -1272,6 +1295,7 @@ export async function primeState(
   state: E2eState,
   options: PrimeStateOptions = {},
 ): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+  const started = Date.now()
   if (!options.sessionRestore) {
     base = await disableSessionRestoreForE2e(base, state)
   }
@@ -1317,6 +1341,12 @@ export async function primeState(
       state.nativeLaunchByWindowId.delete(windowId)
     }
   }
+  recordTimingEvent({
+    kind: 'step',
+    label: 'primeState cleanup and normalization',
+    elapsedMs: Date.now() - started,
+    status: 'passed',
+  })
   return { compositor, shell }
 }
 
@@ -1357,7 +1387,7 @@ export async function discoverBase(): Promise<string> {
 
 export async function discoverReadyBase(timeoutMs = 15000): Promise<string> {
   const started = Date.now()
-  const timeout = abortAfter(timeoutMs)
+  const timeout = abortAfter(timeoutMs, true)
   let compositor = startCompositorEventStream()
   let lastError: unknown = null
   const evaluate = async () => {
@@ -1395,6 +1425,7 @@ export async function discoverReadyBase(timeoutMs = 15000): Promise<string> {
   } catch (error) {
     if (!timeout.signal.aborted) lastError = error
   } finally {
+    timeout.abort()
     compositor.child.kill('SIGTERM')
   }
   recordTimingEvent({
@@ -1895,6 +1926,118 @@ export async function waitForShellQuiet(base: string, quietMs: number, timeoutMs
   throw new Error(`wait for shell quiet: timed out after ${timeoutMs}ms`)
 }
 
+export async function readStatusJson<T>(filePath: string): Promise<T | null> {
+  try {
+    return JSON.parse(await readFile(filePath, 'utf8')) as T
+  } catch {
+    return null
+  }
+}
+
+export async function waitForFileValue<T>(
+  description: string,
+  filePath: string,
+  read: () => Promise<T | null>,
+  timeoutMs = 5000,
+  tick?: () => Promise<void>,
+): Promise<T> {
+  const started = Date.now()
+  let attempts = 0
+  let lastError: unknown = null
+  const evaluate = async () => {
+    attempts += 1
+    try {
+      await tick?.()
+    } catch {}
+    try {
+      const value = await read()
+      if (value) {
+        recordTimingEvent({
+          kind: 'wait',
+          label: description,
+          elapsedMs: Date.now() - started,
+          attempts,
+          status: 'passed',
+        })
+        return value
+      }
+    } catch (error) {
+      lastError = error
+    }
+    return null
+  }
+  const initial = await evaluate()
+  if (initial) return initial
+  const timeout = abortAfter(timeoutMs, true)
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    let pending = false
+    const watchers: FSWatcher[] = []
+    const finish = (value: T | Error) => {
+      if (settled) return
+      settled = true
+      timeout.signal.removeEventListener('abort', onAbort)
+      for (const watcher of watchers) watcher.close()
+      timeout.abort()
+      if (value instanceof Error) reject(value)
+      else resolve(value)
+    }
+    const trigger = () => {
+      if (pending || settled) return
+      pending = true
+      queueMicrotask(() => {
+        pending = false
+        void evaluate()
+          .then((value) => {
+            if (value) finish(value)
+          })
+          .catch((error) => {
+            lastError = error
+          })
+      })
+    }
+    const onAbort = () => {
+      recordTimingEvent({
+        kind: 'wait',
+        label: description,
+        elapsedMs: Date.now() - started,
+        attempts,
+        status: lastError ? 'errored' : 'timed_out',
+      })
+      finish(new Error(`${description}: timed out after ${timeoutMs}ms`))
+    }
+    try {
+      const dir = path.dirname(filePath)
+      const name = path.basename(filePath)
+      watchers.push(watch(dir, { persistent: false }, (_, changedName) => {
+        if (changedName && changedName.toString() !== name) return
+        trigger()
+      }))
+    } catch (error) {
+      lastError = error
+    }
+    timeout.signal.addEventListener('abort', onAbort, { once: true })
+    trigger()
+  })
+}
+
+export async function waitForStatusJson<T>(
+  filePath: string,
+  description: string,
+  predicate: (status: T) => boolean,
+  timeoutMs = 5000,
+): Promise<T> {
+  return waitForFileValue(
+    description,
+    filePath,
+    async () => {
+      const status = await readStatusJson<T>(filePath)
+      return status && predicate(status) ? status : null
+    },
+    timeoutMs,
+  )
+}
+
 export async function waitForCompositorQuiet(quietMs: number, timeoutMs = 5000): Promise<void> {
   const started = Date.now()
   const stream = startCompositorEventStream()
@@ -1914,11 +2057,26 @@ export async function waitForCompositorQuiet(quietMs: number, timeoutMs = 5000):
   throw new Error(`wait for compositor quiet: timed out after ${timeoutMs}ms`)
 }
 
-function abortAfter(timeoutMs: number): AbortController {
+function abortAfter(timeoutMs: number, keepRef = false): AbortController {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
-  timer.unref?.()
+  if (!keepRef) timer.unref?.()
+  controller.signal.addEventListener('abort', () => clearTimeout(timer), { once: true })
   return controller
+}
+
+export async function withTimeout<T>(description: string, promise: Promise<T>, timeoutMs = 5000): Promise<T> {
+  const timeout = abortAfter(timeoutMs, true)
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout.signal.addEventListener('abort', () => reject(new Error(`${description}: timed out after ${timeoutMs}ms`)), { once: true })
+      }),
+    ])
+  } finally {
+    timeout.abort()
+  }
 }
 
 export async function waitFor<T>(description: string, fn: () => Promise<T | null>, timeoutMs = 5000, _intervalMs = 50): Promise<T> {
@@ -1926,7 +2084,7 @@ export async function waitFor<T>(description: string, fn: () => Promise<T | null
   let lastError: unknown = null
   let attempts = 0
   const base = await discoverBase()
-  const timeout = abortAfter(timeoutMs)
+  const timeout = abortAfter(timeoutMs, true)
   let shellSeq = 0
   try {
     shellSeq = await shellEventSeq(base)
@@ -1979,6 +2137,7 @@ export async function waitFor<T>(description: string, fn: () => Promise<T | null
   } catch (error) {
     if (!timeout.signal.aborted) lastError = error
   } finally {
+    timeout.abort()
     compositor.child.kill('SIGTERM')
   }
   recordTimingEvent({
@@ -1989,26 +2148,54 @@ export async function waitFor<T>(description: string, fn: () => Promise<T | null
     status: lastError ? 'errored' : 'timed_out',
   })
   if (lastError) {
+    await captureWaitState(base, description, started, attempts, lastError)
     throw new Error(`${description}: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
   }
+  await captureWaitState(base, description, started, attempts, lastError)
   throw new Error(`${description}: timed out after ${timeoutMs}ms`)
+}
+
+async function captureWaitState(
+  base: string,
+  description: string,
+  started: number,
+  attempts: number,
+  lastError: unknown,
+): Promise<void> {
+  try {
+    const [compositor, shell] = await Promise.all([
+      getJson<CompositorSnapshot>(base, '/test/state/compositor'),
+      getJson<ShellSnapshot>(base, '/test/state/shell'),
+    ])
+    await writeJsonArtifact(`wait-timeout-${testLabel(description)}.json`, {
+      description,
+      elapsed_ms: Date.now() - started,
+      attempts,
+      last_error: lastError instanceof Error ? lastError.message : lastError ? String(lastError) : null,
+      compositor,
+      shell,
+    })
+  } catch {}
 }
 
 export async function writeJsonArtifact(name: string, value: unknown): Promise<string> {
   const filePath = artifactPath(name)
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`)
+  recordArtifactPath(filePath)
   return filePath
 }
 
 export async function writeTextArtifact(name: string, value: string): Promise<string> {
   const filePath = artifactPath(name)
   await writeFile(filePath, value)
+  recordArtifactPath(filePath)
   return filePath
 }
 
 export async function copyArtifactFile(name: string, sourcePath: string): Promise<string> {
   const filePath = artifactPath(name)
   await copyFile(sourcePath, filePath)
+  recordArtifactPath(filePath)
   return filePath
 }
 
@@ -3619,24 +3806,6 @@ async function closeWindowBestEffort(base: string, windowId: number): Promise<bo
   return false
 }
 
-async function reuseNativeWindow(base: string, state: E2eState, title: string): Promise<NativeSpawnResult | null> {
-  const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-  const matches = compositor.windows
-    .filter((window) => !window.shell_hosted && window.app_id === NATIVE_APP_ID && window.title === title)
-    .sort((a, b) => b.window_id - a.window_id)
-  if (matches.length === 0) return null
-  const keep = matches[0]
-  for (const extra of matches.slice(1)) {
-    await closeWindowBestEffort(base, extra.window_id)
-  }
-  state.knownWindowIds.add(keep.window_id)
-  await waitForTaskbarEntry(base, keep.window_id)
-  const snapshot = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-  const window = compositorWindowById(snapshot, keep.window_id)
-  if (!window) return null
-  return { snapshot, window, command: 'existing' }
-}
-
 export async function ensureNativeWindow(
   base: string,
   state: E2eState,
@@ -3650,11 +3819,12 @@ export async function ensureNativeWindow(
     await waitForTaskbarEntry(base, existing.window.window_id)
     return existing
   }
-  const reused = await reuseNativeWindow(base, state, options.title)
-  if (reused) {
-    state[key] = reused
-    state.spawnedNativeWindowIds.add(reused.window.window_id)
-    return reused
+  const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  const matches = compositor.windows.filter(
+    (window) => !window.shell_hosted && window.app_id === NATIVE_APP_ID && window.title === options.title,
+  )
+  for (const match of matches) {
+    await closeWindowBestEffort(base, match.window_id)
   }
   const spawned = await spawnNativeWindow(base, state.knownWindowIds, options)
   state[key] = spawned
@@ -3711,7 +3881,14 @@ export function findLauncherCandidate(apps: DesktopAppEntry[]): { query: string;
 }
 
 export async function cleanupNativeWindows(base: string, windowIds: Set<number>): Promise<void> {
-  for (const windowId of [...windowIds]) {
+  const ids = new Set(windowIds)
+  try {
+    const { compositor } = await getSnapshots(base)
+    for (const window of compositor.windows) {
+      if (e2eOwnedNativeWindow(window)) ids.add(window.window_id)
+    }
+  } catch {}
+  for (const windowId of [...ids]) {
     try {
       const { compositor } = await getSnapshots(base)
       if (!compositorWindowById(compositor, windowId)) {

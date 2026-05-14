@@ -20,6 +20,7 @@ import {
   waitForNativeFocus,
   waitForProgramsMenuClosed,
   waitForSpawnedWindow,
+  withTimeout,
   windowControls,
   writeJsonArtifact,
   type CompositorSnapshot,
@@ -123,17 +124,7 @@ class JsonLineReader {
 }
 
 async function nextEventLine(lines: JsonLineReader, label: string): Promise<string> {
-  let timer: NodeJS.Timeout | null = null
-  try {
-    return await Promise.race([
-      lines.next(),
-      new Promise<string>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`timed out waiting for ${label}`)), 5000)
-      }),
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
+  return withTimeout(`wait for ${label}`, lines.next(), 5000)
 }
 
 async function derpctl(args: string[]): Promise<DerpctlReply> {

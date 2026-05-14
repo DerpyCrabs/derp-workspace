@@ -361,9 +361,15 @@ impl CompositorState {
                         .toplevel_floating_restore
                         .contains_key(&window_id)
                     {
-                        if let Some(s) = self.toplevel_rect_snapshot(&window) {
-                            self.windows.toplevel_floating_restore.insert(window_id, s);
-                        }
+                        self.windows.toplevel_floating_restore.insert(
+                            window_id,
+                            (
+                                record.info.x,
+                                record.info.y,
+                                record.info.width.max(1),
+                                record.info.height.max(1),
+                            ),
+                        );
                     }
                 }
                 let _ = self
@@ -555,9 +561,10 @@ impl CompositorState {
                     .toplevel_floating_restore
                     .contains_key(&window_id)
                 {
-                    if let Some(s) = self.toplevel_rect_snapshot(&window) {
-                        self.windows.toplevel_floating_restore.insert(window_id, s);
-                    }
+                    self.windows.toplevel_floating_restore.insert(
+                        window_id,
+                        (info.x, info.y, info.width.max(1), info.height.max(1)),
+                    );
                 }
             }
             let (map_x, map_y, content_w, content_h) = (target_x, target_y, target_w, target_h);
@@ -1050,9 +1057,10 @@ impl CompositorState {
                         .toplevel_floating_restore
                         .contains_key(&window_id)
                     {
-                        if let Some(s) = self.toplevel_rect_snapshot(&window) {
-                            self.windows.toplevel_floating_restore.insert(window_id, s);
-                        }
+                        self.windows.toplevel_floating_restore.insert(
+                            window_id,
+                            (info.x, info.y, info.width.max(1), info.height.max(1)),
+                        );
                     }
                 }
                 if self.apply_toplevel_fullscreen_layout(&window, None) {
@@ -1169,9 +1177,10 @@ impl CompositorState {
                     .toplevel_floating_restore
                     .contains_key(&window_id)
                 {
-                    if let Some(s) = self.toplevel_rect_snapshot(&window) {
-                        self.windows.toplevel_floating_restore.insert(window_id, s);
-                    }
+                    self.windows.toplevel_floating_restore.insert(
+                        window_id,
+                        (info.x, info.y, info.width.max(1), info.height.max(1)),
+                    );
                 }
                 if self.apply_toplevel_maximize_layout(&window) {
                     self.shell_reply_window_list();

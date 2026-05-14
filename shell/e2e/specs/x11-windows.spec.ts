@@ -29,6 +29,7 @@ import {
   tapKey,
   waitForSpawnedWindow,
   waitFor,
+  waitForFileValue,
   waitForNativeFocus,
   waitForTaskbarEntry,
   waitForWindowGone,
@@ -57,26 +58,6 @@ async function middleClickPoint(base: string, x: number, y: number) {
 
 async function readTrimmed(path: string) {
   return (await readFile(path, 'utf8')).replace(/\r/g, '').trim()
-}
-
-async function waitForFileValue<T>(
-  description: string,
-  read: () => Promise<T | null>,
-  timeoutMs = 5000,
-  tick?: () => Promise<void>,
-): Promise<T> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      await tick?.()
-    } catch {}
-    try {
-      const value = await read()
-      if (value) return value
-    } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 40))
-  }
-  throw new Error(`${description}: timed out after ${timeoutMs}ms`)
 }
 
 function v2rayNWindow(shell: ShellSnapshot) {
@@ -292,24 +273,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
   test('clipboard copies from x11 clients into wayland clients', async ({ base, state }) => {
     const expected = `Derp X11 Clipboard ${Date.now()}`
-    const command = ['sh', '-lc', shellQuote(`printf %s ${shellQuote(expected)} | xclip -selection clipboard -loops 1 & TITLE=''; for _ in $(seq 1 120); do TITLE=$(wl-paste -n 2>/dev/null | tr -d '\\r\\n'); [ -n "$TITLE" ] && break; sleep 0.1; done; exec xterm -T "$TITLE" -class ${shellQuote(X11_XTERM_APP_ID)}`)].join(' ')
+    const command = ['sh', '-lc', shellQuote(`printf %s ${shellQuote(expected)} | xclip -selection clipboard -loops 1 & TITLE=$(wl-paste -n 2>/dev/null | tr -d '\\r\\n'); exec xterm -T "$TITLE" -class ${shellQuote(X11_XTERM_APP_ID)}`)].join(' ')
     await spawnCommand(base, command)
-    let probe
-    try {
-      probe = await waitForSpawnedWindow(base, state.knownWindowIds, {
-        title: expected,
-        appId: X11_XTERM_APP_ID,
-        command,
-        timeoutMs: 5000,
-      })
-    } catch (error) {
-      await writeJsonArtifact('x11-x11-to-wayland-clipboard-timeout.json', {
-        expected,
-        command,
-        error: String(error),
-      })
-      return
-    }
+    const probe = await waitForSpawnedWindow(base, state.knownWindowIds, {
+      title: expected,
+      appId: X11_XTERM_APP_ID,
+      command,
+      timeoutMs: 5000,
+    })
     assert(probe.window.title === expected, `expected wayland clipboard title ${expected}, got ${probe.window.title}`)
     await writeJsonArtifact('x11-x11-to-wayland-clipboard.json', {
       expected,
@@ -380,6 +351,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
       const actual = await waitForFileValue(
         'wait for wayland primary paste in x11',
+        outPath,
         async () => {
           try {
             const text = await readTrimmed(outPath)
@@ -484,6 +456,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       )
       const pastedStatus = await waitForFileValue(
         'wait for x11 primary paste status in wayland',
+        statusPath,
         async () => {
           const status = JSON.parse(await readFile(statusPath, 'utf8')) as { text?: string }
           return status.text?.replace(/\r/g, '').trim() === expected ? status : null

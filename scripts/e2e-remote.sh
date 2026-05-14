@@ -33,6 +33,49 @@ DERP_E2E_REMOTE_SNAPSHOT="$SCRIPT_DIR/.derp-e2e-remote-snapshot"
 DERP_E2E_SOFTWARE_SESSION="${DERP_E2E_SOFTWARE_RENDERING:-1}"
 DERP_E2E_VALIDATE_BACKUP="scripts/.derp-session.local.env.e2e-validate-backup"
 DERP_E2E_VALIDATE_HAD_ENV="scripts/.derp-session.local.env.e2e-validate-had-env"
+E2E_REMOTE_STARTED_AT="$(date +%s)"
+E2E_REMOTE_RAN_TESTS=0
+E2E_REMOTE_PHASES=()
+
+e2e_remote_now() {
+  date +%s
+}
+
+e2e_remote_record_phase() {
+  local label="$1"
+  local started="$2"
+  local finished elapsed
+  finished="$(e2e_remote_now)"
+  elapsed=$((finished - started))
+  E2E_REMOTE_PHASES+=("$label=${elapsed}s")
+  echo "=== phase ${label}: ${elapsed}s ==="
+}
+
+e2e_remote_fetch_artifacts() {
+  [[ "$E2E_REMOTE_RAN_TESTS" == "1" ]] || return 0
+  echo "=== fetch remote e2e artifacts ==="
+  bash "$SCRIPT_DIR/fetch-e2e-artifacts.sh" || true
+}
+
+e2e_remote_print_timings() {
+  local finished elapsed
+  finished="$(e2e_remote_now)"
+  elapsed=$((finished - E2E_REMOTE_STARTED_AT))
+  if [[ ${#E2E_REMOTE_PHASES[@]} -gt 0 ]]; then
+    printf '=== e2e-remote timings: total=%ss %s ===\n' "$elapsed" "${E2E_REMOTE_PHASES[*]}"
+  else
+    printf '=== e2e-remote timings: total=%ss ===\n' "$elapsed"
+  fi
+}
+
+e2e_remote_on_exit() {
+  local status=$?
+  trap - EXIT
+  e2e_remote_restore_session_env
+  e2e_remote_fetch_artifacts
+  e2e_remote_print_timings
+  exit "$status"
+}
 
 e2e_remote_restore_validate_env() {
   ssh_base bash -s <<EOF >/dev/null 2>&1 || true
@@ -118,7 +161,7 @@ fi
 EOF
 }
 
-trap e2e_remote_restore_session_env EXIT
+trap e2e_remote_on_exit EXIT
 
 e2e_remote_list_sync_paths() {
   (
@@ -179,19 +222,26 @@ elif [[ -f "$DERP_E2E_REMOTE_SNAPSHOT" && "$cur_build_digest" == "$snap_build_di
 fi
 
 echo "=== remote mkdir ==="
+phase_start="$(e2e_remote_now)"
 ssh_base mkdir -p "$REMOTE_REPO"
+e2e_remote_record_phase "remote_mkdir" "$phase_start"
 
 if [[ "$SKIP_SYNC" -eq 1 ]]; then
   echo "=== skip tar sync (same tree as last successful remote e2e run) ==="
+  E2E_REMOTE_PHASES+=("sync=0s")
 else
   echo "=== tar (gzip) $REPO_ROOT/ -> ${REMOTE_HOST}:$REMOTE_REPO/ ==="
+  phase_start="$(e2e_remote_now)"
   run_tar_sync
+  e2e_remote_record_phase "sync" "$phase_start"
 fi
 
 if [[ "$SKIP_BUILD" -eq 1 ]]; then
   echo "=== skip remote cargo build --release -p compositor -p derp-test-client ==="
+  E2E_REMOTE_PHASES+=("cargo_build=0s")
 else
   echo "=== remote cargo build --release -p compositor -p derp-test-client ==="
+  phase_start="$(e2e_remote_now)"
   ssh_base bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
@@ -199,10 +249,12 @@ cargo fetch
 bash scripts/patch-smithay-shell-osk.sh
 exec cargo build --release -p compositor -p derp-test-client
 EOF
+  e2e_remote_record_phase "cargo_build" "$phase_start"
 fi
 
 if [[ "$SKIP_SYNC" -eq 0 ]]; then
   echo "=== install compositor + derp-test-client to /usr/local (e2e) ==="
+  phase_start="$(e2e_remote_now)"
   ssh_base bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
@@ -210,12 +262,15 @@ sudo install -Dm755 target/release/compositor /usr/local/bin/compositor
 sudo install -Dm755 target/release/derpctl /usr/local/bin/derpctl
 sudo install -Dm755 target/release/derp-test-client /usr/local/bin/derp-test-client
 EOF
+  e2e_remote_record_phase "install_bins" "$phase_start"
 fi
 
 if [[ "$SKIP_SYNC" -eq 1 ]]; then
   echo "=== skip remote npm shell -> dist/ ==="
+  E2E_REMOTE_PHASES+=("shell_build=0s")
 else
   echo "=== remote npm shell -> dist/ ==="
+  phase_start="$(e2e_remote_now)"
   ssh_base bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
@@ -225,9 +280,11 @@ if [[ -f shell/package.json ]]; then
   exec npm run build
 fi
 EOF
+  e2e_remote_record_phase "shell_build" "$phase_start"
 fi
 
 echo "=== ensure remote wleird clients ==="
+phase_start="$(e2e_remote_now)"
 ssh_base bash -s <<'REMOTE'
 set -euo pipefail
 if command -v wleird-frame-callback >/dev/null 2>&1 \
@@ -248,9 +305,11 @@ meson setup build --prefix=/usr/local --wipe
 ninja -C build
 sudo ninja -C build install
 REMOTE
+e2e_remote_record_phase "wleird_clients" "$phase_start"
 
 if [[ "$DERP_E2E_SOFTWARE_SESSION" == "1" ]]; then
   echo "=== enable remote CEF software rendering for e2e ==="
+  phase_start="$(e2e_remote_now)"
   ssh_base bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
@@ -268,9 +327,11 @@ fi
 } >"\$env_file.tmp"
 mv "\$env_file.tmp" "\$env_file"
 EOF
+  e2e_remote_record_phase "software_session_env" "$phase_start"
 fi
 
 echo "=== enable compositor state validation for e2e ==="
+phase_start="$(e2e_remote_now)"
 ssh_base bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
@@ -289,6 +350,7 @@ fi
 } >"\$env_file.tmp"
 mv "\$env_file.tmp" "\$env_file"
 EOF
+e2e_remote_record_phase "validation_env" "$phase_start"
 
 echo "=== restart compositor (before e2e) ==="
 if [[ "$SESSION_RESTORE" -eq 0 ]]; then
@@ -300,6 +362,7 @@ mkdir -p "$state_dir"
 printf '{"version":1,"shell":{}}\n' >"$state_dir/session-state.json"
 REMOTE
 fi
+phase_start="$(e2e_remote_now)"
 ssh_base bash -s <<'REMOTE'
 set -euo pipefail
 runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -309,6 +372,7 @@ mkdir -p "$artifact_dir"
 pkill -u "$(id -un)" -x derp-test-client 2>/dev/null || true
 pkill -u "$(id -un)" -x xterm 2>/dev/null || true
 pkill -u "$(id -un)" -x gedit 2>/dev/null || true
+pkill -u "$(id -un)" -x foot 2>/dev/null || true
 pkill -u "$(id -un)" -x file-roller 2>/dev/null || true
 pkill -u "$(id -un)" -f '[w]leird-' 2>/dev/null || true
 mapfile -t pids < <(pgrep -u "$(id -un)" -x compositor || true)
@@ -378,11 +442,13 @@ done
 echo "e2e-remote: compositor did not publish a responsive shell HTTP base after restart." >&2
 exit 1
 REMOTE
+e2e_remote_record_phase "restart_compositor" "$phase_start"
 
 echo "=== clean leftover e2e clients ==="
+phase_start="$(e2e_remote_now)"
 ssh_base bash -s <<'REMOTE'
 set -euo pipefail
-for pattern in xterm gedit file-roller derp-test-client; do
+for pattern in xterm gedit file-roller derp-test-client foot; do
   pkill -u "$(id -un)" -x "$pattern" 2>/dev/null || true
 done
 pkill -u "$(id -un)" -f '[w]leird-' 2>/dev/null || true
@@ -390,6 +456,7 @@ deadline=$((SECONDS + 5))
 while (( SECONDS < deadline )); do
   if ! pgrep -u "$(id -un)" -x xterm >/dev/null 2>&1 \
     && ! pgrep -u "$(id -un)" -x gedit >/dev/null 2>&1 \
+    && ! pgrep -u "$(id -un)" -x foot >/dev/null 2>&1 \
     && ! pgrep -u "$(id -un)" -x file-roller >/dev/null 2>&1 \
     && ! pgrep -u "$(id -un)" -x derp-test-client >/dev/null 2>&1 \
     && ! pgrep -u "$(id -un)" -f '[w]leird-' >/dev/null 2>&1; then
@@ -398,17 +465,22 @@ while (( SECONDS < deadline )); do
 done
 pkill -KILL -u "$(id -un)" -x xterm 2>/dev/null || true
 pkill -KILL -u "$(id -un)" -x gedit 2>/dev/null || true
+pkill -KILL -u "$(id -un)" -x foot 2>/dev/null || true
 pkill -KILL -u "$(id -un)" -x file-roller 2>/dev/null || true
 pkill -KILL -u "$(id -un)" -x derp-test-client 2>/dev/null || true
 pkill -KILL -u "$(id -un)" -f '[w]leird-' 2>/dev/null || true
 REMOTE
+e2e_remote_record_phase "cleanup_clients" "$phase_start"
 
 echo "=== remote shell/e2e/run.mjs ==="
+E2E_REMOTE_RAN_TESTS=1
+phase_start="$(e2e_remote_now)"
 ssh_base bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
 $(printf '%s\n' "${remote_env[@]}")
 exec node shell/e2e/run.mjs ${remote_args_str}
 EOF
+e2e_remote_record_phase "e2e_tests" "$phase_start"
 
 printf '%s\n%s\n' "$cur_sync_digest" "$cur_build_digest" >"$DERP_E2E_REMOTE_SNAPSHOT"

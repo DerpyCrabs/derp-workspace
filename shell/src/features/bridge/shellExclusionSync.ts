@@ -305,13 +305,13 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
       !pendingExclusionStateWrite &&
       lastExclusionBase !== null &&
       lastExclusionFloating !== null &&
-      stamp === lastExclusionStamp &&
       overlayOpen === lastExclusionOverlayOpen &&
       sameTrayStrip(snapshot.tray_strip, lastExclusionTrayStrip) &&
       sameExclusionRectArray(mergedBase, lastExclusionBase) &&
       sameExclusionRectArray(floatingForPayload, lastExclusionFloating)
     ) {
       pendingExclusionStateWrite = false
+      lastExclusionStamp = stamp
       return
     }
     if (!writeShellExclusionState(mergedBase, snapshot.tray_strip, overlayOpen, floatingForPayload)) {

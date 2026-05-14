@@ -2719,8 +2719,13 @@ impl CompositorState {
                 layout_max = pending.maximized;
                 layout_fs = pending.fullscreen;
                 pending_output_name = Some(
-                    self.output_for_window_position(gx, gy, pending.width, pending.height)
-                        .unwrap_or(pending.output_name),
+                    self.output_for_window_position(
+                        pending.x,
+                        pending.y,
+                        pending.width,
+                        pending.height,
+                    )
+                    .unwrap_or(pending.output_name),
                 );
             }
         }
@@ -3047,8 +3052,14 @@ impl CompositorState {
         };
         let (geo, output) = {
             let o = self
-                .toplevel_rect_snapshot(window)
-                .and_then(|(x, y, w, h)| self.output_for_global_xywh(x, y, w, h))
+                .windows
+                .window_registry
+                .window_info(window_id)
+                .and_then(|info| self.shell_output_for_window_info(&info))
+                .or_else(|| {
+                    self.toplevel_rect_snapshot(window)
+                        .and_then(|(x, y, w, h)| self.output_for_global_xywh(x, y, w, h))
+                })
                 .or_else(|| self.leftmost_output());
             let Some(ref out) = o else {
                 return false;
@@ -3103,9 +3114,22 @@ impl CompositorState {
         window: &Window,
         wl_output_hint: Option<WlOutput>,
     ) -> bool {
+        let Some(tl) = window.toplevel() else {
+            return false;
+        };
+        let wl = tl.wl_surface();
+        let Some(window_id) = self.windows.window_registry.window_id_for_wl_surface(wl) else {
+            return false;
+        };
         let Some(sm_out) = wl_output_hint
             .as_ref()
             .and_then(Output::from_resource)
+            .or_else(|| {
+                self.windows
+                    .window_registry
+                    .window_info(window_id)
+                    .and_then(|info| self.shell_output_for_window_info(&info))
+            })
             .or_else(|| {
                 self.wayland_window_shell_rect_and_deco(window)
                     .and_then(|(gx, gy, gw, gh)| self.output_for_global_xywh(gx, gy, gw, gh))
@@ -3115,13 +3139,6 @@ impl CompositorState {
             return false;
         };
         let Some(geo) = self.output_topology.space.output_geometry(&sm_out) else {
-            return false;
-        };
-        let Some(tl) = window.toplevel() else {
-            return false;
-        };
-        let wl = tl.wl_surface();
-        let Some(window_id) = self.windows.window_registry.window_id_for_wl_surface(wl) else {
             return false;
         };
         self.windows

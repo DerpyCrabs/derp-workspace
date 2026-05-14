@@ -1,4 +1,3 @@
-import { watch } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createConnection } from "node:net";
@@ -29,6 +28,7 @@ import {
   pointerButton,
   pointerWheel,
   readPngRgba,
+  readStatusJson,
   rectCenter,
   shellQuote,
   shellWindowById,
@@ -46,6 +46,7 @@ import {
   waitForProgramsMenuClosed,
   waitForProgramsMenuOpen,
   waitForSpawnedWindow,
+  waitForStatusJson,
   waitForWindowGone,
   writeJsonArtifact,
   type CompositorSnapshot,
@@ -211,85 +212,6 @@ type XdgConfigureStatus = {
     minimize: boolean;
   };
 };
-
-async function readStatusJson<T>(filePath: string): Promise<T | null> {
-  try {
-    return JSON.parse(await readFile(filePath, "utf8")) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function waitForStatusJson<T>(
-  filePath: string,
-  description: string,
-  predicate: (status: T) => boolean,
-  timeoutMs = 5000,
-): Promise<T> {
-  const initial = await readStatusJson<T>(filePath);
-  if (initial && predicate(initial)) return initial;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      const finish = (value: T) => {
-        cleanup();
-        resolve(value);
-      };
-      const fail = (error: unknown) => {
-        cleanup();
-        reject(error);
-      };
-      const check = async () => {
-        const status = await readStatusJson<T>(filePath);
-        if (status && predicate(status)) finish(status);
-      };
-      const watcher = watch(filePath, { persistent: false }, () => {
-        void check().catch(fail);
-      });
-      const onAbort = () => fail(new Error(`${description}: timed out after ${timeoutMs}ms`));
-      const cleanup = () => {
-        clearTimeout(timer);
-        controller.signal.removeEventListener("abort", onAbort);
-        watcher.close();
-      };
-      controller.signal.addEventListener("abort", onAbort, { once: true });
-      void check().catch(fail);
-    });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      await new Promise<void>((resolve, reject) => {
-        const dir = path.dirname(filePath);
-        const name = path.basename(filePath);
-        const check = async () => {
-          const status = await readStatusJson<T>(filePath);
-          if (status && predicate(status)) {
-            cleanup();
-            resolve();
-          }
-        };
-        const watcher = watch(dir, { persistent: false }, (_, changedName) => {
-          if (changedName && changedName.toString() !== name) return;
-          void check().catch(reject);
-        });
-        const onAbort = () => {
-          cleanup();
-          reject(new Error(`${description}: timed out after ${timeoutMs}ms`));
-        };
-        const cleanup = () => {
-          clearTimeout(timer);
-          controller.signal.removeEventListener("abort", onAbort);
-          watcher.close();
-        };
-        controller.signal.addEventListener("abort", onAbort, { once: true });
-        void check().catch(reject);
-      });
-      const status = await readStatusJson<T>(filePath);
-      if (status && predicate(status)) return status;
-    }
-    throw error;
-  }
-}
 
 async function runLocalShell(command: string): Promise<TestRunCommandResult> {
   try {

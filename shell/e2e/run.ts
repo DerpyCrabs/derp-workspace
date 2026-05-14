@@ -127,8 +127,10 @@ async function main(): Promise<void> {
       try {
         for (const entry of group.tests) {
           currentTestName = entry.name
-          await primeState(state.base, state, { sessionRestore: args.sessionRestore })
-          await reporter.run(group.name, entry.name, () => entry.run({ base: state.base, state }))
+          await reporter.run(group.name, entry.name, async () => {
+            await primeState(state.base, state, { sessionRestore: args.sessionRestore })
+            return entry.run({ base: state.base, state })
+          })
         }
       } finally {
         reporter.finishGroup(group.name)

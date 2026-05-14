@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { watch } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +15,7 @@ import {
   shellQuote,
   syncTest,
   waitFor,
+  waitForFileValue,
   waitForWindowGone,
   writeJsonArtifact,
   type CompositorSnapshot,
@@ -55,47 +55,6 @@ async function readText(filePath: string): Promise<string | null> {
   } catch {
     return null;
   }
-}
-
-async function waitForTextFileIncludes(
-  description: string,
-  filePath: string,
-  needle: string,
-  timeoutMs: number,
-): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  const check = async () => {
-    const text = await readText(filePath);
-    return text?.includes(needle) ? text : null;
-  };
-  const initial = await check();
-  if (initial) return initial;
-  return await new Promise<string>((resolve, reject) => {
-    let settled = false;
-    const finish = (result: string | Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      watcher.close();
-      if (result instanceof Error) reject(result);
-      else resolve(result);
-    };
-    const retry = () => {
-      void check()
-        .then((result) => {
-          if (result) finish(result);
-        })
-        .catch(() => {});
-    };
-    const watcher = watch(path.dirname(filePath), (_event, filename) => {
-      if (filename?.toString() === path.basename(filePath)) retry();
-    });
-    const remaining = Math.max(0, deadline - Date.now());
-    const timer = setTimeout(() => {
-      finish(new Error(`${description}: timed out after ${timeoutMs}ms`));
-    }, remaining);
-    retry();
-  });
 }
 
 function windowForPid(
@@ -222,10 +181,13 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const probe = await spawnWleirdProcess(base, "surface-outputs");
     let windowId: number | null = null;
     try {
-      const initial = await waitForTextFileIncludes(
+      const initial = await waitForFileValue(
         "wait for wleird surface output report",
         probe.outputPath,
-        'Surface "toplevel":',
+        async () => {
+          const text = await readText(probe.outputPath);
+          return text?.includes('Surface "toplevel":') ? text : null;
+        },
         5000,
       );
       const compositor = await getJson<CompositorSnapshot>(

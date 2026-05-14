@@ -41,6 +41,13 @@ const allowedRawInputEndpoint = new Set([
 const allowedRawFloatingLayers = new Set(['shell-chrome.spec.ts'])
 const rawInputEndpoint = /['"]\/test\/input\//
 const rawFloatingLayers = /shell_floating_layers/
+const timingHacks = [
+  [/setTimeout\s*\(/, 'move timer-based waits into shared e2e runtime helpers'],
+  [/Date\.now\(\)\s*\+\s*\d+/, 'use event/file driven waits instead of Date.now deadline polling'],
+  [/new\s+Promise\s*\([^)]*setTimeout/s, 'use shared e2e runtime waits instead of promise sleep loops'],
+  [/\bsleep\s+0\./, 'remove subsecond shell sleeps from e2e specs'],
+  [/for\s+_\s+in\s+\$\(seq/, 'replace shell retry loops with event-driven probes'],
+]
 
 function files(dir) {
   const out = []
@@ -90,6 +97,11 @@ for (const file of files(specsDir)) {
   }
   if (rawFloatingLayers.test(source) && !allowedRawFloatingLayers.has(rel)) {
     failures.push(`${rel}: use floating layer helpers from ../lib/oracle.ts instead of reading shell_floating_layers directly`)
+  }
+  for (const [pattern, message] of timingHacks) {
+    if (pattern.test(source)) {
+      failures.push(`${rel}: ${message}`)
+    }
   }
 }
 
