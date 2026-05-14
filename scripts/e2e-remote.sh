@@ -9,7 +9,7 @@ require_remote_sync_tools
 remote_test_lock_acquire
 
 remote_env=()
-for name in DERP_E2E_BASE DERP_SHELL_HTTP_URL_FILE DERP_E2E_ARTIFACT_DIR DERP_E2E_NATIVE_BIN DERP_E2E_SPAWN_COMMAND; do
+for name in DERP_E2E_BASE DERP_SHELL_HTTP_URL_FILE DERP_E2E_ARTIFACT_DIR DERP_E2E_NATIVE_BIN DERP_E2E_SPAWN_COMMAND DERP_E2E_SYNTHETIC_LOAD DERP_E2E_SYNTHETIC_LOAD_WORKERS; do
   value="${!name:-}"
   if [[ -n "$value" ]]; then
     remote_env+=("export ${name}=$(printf '%q' "$value")")
@@ -479,7 +479,31 @@ ssh_base bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
 $(printf '%s\n' "${remote_env[@]}")
-exec node shell/e2e/run.mjs ${remote_args_str}
+synthetic_load_pids=()
+synthetic_load_stop() {
+  if (( \${#synthetic_load_pids[@]} > 0 )); then
+    kill "\${synthetic_load_pids[@]}" 2>/dev/null || true
+    wait "\${synthetic_load_pids[@]}" 2>/dev/null || true
+  fi
+}
+trap synthetic_load_stop EXIT
+if [[ "\${DERP_E2E_SYNTHETIC_LOAD:-0}" == "1" ]]; then
+  cpus="\$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '2')"
+  workers="\${DERP_E2E_SYNTHETIC_LOAD_WORKERS:-}"
+  if [[ -z "\$workers" ]]; then
+    if (( cpus > 2 )); then
+      workers=2
+    else
+      workers=1
+    fi
+  fi
+  for ((i = 0; i < workers; i += 1)); do
+    node -e 'let x=0;setInterval(()=>{},2147483647);for(;;){x+=Math.sqrt((x%997)+1);if(x>1e12)x=0}' &
+    synthetic_load_pids+=("\$!")
+  done
+  echo "e2e-remote: synthetic CPU load workers=\$workers"
+fi
+node shell/e2e/run.mjs ${remote_args_str}
 EOF
 e2e_remote_record_phase "e2e_tests" "$phase_start"
 

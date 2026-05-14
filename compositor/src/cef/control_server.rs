@@ -508,6 +508,18 @@ fn perf_counter_snapshot_json(browser: &Arc<Mutex<Option<Browser>>>) -> Result<S
     Ok(value.to_string())
 }
 
+fn set_shell_frame_sampling(
+    browser: &Arc<Mutex<Option<Browser>>>,
+    running: bool,
+) -> Result<(), String> {
+    let func = if running {
+        "__DERP_SHELL_PERF_FRAME_SAMPLE_START"
+    } else {
+        "__DERP_SHELL_PERF_FRAME_SAMPLE_STOP"
+    };
+    execute_shell_bridge_js(browser, format!("window.{func}&&window.{func}();"))
+}
+
 fn open_shell_test_window(browser: &Arc<Mutex<Option<Browser>>>) -> Result<(), String> {
     let request_id = e2e_bridge::next_request_id();
     execute_shell_bridge_js(
@@ -1350,6 +1362,12 @@ fn handle_one(
             browser,
             "window.__DERP_SHELL_PERF_RESET&&window.__DERP_SHELL_PERF_RESET();".to_string(),
         );
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/perf/frame-sample" {
+        set_shell_frame_sampling(browser, json_bool_field(&v, "running")?)?;
         write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }

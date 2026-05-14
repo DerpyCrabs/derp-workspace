@@ -179,6 +179,8 @@ declare global {
     __DERP_E2E_RESET_TILING_CONFIG_REQ?: (requestId: number) => void;
     __DERP_SHELL_PERF_SNAPSHOT?: () => Record<string, number>;
     __DERP_SHELL_PERF_RESET?: () => void;
+    __DERP_SHELL_PERF_FRAME_SAMPLE_START?: () => void;
+    __DERP_SHELL_PERF_FRAME_SAMPLE_STOP?: () => void;
     __DERP_BRIDGE_DEBUG?: Record<string, unknown>;
     __DERP_MOVE_DEBUG?: Record<string, unknown>;
   }

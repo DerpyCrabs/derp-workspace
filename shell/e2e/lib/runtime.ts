@@ -738,6 +738,12 @@ export interface PerfShellRuntimeSnapshot {
   batch_apply_ms: number
   batch_apply_details: number
   dom_measure_count: number
+  raf_sample_count: number
+  raf_sample_ms: number
+  raf_max_delta_ms: number
+  raf_over_17_count: number
+  raf_over_25_count: number
+  raf_over_50_count: number
 }
 
 export interface PerfLatencySnapshot {
@@ -1577,6 +1583,10 @@ export async function resetPerfCounters(base: string): Promise<void> {
   await postJson(base, '/test/perf/reset', {})
 }
 
+export async function setShellFrameSampling(base: string, running: boolean): Promise<void> {
+  await postJson(base, '/test/perf/frame-sample', { running })
+}
+
 export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounterSnapshot): PerfCounterSnapshot {
   const shellRuntime =
     after.shell_runtime && before.shell_runtime
@@ -1595,6 +1605,12 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
           batch_apply_ms: after.shell_runtime.batch_apply_ms - before.shell_runtime.batch_apply_ms,
           batch_apply_details: after.shell_runtime.batch_apply_details - before.shell_runtime.batch_apply_details,
           dom_measure_count: after.shell_runtime.dom_measure_count - before.shell_runtime.dom_measure_count,
+          raf_sample_count: after.shell_runtime.raf_sample_count - before.shell_runtime.raf_sample_count,
+          raf_sample_ms: after.shell_runtime.raf_sample_ms - before.shell_runtime.raf_sample_ms,
+          raf_max_delta_ms: after.shell_runtime.raf_max_delta_ms,
+          raf_over_17_count: after.shell_runtime.raf_over_17_count - before.shell_runtime.raf_over_17_count,
+          raf_over_25_count: after.shell_runtime.raf_over_25_count - before.shell_runtime.raf_over_25_count,
+          raf_over_50_count: after.shell_runtime.raf_over_50_count - before.shell_runtime.raf_over_50_count,
         }
       : undefined
   return {
