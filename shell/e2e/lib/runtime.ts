@@ -728,16 +728,29 @@ export interface PerfShellSyncSnapshot {
 }
 
 export interface PerfShellRuntimeSnapshot {
+  batch_decode_count: number
+  batch_decode_ms: number
+  batch_decode_details: number
+  batch_coalesce_dropped: number
+  snapshot_read_count: number
+  snapshot_read_ms: number
   snapshot_decode_count: number
   snapshot_decode_ms: number
   snapshot_decode_bytes: number
   snapshot_apply_count: number
   snapshot_apply_ms: number
   snapshot_apply_details: number
+  model_update_count: number
+  model_update_ms: number
+  interaction_apply_count: number
+  interaction_apply_ms: number
+  window_apply_count: number
+  window_apply_ms: number
   batch_apply_count: number
   batch_apply_ms: number
   batch_apply_details: number
   dom_measure_count: number
+  dom_measure_ms: number
   raf_sample_count: number
   raf_sample_ms: number
   raf_max_delta_ms: number
@@ -1610,6 +1623,16 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
   const shellRuntime =
     after.shell_runtime && before.shell_runtime
       ? {
+          batch_decode_count:
+            after.shell_runtime.batch_decode_count - before.shell_runtime.batch_decode_count,
+          batch_decode_ms: after.shell_runtime.batch_decode_ms - before.shell_runtime.batch_decode_ms,
+          batch_decode_details:
+            after.shell_runtime.batch_decode_details - before.shell_runtime.batch_decode_details,
+          batch_coalesce_dropped:
+            after.shell_runtime.batch_coalesce_dropped - before.shell_runtime.batch_coalesce_dropped,
+          snapshot_read_count:
+            after.shell_runtime.snapshot_read_count - before.shell_runtime.snapshot_read_count,
+          snapshot_read_ms: after.shell_runtime.snapshot_read_ms - before.shell_runtime.snapshot_read_ms,
           snapshot_decode_count:
             after.shell_runtime.snapshot_decode_count - before.shell_runtime.snapshot_decode_count,
           snapshot_decode_ms: after.shell_runtime.snapshot_decode_ms - before.shell_runtime.snapshot_decode_ms,
@@ -1620,10 +1643,21 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
           snapshot_apply_ms: after.shell_runtime.snapshot_apply_ms - before.shell_runtime.snapshot_apply_ms,
           snapshot_apply_details:
             after.shell_runtime.snapshot_apply_details - before.shell_runtime.snapshot_apply_details,
+          model_update_count:
+            after.shell_runtime.model_update_count - before.shell_runtime.model_update_count,
+          model_update_ms: after.shell_runtime.model_update_ms - before.shell_runtime.model_update_ms,
+          interaction_apply_count:
+            after.shell_runtime.interaction_apply_count - before.shell_runtime.interaction_apply_count,
+          interaction_apply_ms:
+            after.shell_runtime.interaction_apply_ms - before.shell_runtime.interaction_apply_ms,
+          window_apply_count:
+            after.shell_runtime.window_apply_count - before.shell_runtime.window_apply_count,
+          window_apply_ms: after.shell_runtime.window_apply_ms - before.shell_runtime.window_apply_ms,
           batch_apply_count: after.shell_runtime.batch_apply_count - before.shell_runtime.batch_apply_count,
           batch_apply_ms: after.shell_runtime.batch_apply_ms - before.shell_runtime.batch_apply_ms,
           batch_apply_details: after.shell_runtime.batch_apply_details - before.shell_runtime.batch_apply_details,
           dom_measure_count: after.shell_runtime.dom_measure_count - before.shell_runtime.dom_measure_count,
+          dom_measure_ms: after.shell_runtime.dom_measure_ms - before.shell_runtime.dom_measure_ms,
           raf_sample_count: after.shell_runtime.raf_sample_count - before.shell_runtime.raf_sample_count,
           raf_sample_ms: after.shell_runtime.raf_sample_ms - before.shell_runtime.raf_sample_ms,
           raf_max_delta_ms: after.shell_runtime.raf_max_delta_ms,

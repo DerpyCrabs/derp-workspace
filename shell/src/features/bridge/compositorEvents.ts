@@ -1,4 +1,5 @@
 import type { DerpShellDetail } from '@/host/appWindowState'
+import { noteShellBatchCoalesce, noteShellBatchDecode } from '@/features/bridge/shellPerfCounters'
 import {
   HOT_BATCH_MAGIC,
   HOT_DETAIL_FOCUS_CHANGED,
@@ -160,6 +161,23 @@ function decodeHotWindowGeometry(
   }
 }
 
+function hotCoalesceKey(detail: DerpShellDetail): string | null {
+  switch (detail.type) {
+    case 'window_geometry':
+      return `window_geometry:${detail.window_id}`
+    case 'window_state':
+      return `window_state:${detail.window_id}`
+    case 'focus_changed':
+      return 'focus_changed'
+    case 'window_order':
+      return 'window_order'
+    case 'interaction_state':
+      return 'interaction_state'
+    default:
+      return null
+  }
+}
+
 export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[] | null {
   const view = new DataView(buffer)
   if (view.byteLength < 8) return null
@@ -172,8 +190,18 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
     return null
   }
   const count = view.getUint32(4, true)
-  const details: DerpShellDetail[] = []
+  const details: Array<DerpShellDetail | null> = []
+  const lastByKey = new Map<string, number>()
   const cursor = { offset: 8 }
+  const pushDetail = (detail: DerpShellDetail) => {
+    const key = hotCoalesceKey(detail)
+    if (key !== null) {
+      const previous = lastByKey.get(key)
+      if (previous !== undefined) details[previous] = null
+      lastByKey.set(key, details.length)
+    }
+    details.push(detail)
+  }
   for (let index = 0; index < count; index += 1) {
     if (cursor.offset + 9 > view.byteLength) return null
     const tag = view.getUint8(cursor.offset)
@@ -183,7 +211,7 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
     if (tag === HOT_DETAIL_WINDOW_GEOMETRY) {
       const detail = decodeHotWindowGeometry(view, cursor, snapshot_epoch)
       if (detail === null) return null
-      details.push(detail)
+      pushDetail(detail)
       continue
     }
     if (tag === HOT_DETAIL_WINDOW_STATE) {
@@ -191,7 +219,7 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       const window_id = view.getUint32(cursor.offset, true)
       const minimized = view.getUint8(cursor.offset + 4) !== 0
       cursor.offset += 5
-      details.push({
+      pushDetail({
         type: 'window_state',
         window_id,
         minimized,
@@ -203,7 +231,7 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       if (cursor.offset + 4 > view.byteLength) return null
       const window_id = view.getUint32(cursor.offset, true)
       cursor.offset += 4
-      details.push({
+      pushDetail({
         type: 'window_unmapped',
         window_id,
         ...(snapshot_epoch > 0 ? { snapshot_epoch } : {}),
@@ -217,7 +245,7 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       const hasWindow = view.getUint8(cursor.offset + 5) !== 0
       const window_id = view.getUint32(cursor.offset + 6, true)
       cursor.offset += 10
-      details.push({
+      pushDetail({
         type: 'focus_changed',
         surface_id: hasSurface ? surface_id : null,
         window_id: hasWindow ? window_id : null,
@@ -239,7 +267,7 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
         })
         cursor.offset += 8
       }
-      details.push({
+      pushDetail({
         type: 'window_order',
         revision,
         windows,
@@ -263,7 +291,7 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       const interaction_serial = Number(view.getBigUint64(cursor.offset + 76, true))
       const super_held = view.getUint32(cursor.offset + 84, true) !== 0
       cursor.offset += HOT_DETAIL_INTERACTION_STATE_BYTES
-      details.push({
+      pushDetail({
         type: 'interaction_state',
         revision,
         interaction_serial,
@@ -284,7 +312,10 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
     }
     return null
   }
-  return cursor.offset === view.byteLength ? details : null
+  if (cursor.offset !== view.byteLength) return null
+  const out = details.filter((detail): detail is DerpShellDetail => detail !== null)
+  if (out.length !== details.length) noteShellBatchCoalesce(details.length - out.length)
+  return out
 }
 
 export function installCompositorBatchHandler(
@@ -298,11 +329,15 @@ export function installCompositorBatchHandler(
     handler(details)
   }
   const wrappedJson = (json: string) => {
+    const decodeStart = performance.now()
     const details = JSON.parse(json) as readonly DerpShellDetail[]
+    noteShellBatchDecode(performance.now() - decodeStart, details.length)
     wrapped(details)
   }
   const wrappedBinary = (buffer: ArrayBuffer) => {
+    const decodeStart = performance.now()
     const details = decodeCompositorHotBatch(buffer)
+    noteShellBatchDecode(performance.now() - decodeStart, details?.length ?? 0)
     if (details) wrapped(details)
   }
   window.__DERP_APPLY_COMPOSITOR_BATCH = wrapped

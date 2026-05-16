@@ -12,8 +12,13 @@ import { decodeCompositorSnapshot } from '@/features/bridge/compositorSnapshot'
 import {
   installShellRuntimePerfCounters,
   noteShellBatchApply,
+  noteShellBatchCoalesce,
+  noteShellInteractionApply,
+  noteShellModelUpdate,
+  noteShellSnapshotRead,
   noteShellSnapshotApply,
   noteShellSnapshotDecode,
+  noteShellWindowApply,
 } from '@/features/bridge/shellPerfCounters'
 import type { TraySniMenuEntry } from '@/host/createShellContextMenus'
 import { coerceShellWindowId, type DerpShellDetail, type DerpWindow } from '@/host/appWindowState'
@@ -94,6 +99,163 @@ function runtimeDetailSnapshotEpoch(detail: DerpShellDetail) {
   const raw = (detail as { snapshot_epoch?: unknown }).snapshot_epoch
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0
   return Math.max(0, Math.trunc(raw))
+}
+
+function sameInteractionVisual(
+  left: NonNullable<CompositorInteractionState>['move_rect'],
+  right: NonNullable<CompositorInteractionState>['move_rect'],
+): boolean {
+  if (left === right) return true
+  if (!left || !right) return false
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height &&
+    left.maximized === right.maximized &&
+    left.fullscreen === right.fullscreen
+  )
+}
+
+function sameInteractionState(left: CompositorInteractionState, right: CompositorInteractionState): boolean {
+  if (left === right) return true
+  if (!left || !right) return false
+  return (
+    left.revision === right.revision &&
+    left.interaction_serial === right.interaction_serial &&
+    left.pointer_x === right.pointer_x &&
+    left.pointer_y === right.pointer_y &&
+    left.move_window_id === right.move_window_id &&
+    left.resize_window_id === right.resize_window_id &&
+    left.move_proxy_window_id === right.move_proxy_window_id &&
+    left.move_capture_window_id === right.move_capture_window_id &&
+    left.super_held === right.super_held &&
+    left.window_switcher_selected_window_id === right.window_switcher_selected_window_id &&
+    sameInteractionVisual(left.move_rect, right.move_rect) &&
+    sameInteractionVisual(left.resize_rect, right.resize_rect)
+  )
+}
+
+function sameTaskbarSniItems(left: readonly TaskbarSniItem[], right: readonly TaskbarSniItem[]): boolean {
+  if (left === right) return true
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index += 1) {
+    const l = left[index]!
+    const r = right[index]!
+    if (l.id !== r.id || l.title !== r.title || l.icon_base64 !== r.icon_base64) return false
+  }
+  return true
+}
+
+function sameScreenList(left: readonly LayoutScreen[], right: readonly LayoutScreen[]): boolean {
+  if (left === right) return true
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index += 1) {
+    const l = left[index]!
+    const r = right[index]!
+    if (
+      l.name !== r.name ||
+      l.identity !== r.identity ||
+      l.x !== r.x ||
+      l.y !== r.y ||
+      l.width !== r.width ||
+      l.height !== r.height ||
+      l.usable_x !== r.usable_x ||
+      l.usable_y !== r.usable_y ||
+      l.usable_width !== r.usable_width ||
+      l.usable_height !== r.usable_height ||
+      l.physical_width !== r.physical_width ||
+      l.physical_height !== r.physical_height ||
+      l.transform !== r.transform ||
+      l.refresh_milli_hz !== r.refresh_milli_hz ||
+      l.vrr_supported !== r.vrr_supported ||
+      l.vrr_enabled !== r.vrr_enabled ||
+      l.taskbar_side !== r.taskbar_side
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
+function sameOutputTopology(left: CompositorOutputTopology | null, right: CompositorOutputTopology | null): boolean {
+  if (left === right) return true
+  if (!left || !right) return false
+  return (
+    left.revision === right.revision &&
+    left.logical?.w === right.logical?.w &&
+    left.logical?.h === right.logical?.h &&
+    left.physical?.w === right.physical?.w &&
+    left.physical?.h === right.physical?.h &&
+    left.origin?.x === right.origin?.x &&
+    left.origin?.y === right.origin?.y &&
+    left.uiScalePercent === right.uiScalePercent &&
+    left.shellChromePrimaryName === right.shellChromePrimaryName &&
+    left.taskbarAutoHide === right.taskbarAutoHide &&
+    sameScreenList(left.screens, right.screens)
+  )
+}
+
+function coalescedDetailKey(detail: DerpShellDetail): string | null {
+  switch (detail.type) {
+    case 'interaction_state':
+      return 'interaction_state'
+    case 'window_geometry':
+      return `window_geometry:${detail.window_id}`
+    case 'window_order':
+      return 'window_order'
+    case 'focus_changed':
+      return 'focus_changed'
+    case 'workspace_state':
+      return 'workspace_state'
+    case 'window_list':
+      return 'window_list'
+    case 'shell_hosted_app_state':
+      return 'shell_hosted_app_state'
+    case 'command_palette_state':
+      return 'command_palette_state'
+    case 'output_geometry':
+      return 'output_geometry'
+    case 'output_layout':
+      return 'output_layout'
+    case 'keyboard_layout':
+      return 'keyboard_layout'
+    case 'tray_hints':
+      return 'tray_hints'
+    case 'tray_sni':
+      return 'tray_sni'
+    case 'native_drag_preview':
+      return `native_drag_preview:${detail.window_id}`
+    case 'window_state':
+      return `window_state:${detail.window_id}`
+    case 'window_metadata':
+      return `window_metadata:${detail.window_id}`
+    default:
+      return null
+  }
+}
+
+function coalesceCompositorDetails(details: readonly DerpShellDetail[]): readonly DerpShellDetail[] {
+  if (details.length < 2) return details
+  const lastByKey = new Map<string, number>()
+  for (let index = 0; index < details.length; index += 1) {
+    const key = coalescedDetailKey(details[index]!)
+    if (key !== null) lastByKey.set(key, index)
+  }
+  if (lastByKey.size === 0) return details
+  const out: DerpShellDetail[] = []
+  let dropped = 0
+  for (let index = 0; index < details.length; index += 1) {
+    const detail = details[index]!
+    const key = coalescedDetailKey(detail)
+    if (key !== null && lastByKey.get(key) !== index) {
+      dropped += 1
+      continue
+    }
+    out.push(detail)
+  }
+  if (dropped > 0) noteShellBatchCoalesce(dropped)
+  return out.length === details.length ? details : out
 }
 
 type CompositorBridgeRuntimeOptions = {
@@ -217,6 +379,14 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   let lastInteractionRevision = -1
   let lastKnownInteractionState: CompositorInteractionState = null
   const removeShellRuntimePerfCounters = installShellRuntimePerfCounters()
+  let lastKeyboardLayoutLabel: string | null = null
+  let lastVolumeOverlay: { linear: number; muted: boolean; stateKnown: boolean } | null = null
+  let lastTrayVolumeState: { muted: boolean; volumePercent: number | null } = { muted: false, volumePercent: null }
+  let lastTrayReservedPx = -1
+  let lastTrayIconSlotPx = -1
+  let lastSniTrayItems: TaskbarSniItem[] = []
+  let lastOutputTopology: CompositorOutputTopology | null = null
+  let lastCompositorSnapshotSequenceSignal = -1
 
   const snapshotDomainOutputs = 1 << 0
   const snapshotDomainWindows = 1 << 1
@@ -306,23 +476,43 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
 
   const applyKeyboardLayoutDetail = (d: Extract<DerpShellDetail, { type: 'keyboard_layout' }>) => {
     const label = typeof d.label === 'string' ? d.label.trim() : ''
-    options.setKeyboardLayoutLabel(label.length > 0 ? label : null)
+    const next = label.length > 0 ? label : null
+    if (lastKeyboardLayoutLabel === next) return
+    lastKeyboardLayoutLabel = next
+    options.setKeyboardLayoutLabel(next)
   }
 
   const applyVolumeOverlayDetail = (d: Extract<DerpShellDetail, { type: 'volume_overlay' }>) => {
     if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
     const linRaw = d.volume_linear_percent_x100
     const lin = typeof linRaw === 'number' && Number.isFinite(linRaw) ? Math.max(0, linRaw) : 0
-    options.setVolumeOverlay({
+    const nextOverlay = {
       linear: lin,
       muted: !!d.muted,
       stateKnown: d.state_known !== false,
-    })
-    options.setTrayVolumeState({
+    }
+    if (
+      !lastVolumeOverlay ||
+      lastVolumeOverlay.linear !== nextOverlay.linear ||
+      lastVolumeOverlay.muted !== nextOverlay.muted ||
+      lastVolumeOverlay.stateKnown !== nextOverlay.stateKnown
+    ) {
+      lastVolumeOverlay = nextOverlay
+      options.setVolumeOverlay(nextOverlay)
+    }
+    const nextTrayVolume = {
       muted: !!d.muted,
       volumePercent: d.state_known === false ? null : Math.min(100, Math.round(lin / 100)),
-    })
+    }
+    if (
+      lastTrayVolumeState.muted !== nextTrayVolume.muted ||
+      lastTrayVolumeState.volumePercent !== nextTrayVolume.volumePercent
+    ) {
+      lastTrayVolumeState = nextTrayVolume
+      options.setTrayVolumeState(nextTrayVolume)
+    }
     volumeOverlayHideTimer = setTimeout(() => {
+      lastVolumeOverlay = null
       options.setVolumeOverlay(null)
       volumeOverlayHideTimer = undefined
     }, 2200)
@@ -331,12 +521,18 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
 
   const applyTrayHintsDetail = (d: Extract<DerpShellDetail, { type: 'tray_hints' }>) => {
     const rw = typeof d.reserved_w === 'number' && Number.isFinite(d.reserved_w) ? Math.max(0, d.reserved_w) : 0
-    options.setTrayReservedPx(rw)
+    if (lastTrayReservedPx !== rw) {
+      lastTrayReservedPx = rw
+      options.setTrayReservedPx(rw)
+    }
     const sw =
       typeof d.slot_w === 'number' && Number.isFinite(d.slot_w)
         ? Math.max(24, Math.min(64, Math.round(d.slot_w)))
         : 40
-    options.setTrayIconSlotPx(sw)
+    if (lastTrayIconSlotPx !== sw) {
+      lastTrayIconSlotPx = sw
+      options.setTrayIconSlotPx(sw)
+    }
     queueMicrotask(() => options.scheduleExclusionZonesSync())
   }
 
@@ -354,12 +550,16 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         }
       }
     }
-    options.setSniTrayItems(next)
+    if (!sameTaskbarSniItems(lastSniTrayItems, next)) {
+      lastSniTrayItems = next
+      options.setSniTrayItems(next)
+    }
     queueMicrotask(() => options.scheduleExclusionZonesSync())
   }
 
   const applyOutputGeometryDetail = (d: Extract<DerpShellDetail, { type: 'output_geometry' }>) => {
-    options.setOutputTopology((prev) => ({
+    const prev = lastOutputTopology
+    const next = {
       revision: prev?.revision ?? 0,
       logical: { w: d.logical_width, h: d.logical_height },
       physical: prev?.physical ?? null,
@@ -370,7 +570,11 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       screens: prev?.screens ?? [],
       shellChromePrimaryName: prev?.shellChromePrimaryName ?? null,
       taskbarAutoHide: prev?.taskbarAutoHide ?? false,
-    }))
+    }
+    if (!sameOutputTopology(prev, next)) {
+      lastOutputTopology = next
+      options.setOutputTopology(next)
+    }
     options.scheduleCompositorFollowup({ syncExclusion: true, flushWindows: true })
   }
 
@@ -415,7 +619,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       typeof d.shell_chrome_primary === 'string' && d.shell_chrome_primary.length > 0
         ? d.shell_chrome_primary
         : null
-    options.setOutputTopology({
+    const next = {
       revision: typeof d.revision === 'number' && Number.isFinite(d.revision) ? Math.trunc(d.revision) : 0,
       logical: { w: d.canvas_logical_width, h: d.canvas_logical_height },
       physical: {
@@ -430,7 +634,11 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       screens,
       shellChromePrimaryName: pr,
       taskbarAutoHide: d.taskbar_auto_hide === true,
-    })
+    }
+    if (!sameOutputTopology(lastOutputTopology, next)) {
+      lastOutputTopology = next
+      options.setOutputTopology(next)
+    }
     ;(window as Window & { __DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION?: number }).__DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION =
       typeof d.revision === 'number' && Number.isFinite(d.revision) ? Math.trunc(d.revision) : 0
     options.scheduleCompositorFollowup({
@@ -441,6 +649,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   }
 
   const applyInteractionStateDetail = (d: Extract<DerpShellDetail, { type: 'interaction_state' }>) => {
+    const applyStart = performance.now()
     const revision = typeof d.revision === 'number' && Number.isFinite(d.revision) ? Math.trunc(d.revision) : 0
     if (revision < lastInteractionRevision) return
     lastInteractionRevision = revision
@@ -466,10 +675,15 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     const previousActiveWindowId =
       lastKnownInteractionState?.move_window_id ?? lastKnownInteractionState?.resize_window_id ?? null
     const nextActiveWindowId = nextInteractionState.move_window_id ?? nextInteractionState.resize_window_id ?? null
+    if (sameInteractionState(lastKnownInteractionState, nextInteractionState)) {
+      noteShellInteractionApply(performance.now() - applyStart)
+      return
+    }
     options.setCompositorInteractionState(nextInteractionState)
     lastKnownInteractionState = nextInteractionState
     if (previousActiveWindowId !== null || nextActiveWindowId !== null) {
     }
+    noteShellInteractionApply(performance.now() - applyStart)
   }
 
   const applyNativeDragPreviewDetail = (d: Extract<DerpShellDetail, { type: 'native_drag_preview' }>) => {
@@ -553,7 +767,8 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   }
 
   const applyCompositorSnapshot = (details: readonly DerpShellDetail[], domainFlags: number) => {
-    const skipOutputGeometry = details.some((detail) => detail.type === 'output_layout')
+    const coalescedDetails = coalesceCompositorDetails(details)
+    const skipOutputGeometry = coalescedDetails.some((detail) => detail.type === 'output_layout')
     let sawWindowList = false
     let sawWindowOrder = false
     let sawFocus = false
@@ -566,8 +781,13 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     let sawNativeDragPreview = false
     let sawTray = false
     batch(() => {
-      if (details.length > 0) options.applyModelAuthoritativeSnapshotDetails(details)
-      for (const detail of details) {
+      if (coalescedDetails.length > 0) {
+        const modelStart = performance.now()
+        options.applyModelAuthoritativeSnapshotDetails(coalescedDetails)
+        noteShellModelUpdate(performance.now() - modelStart)
+      }
+      const windowStart = performance.now()
+      for (const detail of coalescedDetails) {
         if (detail.type === 'window_list') {
           sawWindowList = true
           continue
@@ -595,13 +815,18 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       if ((domainFlags & snapshotDomainCommandPalette) !== 0 && !sawCommandPalette) clears.commandPalette = true
       if (Object.keys(clears).length > 0) options.clearModelAuthoritativeSnapshotDomains(clears)
       if ((domainFlags & snapshotDomainOutputs) !== 0 && !sawOutput) {
+        lastOutputTopology = null
         options.setOutputTopology(null)
         ;(window as Window & { __DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION?: number }).__DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION = 0
       }
       if ((domainFlags & snapshotDomainKeyboard) !== 0 && !sawKeyboard) {
+        lastKeyboardLayoutLabel = null
         options.setKeyboardLayoutLabel(null)
       }
       if ((domainFlags & snapshotDomainTray) !== 0 && !sawTray) {
+        lastTrayReservedPx = 0
+        lastTrayIconSlotPx = 36
+        lastSniTrayItems = []
         options.setTrayReservedPx(0)
         options.setTrayIconSlotPx(36)
         options.setSniTrayItems([])
@@ -614,6 +839,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         options.setNativeDragPreview(null)
       }
       if (sawWindowList) options.markHasSeenCompositorWindowSync()
+      noteShellWindowApply(performance.now() - windowStart)
     })
     if (sawWindowList) options.clearWindowSyncRecoveryPending()
     const clearedChromeAffectingDomain =
@@ -635,7 +861,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       options.bumpSnapChrome()
       options.shellWireSend('invalidate_view')
     }
-    scheduleCompositorVisualFollowup(details)
+    scheduleCompositorVisualFollowup(coalescedDetails)
   }
 
   const keybindTargetWindowId = (d: Extract<DerpShellDetail, { type: 'keybind' }>, focusedWindowId: number | null) =>
@@ -785,25 +1011,26 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const applyCompositorBatch = (details: readonly DerpShellDetail[]) => {
     if (details.length === 0) return
     const applyStart = performance.now()
+    const coalescedDetails = coalesceCompositorDetails(details)
     batch(() => {
-      const hasSnapshotState = details.some(detailIsSnapshotState)
+      const hasSnapshotState = coalescedDetails.some(detailIsSnapshotState)
       if (hasSnapshotState) {
         const synced = syncCompositorSnapshot()
-        if (!synced) scheduleCompositorVisualFollowup(details.filter(detailIsSnapshotState))
+        if (!synced) scheduleCompositorVisualFollowup(coalescedDetails.filter(detailIsSnapshotState))
         bridgeDebug({
           last_drop: {
             reason: synced ? 'snapshot_state_batch_replaced_by_snapshot' : 'snapshot_state_batch_waiting_for_snapshot',
             type: 'batch',
-            snapshot_epoch: Math.max(0, ...details.map(detailSnapshotEpoch)),
+            snapshot_epoch: Math.max(0, ...coalescedDetails.map(detailSnapshotEpoch)),
             sequence: lastSnapshotSequence,
           },
         })
       }
-      for (const detail of details) {
+      for (const detail of coalescedDetails) {
         if (!detailIsSnapshotState(detail)) applyCompositorDetail(detail)
       }
     })
-    noteShellBatchApply(performance.now() - applyStart, details.length)
+    noteShellBatchApply(performance.now() - applyStart, coalescedDetails.length)
   }
 
   const syncCompositorSnapshot = (force = false) => {
@@ -813,6 +1040,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (typeof readSnapshot !== 'function') return false
     const readSnapshotIfChanged = window.__derpCompositorSnapshotReadIfChanged
     let raw: ArrayBuffer | null = null
+    const readStart = performance.now()
     if (!force && typeof readSnapshotIfChanged === 'function') {
       raw = readSnapshotIfChanged(path, lastSnapshotSequence)
     } else if (!force) {
@@ -827,6 +1055,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     } else {
       raw = readSnapshot(path)
     }
+    noteShellSnapshotRead(performance.now() - readStart)
     if (!(raw instanceof ArrayBuffer)) return false
     const decodeStart = performance.now()
     const decoded = decodeCompositorSnapshot(raw)
@@ -862,7 +1091,10 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     }
     lastSnapshotSequence = decoded.sequence
     markCompositorStateEpoch(decoded.sequence)
-    options.setCompositorSnapshotSequence(decoded.sequence)
+    if (lastCompositorSnapshotSequenceSignal !== decoded.sequence) {
+      lastCompositorSnapshotSequenceSignal = decoded.sequence
+      options.setCompositorSnapshotSequence(decoded.sequence)
+    }
     ;(window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE =
       decoded.sequence
     ;(window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS =

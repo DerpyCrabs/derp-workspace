@@ -1,3 +1,5 @@
+import { noteShellDomMeasure } from './shellPerfCounters'
+
 export type ShellMeasureEnv = {
   main: HTMLElement
   outputGeom: { w: number; h: number }
@@ -7,14 +9,16 @@ export type ShellMeasureEnv = {
 export type ShellMeasureFrame = ShellMeasureEnv & {
   mainRect: DOMRect
 }
-
 let activeFrame: ShellMeasureFrame | null = null
 
 export function createShellMeasureFrame(env: ShellMeasureEnv | null): ShellMeasureFrame | null {
   if (!env) return null
+  const start = performance.now()
+  const mainRect = env.main.getBoundingClientRect()
+  noteShellDomMeasure(1, performance.now() - start)
   return {
     ...env,
-    mainRect: env.main.getBoundingClientRect(),
+    mainRect,
   }
 }
 

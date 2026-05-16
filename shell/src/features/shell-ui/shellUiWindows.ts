@@ -164,8 +164,9 @@ export function shellUiWindowMeasureFromEnv(
   const el = root
   const env = frame ?? currentShellMeasureFrame() ?? createShellMeasureFrame(getEnv())
   if (!el || !env) return null
-  noteShellDomMeasure()
+  const measureStart = performance.now()
   const r = el.getBoundingClientRect()
+  noteShellDomMeasure(1, performance.now() - measureStart)
   if (r.width < 1 || r.height < 1) return null
   const logical = clientRectToGlobalLogical(env.mainRect, r, env.outputGeom.w, env.outputGeom.h, env.origin)
   return {

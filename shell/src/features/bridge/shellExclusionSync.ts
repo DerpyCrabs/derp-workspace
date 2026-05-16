@@ -134,8 +134,9 @@ function readShellExclusionRegistry(frame: ShellMeasureFrame) {
 
 function measureElement(frame: ShellMeasureFrame, el: Element): ShellExclusionRect | null {
   if (!el.isConnected) return null
-  noteShellDomMeasure()
+  const measureStart = performance.now()
   const r = el.getBoundingClientRect()
+  noteShellDomMeasure(1, performance.now() - measureStart)
   if (r.width < 1 || r.height < 1) return null
   const z = clientRectToGlobalLogical(frame.mainRect, r, frame.outputGeom.w, frame.outputGeom.h, frame.origin)
   return { x: z.x, y: z.y, w: z.w, h: z.h }
