@@ -1,6 +1,8 @@
 import {
   BTN_LEFT,
+  KEY,
   assert,
+  clickRect,
   defineGroup,
   getJson,
   getPerfCounters,
@@ -10,6 +12,7 @@ import {
   resetPerfCounters,
   setShellFrameSampling,
   spawnNativeWindow,
+  tapKey,
   waitForCompositorQuiet,
   writeJsonArtifact,
   type PerfCounterSnapshot,
@@ -46,6 +49,7 @@ function startCpuLoad(durationMs: number): { workerCount: number; stop: () => Pr
 function summarizePerf(perf: PerfCounterSnapshot) {
   const raf = perf.shell_runtime
   const avgRafDeltaMs = raf && raf.raf_sample_count > 0 ? raf.raf_sample_ms / raf.raf_sample_count : 0
+  const avg = (total: number, count: number) => (count > 0 ? Math.round(total / count) : 0)
   return {
     raf_sample_count: raf?.raf_sample_count ?? 0,
     raf_avg_delta_ms: Math.round(avgRafDeltaMs * 1000) / 1000,
@@ -63,7 +67,47 @@ function summarizePerf(perf: PerfCounterSnapshot) {
     dom_measure_count: raf?.dom_measure_count ?? 0,
     schedule_to_render_max_us: perf.latency.schedule_to_render_max_us,
     dirty_rect_max_coverage_per_mille: perf.dirty_rects.max_coverage_per_mille,
+    action_renderer_to_browser_count: perf.shell_bridge.action_renderer_to_browser_count,
+    action_renderer_to_browser_avg_us: avg(
+      perf.shell_bridge.action_renderer_to_browser_us,
+      perf.shell_bridge.action_renderer_to_browser_count,
+    ),
+    action_renderer_to_browser_max_us: perf.shell_bridge.action_renderer_to_browser_max_us,
+    action_browser_to_compositor_count: perf.shell_bridge.action_browser_to_compositor_count,
+    action_browser_to_compositor_avg_us: avg(
+      perf.shell_bridge.action_browser_to_compositor_us,
+      perf.shell_bridge.action_browser_to_compositor_count,
+    ),
+    action_browser_to_compositor_max_us: perf.shell_bridge.action_browser_to_compositor_max_us,
+    state_compositor_to_ui_count: perf.shell_bridge.state_compositor_to_ui_count,
+    state_compositor_to_ui_avg_us: avg(
+      perf.shell_bridge.state_compositor_to_ui_us,
+      perf.shell_bridge.state_compositor_to_ui_count,
+    ),
+    state_compositor_to_ui_max_us: perf.shell_bridge.state_compositor_to_ui_max_us,
+    state_browser_to_renderer_count: perf.shell_bridge.state_browser_to_renderer_count,
+    state_browser_to_renderer_avg_us: avg(
+      perf.shell_bridge.state_browser_to_renderer_us,
+      perf.shell_bridge.state_browser_to_renderer_count,
+    ),
+    state_browser_to_renderer_max_us: perf.shell_bridge.state_browser_to_renderer_max_us,
+    state_renderer_apply_count: perf.shell_bridge.state_renderer_apply_count,
+    state_renderer_apply_avg_us: avg(
+      perf.shell_bridge.state_renderer_apply_us,
+      perf.shell_bridge.state_renderer_apply_count,
+    ),
+    state_renderer_apply_max_us: perf.shell_bridge.state_renderer_apply_max_us,
   }
+}
+
+async function closeProgramsMenuIfOpen(base: string): Promise<ShellSnapshot> {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  if (shell.programs_menu_open) {
+    await tapKey(base, KEY.escape)
+  }
+  const closed = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  assert(!closed.programs_menu_open, 'expected programs menu to be closed')
+  return closed
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
@@ -122,5 +166,42 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
     assert(summary.raf_sample_count >= 3, `expected RAF frame samples during loaded drag, got ${summary.raf_sample_count}`)
     assert(summary.drm_render_ticks > 0, `expected compositor render ticks during loaded drag, got ${summary.drm_render_ticks}`)
+  })
+
+  test('captures shell action latency under CPU load', async ({ base }) => {
+    const initial = await closeProgramsMenuIfOpen(base)
+    assert(initial.controls.taskbar_programs_toggle, 'missing programs toggle')
+    await resetPerfCounters(base)
+    const load = startCpuLoad(2500)
+    try {
+      for (let index = 0; index < 8; index += 1) {
+        const closed = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        assert(!closed.programs_menu_open, `programs menu unexpectedly open before cycle ${index}`)
+        assert(closed.controls.taskbar_programs_toggle, 'missing programs toggle')
+        await clickRect(base, closed.controls.taskbar_programs_toggle)
+        const opened = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        assert(opened.programs_menu_open, `programs menu did not open in cycle ${index}`)
+        await tapKey(base, KEY.escape)
+        const nextClosed = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        assert(!nextClosed.programs_menu_open, `programs menu did not close in cycle ${index}`)
+      }
+    } finally {
+      await load.stop()
+    }
+    const perf = await getPerfCounters(base)
+    const summary = summarizePerf(perf)
+    await writeJsonArtifact('shell-action-load-perf.json', {
+      load_workers: load.workerCount,
+      summary,
+      perf,
+    })
+    assert(
+      summary.action_browser_to_compositor_count >= 16,
+      `expected shell actions to reach compositor, got ${summary.action_browser_to_compositor_count}`,
+    )
+    assert(
+      summary.state_browser_to_renderer_count > 0,
+      `expected state updates to reach renderer, got ${summary.state_browser_to_renderer_count}`,
+    )
   })
 })

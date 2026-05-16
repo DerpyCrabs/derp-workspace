@@ -11,6 +11,7 @@ use crate::cef::shell_snapshot;
 use crate::cef::uplink::UplinkToCompositor;
 
 pub const PROCESS_MESSAGE_NAME: &str = "derp_shell_uplink";
+const PERF_SENT_AT_ARG: usize = 31;
 
 pub(crate) fn cef_string_userfree_to_string(s: &CefStringUserfreeUtf16) -> String {
     CefStringUtf8::from(&CefStringUtf16::from(s)).to_string()
@@ -45,6 +46,27 @@ fn send_snapshot_perf(frame: &Frame, kind: &str, payload_len: usize) {
     let _ = list.set_string(1, Some(&CefString::from(kind)));
     let _ = list.set_int(2, payload_len.min(i32::MAX as usize) as i32);
     frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+}
+
+fn send_bridge_perf(frame: &Frame, kind: &str, value_us: u64) {
+    let Some(mut msg) = process_message_create(Some(&CefString::from(PROCESS_MESSAGE_NAME))) else {
+        return;
+    };
+    let Some(list) = msg.argument_list() else {
+        return;
+    };
+    let _ = list.set_string(0, Some(&CefString::from("bridge_perf")));
+    let _ = list.set_string(1, Some(&CefString::from(kind)));
+    let _ = list.set_double(2, value_us as f64);
+    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+}
+
+fn elapsed_since_unix_micros(sent_at_us: u64) -> u64 {
+    if sent_at_us == 0 {
+        0
+    } else {
+        crate::cef::begin_frame_diag::unix_micros_now().saturating_sub(sent_at_us)
+    }
 }
 
 fn read_shared_u32(payload: &[u8], offset: usize) -> u32 {
@@ -169,8 +191,10 @@ fn handle_downlink_process_message(frame: &Frame, message: &ProcessMessage) -> b
         return true;
     };
     let op = cef_string_userfree_to_string(&args.string(0));
+    let sent_at_us = args.double(PERF_SENT_AT_ARG).max(0.0) as u64;
     match op.as_str() {
         "batch_hot" => {
+            send_bridge_perf(frame, "state_ipc", elapsed_since_unix_micros(sent_at_us));
             let Some(binary) = args.binary(1) else {
                 return true;
             };
@@ -179,14 +203,17 @@ fn handle_downlink_process_message(frame: &Frame, message: &ProcessMessage) -> b
             };
             let mut buffer_arg =
                 v8_value_create_array_buffer_with_copy(bytes.as_ptr() as *mut u8, bytes.len());
+            let start = Instant::now();
             let _ = call_global_function(
                 frame,
                 "__DERP_APPLY_COMPOSITOR_BATCH_BINARY",
                 &[buffer_arg.take()],
             );
+            send_bridge_perf(frame, "state_apply", start.elapsed().as_micros() as u64);
             true
         }
         "batch_json" => {
+            send_bridge_perf(frame, "state_ipc", elapsed_since_unix_micros(sent_at_us));
             let Some(binary) = args.binary(1) else {
                 return true;
             };
@@ -197,6 +224,7 @@ fn handle_downlink_process_message(frame: &Frame, message: &ProcessMessage) -> b
                 return true;
             };
             let mut json_arg = v8_value_create_string(Some(&CefString::from(json.as_str())));
+            let start = Instant::now();
             if !call_global_function(
                 frame,
                 "__DERP_APPLY_COMPOSITOR_BATCH_JSON",
@@ -208,9 +236,12 @@ fn handle_downlink_process_message(frame: &Frame, message: &ProcessMessage) -> b
                 );
                 frame.execute_java_script(Some(&CefString::from(code.as_str())), None, 0);
             }
+            send_bridge_perf(frame, "state_apply", start.elapsed().as_micros() as u64);
             true
         }
         "snapshot_notify" => {
+            send_bridge_perf(frame, "state_ipc", elapsed_since_unix_micros(sent_at_us));
+            let start = Instant::now();
             if !call_global_function(frame, "__DERP_SYNC_COMPOSITOR_SNAPSHOT", &[]) {
                 frame.execute_java_script(
                     Some(&CefString::from(
@@ -220,6 +251,7 @@ fn handle_downlink_process_message(frame: &Frame, message: &ProcessMessage) -> b
                     0,
                 );
             }
+            send_bridge_perf(frame, "state_apply", start.elapsed().as_micros() as u64);
             true
         }
         _ => true,
@@ -271,6 +303,11 @@ fn handle_uplink_list(
     args: &ListValue,
 ) {
     let op = cef_string_userfree_to_string(&args.string(0));
+    if op != "bridge_perf" {
+        crate::cef::begin_frame_diag::note_shell_action_renderer_to_browser(
+            args.double(PERF_SENT_AT_ARG).max(0.0) as u64,
+        );
+    }
     match op.as_str() {
         "close" => {
             let wid = args.int(1) as u32;
@@ -534,6 +571,21 @@ fn handle_uplink_list(
             let payload_len = args.int(2).max(0) as usize;
             match kind.as_str() {
                 "full" => crate::cef::begin_frame_diag::note_shell_snapshot_read(payload_len),
+                _ => {}
+            }
+        }
+        "bridge_perf" => {
+            let kind = cef_string_userfree_to_string(&args.string(1));
+            let value_us = args.double(2).max(0.0) as u64;
+            match kind.as_str() {
+                "state_ipc" => {
+                    crate::cef::begin_frame_diag::note_shell_state_browser_to_renderer_duration_us(
+                        value_us,
+                    )
+                }
+                "state_apply" => crate::cef::begin_frame_diag::note_shell_state_renderer_apply(
+                    Duration::from_micros(value_us),
+                ),
                 _ => {}
             }
         }
@@ -1296,6 +1348,10 @@ wrap_v8_handler! {
                 }
             }
 
+            let _ = list.set_double(
+                PERF_SENT_AT_ARG,
+                crate::cef::begin_frame_diag::unix_micros_now() as f64,
+            );
             self.frame
                 .send_process_message(ProcessId::BROWSER, Some(&mut msg));
             1

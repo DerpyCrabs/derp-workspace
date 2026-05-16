@@ -61,10 +61,26 @@ async function sendNativeNotification(summary: string, body: string) {
   ])
 }
 
+async function ensureNotificationsEnabled(base: string, shell: ShellSnapshot): Promise<ShellSnapshot> {
+  if (shell.notifications?.enabled !== false) return shell
+  assert(shell.controls?.settings_notifications_enable, 'missing notifications enable control')
+  await clickRect(base, shell.controls.settings_notifications_enable)
+  return waitFor(
+    'wait for notifications enabled',
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return next.notifications?.enabled === true ? next : null
+    },
+    5000,
+    100,
+  )
+}
+
 export default defineGroup(import.meta.url, ({ test }) => {
   test('shell notifications render, invoke action, and land in history', async ({ base }) => {
     await openSettings(base, 'click')
-    await switchSettingsPage(base, 'settings_tab_notifications', 'notifications')
+    const shell = await switchSettingsPage(base, 'settings_tab_notifications', 'notifications')
+    await ensureNotificationsEnabled(base, shell)
 
     await postJson(base, '/notifications_shell', {
       app_name: 'Shell E2E',
@@ -121,18 +137,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       'notifications',
     )
 
-    if (shell.notifications?.enabled === false && shell.controls?.settings_notifications_enable) {
-      await clickRect(base, shell.controls.settings_notifications_enable)
-      shell = await waitFor(
-        'wait for notifications enabled',
-        async () => {
-          const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-          return next.notifications?.enabled === true ? next : null
-        },
-        5000,
-        100,
-      )
-    }
+    shell = await ensureNotificationsEnabled(base, shell)
 
     await sendNativeNotification('Native visible notification', 'dbus visible')
 

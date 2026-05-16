@@ -767,12 +767,31 @@ export interface PerfDirtyRectSnapshot {
   empty_count: number
 }
 
+export interface PerfShellBridgeSnapshot {
+  action_renderer_to_browser_count: number
+  action_renderer_to_browser_us: number
+  action_renderer_to_browser_max_us: number
+  action_browser_to_compositor_count: number
+  action_browser_to_compositor_us: number
+  action_browser_to_compositor_max_us: number
+  state_compositor_to_ui_count: number
+  state_compositor_to_ui_us: number
+  state_compositor_to_ui_max_us: number
+  state_browser_to_renderer_count: number
+  state_browser_to_renderer_us: number
+  state_browser_to_renderer_max_us: number
+  state_renderer_apply_count: number
+  state_renderer_apply_us: number
+  state_renderer_apply_max_us: number
+}
+
 export interface PerfCounterSnapshot {
   begin_frame: PerfBeginFrameSnapshot
   shell_updates: PerfShellUpdateSnapshot
   shell_sync: PerfShellSyncSnapshot
   latency: PerfLatencySnapshot
   dirty_rects: PerfDirtyRectSnapshot
+  shell_bridge: PerfShellBridgeSnapshot
   shell_runtime?: PerfShellRuntimeSnapshot
 }
 
@@ -1687,6 +1706,48 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
       bbox_full_count: after.dirty_rects.bbox_full_count - before.dirty_rects.bbox_full_count,
       missing_count: after.dirty_rects.missing_count - before.dirty_rects.missing_count,
       empty_count: after.dirty_rects.empty_count - before.dirty_rects.empty_count,
+    },
+    shell_bridge: {
+      action_renderer_to_browser_count:
+        after.shell_bridge.action_renderer_to_browser_count - before.shell_bridge.action_renderer_to_browser_count,
+      action_renderer_to_browser_us:
+        after.shell_bridge.action_renderer_to_browser_us - before.shell_bridge.action_renderer_to_browser_us,
+      action_renderer_to_browser_max_us:
+        after.shell_bridge.action_renderer_to_browser_count > before.shell_bridge.action_renderer_to_browser_count
+          ? after.shell_bridge.action_renderer_to_browser_max_us
+          : 0,
+      action_browser_to_compositor_count:
+        after.shell_bridge.action_browser_to_compositor_count - before.shell_bridge.action_browser_to_compositor_count,
+      action_browser_to_compositor_us:
+        after.shell_bridge.action_browser_to_compositor_us - before.shell_bridge.action_browser_to_compositor_us,
+      action_browser_to_compositor_max_us:
+        after.shell_bridge.action_browser_to_compositor_count > before.shell_bridge.action_browser_to_compositor_count
+          ? after.shell_bridge.action_browser_to_compositor_max_us
+          : 0,
+      state_compositor_to_ui_count:
+        after.shell_bridge.state_compositor_to_ui_count - before.shell_bridge.state_compositor_to_ui_count,
+      state_compositor_to_ui_us:
+        after.shell_bridge.state_compositor_to_ui_us - before.shell_bridge.state_compositor_to_ui_us,
+      state_compositor_to_ui_max_us:
+        after.shell_bridge.state_compositor_to_ui_count > before.shell_bridge.state_compositor_to_ui_count
+          ? after.shell_bridge.state_compositor_to_ui_max_us
+          : 0,
+      state_browser_to_renderer_count:
+        after.shell_bridge.state_browser_to_renderer_count - before.shell_bridge.state_browser_to_renderer_count,
+      state_browser_to_renderer_us:
+        after.shell_bridge.state_browser_to_renderer_us - before.shell_bridge.state_browser_to_renderer_us,
+      state_browser_to_renderer_max_us:
+        after.shell_bridge.state_browser_to_renderer_count > before.shell_bridge.state_browser_to_renderer_count
+          ? after.shell_bridge.state_browser_to_renderer_max_us
+          : 0,
+      state_renderer_apply_count:
+        after.shell_bridge.state_renderer_apply_count - before.shell_bridge.state_renderer_apply_count,
+      state_renderer_apply_us:
+        after.shell_bridge.state_renderer_apply_us - before.shell_bridge.state_renderer_apply_us,
+      state_renderer_apply_max_us:
+        after.shell_bridge.state_renderer_apply_count > before.shell_bridge.state_renderer_apply_count
+          ? after.shell_bridge.state_renderer_apply_max_us
+          : 0,
     },
     ...(shellRuntime ? { shell_runtime: shellRuntime } : {}),
   }

@@ -4,6 +4,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
+use std::time::Instant;
 
 use cef::{
     post_task, rc::Rc, wrap_task, Browser, ImplBrowser, ImplBrowserHost, ImplTask,
@@ -29,6 +30,7 @@ struct PendingCompositorMessages {
 pub(crate) struct PendingCompositorMessage {
     pub(crate) snapshot_epoch: u64,
     pub(crate) msg: shell_wire::DecodedCompositorToShellMessage,
+    queued_at: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -254,6 +256,16 @@ wrap_task! {
                     std::mem::take(&mut guard.snapshot_epoch),
                 )
             };
+            let now = Instant::now();
+            for pending in urgent_messages
+                .iter()
+                .chain(messages.iter())
+                .chain(snapshot_messages.iter())
+            {
+                crate::cef::begin_frame_diag::note_shell_state_compositor_to_ui(
+                    now.saturating_duration_since(pending.queued_at),
+                );
+            }
             if !urgent_messages.is_empty() {
                 compositor_downlink::apply_messages(urgent_messages, &self.browser_holder, &self.view_state);
             }
@@ -368,6 +380,7 @@ impl ShellToCefLink {
                     guard.snapshot.push(PendingCompositorMessage {
                         snapshot_epoch: 0,
                         msg: snapshot_msg,
+                        queued_at: Instant::now(),
                     });
                 }
             }
@@ -377,6 +390,7 @@ impl ShellToCefLink {
             let pending = PendingCompositorMessage {
                 snapshot_epoch: msg_epoch.unwrap_or_default(),
                 msg,
+                queued_at: Instant::now(),
             };
             if pending_message_is_urgent_input(&pending.msg) {
                 guard.urgent.push_urgent_input(pending);
@@ -462,6 +476,7 @@ mod tests {
         let mut queue = PendingCompositorMessageQueue::default();
         queue.push(PendingCompositorMessage {
             snapshot_epoch: 2,
+            queued_at: std::time::Instant::now(),
             msg: shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
                 window_id: 7,
                 surface_id: 70,
@@ -486,6 +501,7 @@ mod tests {
         });
         queue.push(PendingCompositorMessage {
             snapshot_epoch: 4,
+            queued_at: std::time::Instant::now(),
             msg: shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
                 window_id: 7,
                 surface_id: 70,
@@ -524,10 +540,12 @@ mod tests {
         let mut queue = PendingCompositorMessageQueue::default();
         queue.push(PendingCompositorMessage {
             snapshot_epoch: 0,
+            queued_at: std::time::Instant::now(),
             msg: shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle,
         });
         queue.push(PendingCompositorMessage {
             snapshot_epoch: 0,
+            queued_at: std::time::Instant::now(),
             msg: shell_wire::DecodedCompositorToShellMessage::ContextMenuDismiss,
         });
 
@@ -555,6 +573,7 @@ mod tests {
         let mut queue = PendingCompositorMessageQueue::default();
         queue.push_urgent_input(PendingCompositorMessage {
             snapshot_epoch: 0,
+            queued_at: std::time::Instant::now(),
             msg: shell_wire::DecodedCompositorToShellMessage::PointerMove {
                 x: 10,
                 y: 20,
@@ -563,6 +582,7 @@ mod tests {
         });
         queue.push_urgent_input(PendingCompositorMessage {
             snapshot_epoch: 0,
+            queued_at: std::time::Instant::now(),
             msg: shell_wire::DecodedCompositorToShellMessage::PointerMove {
                 x: 30,
                 y: 40,
@@ -571,6 +591,7 @@ mod tests {
         });
         queue.push_urgent_input(PendingCompositorMessage {
             snapshot_epoch: 0,
+            queued_at: std::time::Instant::now(),
             msg: shell_wire::DecodedCompositorToShellMessage::PointerButton {
                 x: 30,
                 y: 40,
@@ -582,6 +603,7 @@ mod tests {
         });
         queue.push_urgent_input(PendingCompositorMessage {
             snapshot_epoch: 0,
+            queued_at: std::time::Instant::now(),
             msg: shell_wire::DecodedCompositorToShellMessage::PointerMove {
                 x: 50,
                 y: 60,

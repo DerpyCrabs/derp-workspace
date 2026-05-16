@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static COMPOSITOR_SCHEDULE: AtomicU64 = AtomicU64::new(0);
 static COMPOSITOR_SCHEDULE_IDLE: AtomicU64 = AtomicU64::new(0);
@@ -48,6 +48,21 @@ static SHELL_DIRTY_RECT_MAX_COVERAGE_PER_MILLE: AtomicU64 = AtomicU64::new(0);
 static SHELL_DIRTY_RECT_BBOX_FULL: AtomicU64 = AtomicU64::new(0);
 static SHELL_DIRTY_RECT_MISSING: AtomicU64 = AtomicU64::new(0);
 static SHELL_DIRTY_RECT_EMPTY: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_RENDERER_TO_BROWSER_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_RENDERER_TO_BROWSER_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_RENDERER_TO_BROWSER_MAX_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_BROWSER_TO_COMPOSITOR_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_BROWSER_TO_COMPOSITOR_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_BROWSER_TO_COMPOSITOR_MAX_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_STATE_COMPOSITOR_TO_UI_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_STATE_COMPOSITOR_TO_UI_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_STATE_COMPOSITOR_TO_UI_MAX_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_STATE_BROWSER_TO_RENDERER_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_STATE_BROWSER_TO_RENDERER_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_STATE_BROWSER_TO_RENDERER_MAX_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_STATE_RENDERER_APPLY_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_STATE_RENDERER_APPLY_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_STATE_RENDERER_APPLY_MAX_US: AtomicU64 = AtomicU64::new(0);
 static LATENCY: Mutex<LatencyTrace> = Mutex::new(LatencyTrace::new());
 
 #[derive(Clone, Copy, Debug)]
@@ -124,6 +139,7 @@ pub(crate) struct PerfCounterSnapshot {
     shell_sync: ShellSyncSnapshot,
     latency: ShellLatencySnapshot,
     dirty_rects: ShellDirtyRectSnapshot,
+    shell_bridge: ShellBridgeSnapshot,
 }
 
 #[derive(serde::Serialize)]
@@ -190,6 +206,25 @@ struct ShellDirtyRectSnapshot {
     bbox_full_count: u64,
     missing_count: u64,
     empty_count: u64,
+}
+
+#[derive(serde::Serialize)]
+struct ShellBridgeSnapshot {
+    action_renderer_to_browser_count: u64,
+    action_renderer_to_browser_us: u64,
+    action_renderer_to_browser_max_us: u64,
+    action_browser_to_compositor_count: u64,
+    action_browser_to_compositor_us: u64,
+    action_browser_to_compositor_max_us: u64,
+    state_compositor_to_ui_count: u64,
+    state_compositor_to_ui_us: u64,
+    state_compositor_to_ui_max_us: u64,
+    state_browser_to_renderer_count: u64,
+    state_browser_to_renderer_us: u64,
+    state_browser_to_renderer_max_us: u64,
+    state_renderer_apply_count: u64,
+    state_renderer_apply_us: u64,
+    state_renderer_apply_max_us: u64,
 }
 
 pub(crate) fn note_shell_view_invalidate(reason: ShellViewInvalidateReason) {
@@ -334,6 +369,53 @@ pub(crate) fn note_shell_dmabuf_rx(width: u32, height: u32) {
     }
 }
 
+pub(crate) fn unix_micros_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_micros().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or_default()
+}
+
+pub(crate) fn note_shell_action_renderer_to_browser(sent_at_us: u64) {
+    if sent_at_us == 0 {
+        return;
+    }
+    let elapsed = unix_micros_now().saturating_sub(sent_at_us);
+    SHELL_ACTION_RENDERER_TO_BROWSER_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_ACTION_RENDERER_TO_BROWSER_US.fetch_add(elapsed, Ordering::Relaxed);
+    SHELL_ACTION_RENDERER_TO_BROWSER_MAX_US.fetch_max(elapsed, Ordering::Relaxed);
+}
+
+pub(crate) fn note_shell_action_browser_to_compositor(duration: Duration) {
+    let us = duration.as_micros().min(u128::from(u64::MAX)) as u64;
+    SHELL_ACTION_BROWSER_TO_COMPOSITOR_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_ACTION_BROWSER_TO_COMPOSITOR_US.fetch_add(us, Ordering::Relaxed);
+    SHELL_ACTION_BROWSER_TO_COMPOSITOR_MAX_US.fetch_max(us, Ordering::Relaxed);
+}
+
+pub(crate) fn note_shell_state_compositor_to_ui(duration: Duration) {
+    let us = duration.as_micros().min(u128::from(u64::MAX)) as u64;
+    SHELL_STATE_COMPOSITOR_TO_UI_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_STATE_COMPOSITOR_TO_UI_US.fetch_add(us, Ordering::Relaxed);
+    SHELL_STATE_COMPOSITOR_TO_UI_MAX_US.fetch_max(us, Ordering::Relaxed);
+}
+
+pub(crate) fn note_shell_state_browser_to_renderer_duration_us(elapsed: u64) {
+    if elapsed == 0 {
+        return;
+    }
+    SHELL_STATE_BROWSER_TO_RENDERER_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_STATE_BROWSER_TO_RENDERER_US.fetch_add(elapsed, Ordering::Relaxed);
+    SHELL_STATE_BROWSER_TO_RENDERER_MAX_US.fetch_max(elapsed, Ordering::Relaxed);
+}
+
+pub(crate) fn note_shell_state_renderer_apply(duration: Duration) {
+    let us = duration.as_micros().min(u128::from(u64::MAX)) as u64;
+    SHELL_STATE_RENDERER_APPLY_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_STATE_RENDERER_APPLY_US.fetch_add(us, Ordering::Relaxed);
+    SHELL_STATE_RENDERER_APPLY_MAX_US.fetch_max(us, Ordering::Relaxed);
+}
+
 pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
     PerfCounterSnapshot {
         begin_frame: BeginFrameSnapshot {
@@ -398,6 +480,34 @@ pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
             missing_count: SHELL_DIRTY_RECT_MISSING.load(Ordering::Relaxed),
             empty_count: SHELL_DIRTY_RECT_EMPTY.load(Ordering::Relaxed),
         },
+        shell_bridge: ShellBridgeSnapshot {
+            action_renderer_to_browser_count: SHELL_ACTION_RENDERER_TO_BROWSER_COUNT
+                .load(Ordering::Relaxed),
+            action_renderer_to_browser_us: SHELL_ACTION_RENDERER_TO_BROWSER_US
+                .load(Ordering::Relaxed),
+            action_renderer_to_browser_max_us: SHELL_ACTION_RENDERER_TO_BROWSER_MAX_US
+                .load(Ordering::Relaxed),
+            action_browser_to_compositor_count: SHELL_ACTION_BROWSER_TO_COMPOSITOR_COUNT
+                .load(Ordering::Relaxed),
+            action_browser_to_compositor_us: SHELL_ACTION_BROWSER_TO_COMPOSITOR_US
+                .load(Ordering::Relaxed),
+            action_browser_to_compositor_max_us: SHELL_ACTION_BROWSER_TO_COMPOSITOR_MAX_US
+                .load(Ordering::Relaxed),
+            state_compositor_to_ui_count: SHELL_STATE_COMPOSITOR_TO_UI_COUNT
+                .load(Ordering::Relaxed),
+            state_compositor_to_ui_us: SHELL_STATE_COMPOSITOR_TO_UI_US.load(Ordering::Relaxed),
+            state_compositor_to_ui_max_us: SHELL_STATE_COMPOSITOR_TO_UI_MAX_US
+                .load(Ordering::Relaxed),
+            state_browser_to_renderer_count: SHELL_STATE_BROWSER_TO_RENDERER_COUNT
+                .load(Ordering::Relaxed),
+            state_browser_to_renderer_us: SHELL_STATE_BROWSER_TO_RENDERER_US
+                .load(Ordering::Relaxed),
+            state_browser_to_renderer_max_us: SHELL_STATE_BROWSER_TO_RENDERER_MAX_US
+                .load(Ordering::Relaxed),
+            state_renderer_apply_count: SHELL_STATE_RENDERER_APPLY_COUNT.load(Ordering::Relaxed),
+            state_renderer_apply_us: SHELL_STATE_RENDERER_APPLY_US.load(Ordering::Relaxed),
+            state_renderer_apply_max_us: SHELL_STATE_RENDERER_APPLY_MAX_US.load(Ordering::Relaxed),
+        },
     }
 }
 
@@ -453,6 +563,21 @@ pub(crate) fn reset_perf_counters() {
     SHELL_DIRTY_RECT_BBOX_FULL.store(0, Ordering::Relaxed);
     SHELL_DIRTY_RECT_MISSING.store(0, Ordering::Relaxed);
     SHELL_DIRTY_RECT_EMPTY.store(0, Ordering::Relaxed);
+    SHELL_ACTION_RENDERER_TO_BROWSER_COUNT.store(0, Ordering::Relaxed);
+    SHELL_ACTION_RENDERER_TO_BROWSER_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_RENDERER_TO_BROWSER_MAX_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_BROWSER_TO_COMPOSITOR_COUNT.store(0, Ordering::Relaxed);
+    SHELL_ACTION_BROWSER_TO_COMPOSITOR_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_BROWSER_TO_COMPOSITOR_MAX_US.store(0, Ordering::Relaxed);
+    SHELL_STATE_COMPOSITOR_TO_UI_COUNT.store(0, Ordering::Relaxed);
+    SHELL_STATE_COMPOSITOR_TO_UI_US.store(0, Ordering::Relaxed);
+    SHELL_STATE_COMPOSITOR_TO_UI_MAX_US.store(0, Ordering::Relaxed);
+    SHELL_STATE_BROWSER_TO_RENDERER_COUNT.store(0, Ordering::Relaxed);
+    SHELL_STATE_BROWSER_TO_RENDERER_US.store(0, Ordering::Relaxed);
+    SHELL_STATE_BROWSER_TO_RENDERER_MAX_US.store(0, Ordering::Relaxed);
+    SHELL_STATE_RENDERER_APPLY_COUNT.store(0, Ordering::Relaxed);
+    SHELL_STATE_RENDERER_APPLY_US.store(0, Ordering::Relaxed);
+    SHELL_STATE_RENDERER_APPLY_MAX_US.store(0, Ordering::Relaxed);
     if let Ok(mut latency) = LATENCY.lock() {
         *latency = LatencyTrace::new();
     }

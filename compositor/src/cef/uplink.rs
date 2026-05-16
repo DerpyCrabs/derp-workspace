@@ -1,6 +1,7 @@
 use crate::cef::compositor_tx::CefToCompositor;
 use smithay::reexports::calloop::channel::Sender;
 use smithay::utils::{Logical, Rectangle};
+use std::time::Instant;
 
 #[derive(Clone)]
 pub struct UplinkToCompositor {
@@ -13,7 +14,13 @@ impl UplinkToCompositor {
     }
 
     fn run(&self, f: impl FnOnce(&mut crate::state::CompositorState) + Send + 'static) {
-        let _ = self.cef_tx.send(CefToCompositor::Run(Box::new(f)));
+        let queued_at = Instant::now();
+        let _ = self.cef_tx.send(CefToCompositor::Run(Box::new(move |s| {
+            crate::cef::begin_frame_diag::note_shell_action_browser_to_compositor(
+                queued_at.elapsed(),
+            );
+            f(s);
+        })));
     }
 
     fn run_result<T: Send + 'static>(

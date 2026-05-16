@@ -866,6 +866,15 @@ impl CompositorState {
             return;
         }
         preview.shell_ready = true;
+        if self.input_routing.shell_move_window_id == Some(window_id)
+            && self
+                .input_routing
+                .shell_move_proxy
+                .as_ref()
+                .is_some_and(|proxy| proxy.window_id == window_id)
+        {
+            self.input_routing.shell_move_proxy = None;
+        }
         self.shell_send_interaction_state();
     }
 

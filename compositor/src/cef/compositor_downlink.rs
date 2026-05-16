@@ -17,6 +17,7 @@ use shell_wire::{
 use crate::cef::osr_view_state::OsrViewState;
 
 pub const PROCESS_MESSAGE_NAME: &str = "derp_shell_downlink";
+const PERF_SENT_AT_ARG: usize = 31;
 static CEF_HOST_FOCUSED_FOR_INPUT: AtomicBool = AtomicBool::new(false);
 
 fn detail_with_snapshot_epoch(mut detail: Value, snapshot_epoch: u64) -> Value {
@@ -382,6 +383,10 @@ fn dispatch_shell_detail_batch(browser: &Browser, details: &[Value]) {
     };
     let _ = list.set_string(0, Some(&CefString::from(op)));
     let _ = list.set_binary(1, Some(&mut payload));
+    let _ = list.set_double(
+        PERF_SENT_AT_ARG,
+        crate::cef::begin_frame_diag::unix_micros_now() as f64,
+    );
     frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
 }
 
@@ -397,6 +402,10 @@ fn dispatch_shell_snapshot_notify(browser: &Browser) {
         return;
     };
     let _ = list.set_string(0, Some(&CefString::from("snapshot_notify")));
+    let _ = list.set_double(
+        PERF_SENT_AT_ARG,
+        crate::cef::begin_frame_diag::unix_micros_now() as f64,
+    );
     frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
 }
 
