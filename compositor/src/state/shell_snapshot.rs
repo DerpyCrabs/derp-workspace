@@ -613,6 +613,17 @@ impl CompositorState {
                 ));
             }
         }
+        if let Some(preview) = self.input_routing.shell_native_drag_preview.as_ref() {
+            match self.windows.window_registry.window_info(preview.window_id) {
+                Some(info) if !self.native_window_uses_shell_chrome(&info) => {
+                    failures.push(format!(
+                        "{context}: native drag preview references undecorated shell window {}",
+                        preview.window_id
+                    ));
+                }
+                _ => {}
+            }
+        }
         failures
     }
 

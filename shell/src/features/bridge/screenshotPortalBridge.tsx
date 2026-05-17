@@ -20,7 +20,7 @@ import {
   SHELL_UI_SCREENSHOT_WINDOW_ID,
   type ShellUiMeasureEnv,
   shellUiWindowMeasureFromEnv,
-} from '@/features/shell-ui/shellUiWindows'
+} from '@/features/shell-ui/shellHostedSurfaceRegistry'
 import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 import { canvasRectToClientCss, clientPointToGlobalLogical, rectGlobalToCanvasLocal } from '@/lib/shellCoords'
 

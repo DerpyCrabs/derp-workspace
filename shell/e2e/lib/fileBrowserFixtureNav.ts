@@ -19,6 +19,7 @@ import {
 } from './runtime.ts'
 
 export const FILE_BROWSER_APP_ID = 'derp.files'
+const FILE_BROWSER_COMMAND_ID = 'shell:file_browser'
 
 export function fileBrowserSnapshot(shell: ShellSnapshot, windowId?: number): FileBrowserSnapshot | null {
   if (windowId === undefined) return shell.file_browser ?? null
@@ -64,13 +65,15 @@ export async function openFileBrowserFromLauncher(
     'wait for shell file browser launcher result',
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      return shell.programs_menu_query === 'shell' && shell.controls?.programs_menu_first_item ? shell : null
+      const item = shell.programs_menu_items?.find((entry) => entry.id === FILE_BROWSER_COMMAND_ID && entry.rect)
+      return shell.programs_menu_query === 'shell' && item ? shell : null
     },
     2000,
     50,
   )
-  assertRectMinSize('launcher shell file browser item', readyMenu.controls.programs_menu_first_item, 24, 18)
-  await tapKey(base, KEY.enter)
+  const item = readyMenu.programs_menu_items?.find((entry) => entry.id === FILE_BROWSER_COMMAND_ID && entry.rect)
+  assert(item?.rect, `missing launcher item ${FILE_BROWSER_COMMAND_ID}`)
+  await clickRect(base, assertRectMinSize('launcher shell file browser item', item.rect, 24, 18))
   const openedWindow = await waitFor(
     'wait for file browser window',
     async () => {

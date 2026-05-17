@@ -5,7 +5,7 @@ import {
   type ShellMeasureEnv,
   type ShellMeasureFrame,
 } from '@/features/bridge/shellMeasureFrame'
-import { noteShellDomMeasure } from '@/features/bridge/shellPerfCounters'
+import { noteShellDomMeasure, noteShellUiWindowsFlush } from '@/features/bridge/shellPerfCounters'
 import { sharedShellStateStampKey, writeShellUiWindowsState } from '@/features/bridge/sharedShellState'
 export {
   SHELL_UI_DEBUG_WINDOW_ID,
@@ -43,8 +43,6 @@ const registry = new Map<number, Entry>()
 const dirtyRegistryTokens = new Set<number>()
 let nextRegistryToken = 1
 let generation = 0
-let raf = 0
-let microtaskQueued = false
 let structureDirty = false
 let lastWindows:
   | Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }>
@@ -73,57 +71,52 @@ function sameWindows(
   return true
 }
 
-function flush(keepDirtyForRaf = false) {
-  const hasPendingRaf = raf !== 0
-  if (!keepDirtyForRaf) raf = 0
-  microtaskQueued = false
+function flush() {
+  const start = performance.now()
   const stamp = sharedShellStateStampKey()
+  const stampRefresh = stamp !== lastSharedStateStamp
   if (stamp !== lastSharedStateStamp) {
     for (const token of registry.keys()) dirtyRegistryTokens.add(token)
   }
-  if (!structureDirty && dirtyRegistryTokens.size === 0 && lastWindows !== null) return
+  if (!structureDirty && dirtyRegistryTokens.size === 0 && lastWindows !== null) {
+    noteShellUiWindowsFlush(performance.now() - start, lastWindows.length, false, false, false)
+    return
+  }
   const frame = currentShellMeasureFrame()
-  const dirtyTokens = [...dirtyRegistryTokens]
   for (const token of dirtyRegistryTokens) {
     const entry = registry.get(token)
     if (!entry) continue
     entry.cached = entry.measure(frame)
   }
-  if (keepDirtyForRaf && hasPendingRaf) {
-    dirtyRegistryTokens.clear()
-    for (const token of dirtyTokens) dirtyRegistryTokens.add(token)
-  } else {
-    dirtyRegistryTokens.clear()
-    structureDirty = false
-  }
+  dirtyRegistryTokens.clear()
+  structureDirty = false
   const windows: Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }> = []
   for (const [, e] of registry) {
     if (e.cached) windows.push(e.cached)
   }
   windows.sort((a, b) => a.z - b.z || a.id - b.id)
-  if (sameWindows(windows, lastWindows) && stamp === lastSharedStateStamp) return
+  const changed = !sameWindows(windows, lastWindows) || stamp !== lastSharedStateStamp
+  if (!changed) {
+    noteShellUiWindowsFlush(performance.now() - start, windows.length, false, false, stampRefresh)
+    return
+  }
   const nextGeneration = generation + 1
   const sharedOk = writeShellUiWindowsState(nextGeneration, windows)
-  if (!sharedOk) return
+  if (!sharedOk) {
+    noteShellUiWindowsFlush(performance.now() - start, windows.length, false, changed, stampRefresh)
+    return
+  }
   generation = nextGeneration
   lastWindows = windows.map((window) => ({ ...window }))
   lastSharedStateStamp = stamp
+  noteShellUiWindowsFlush(performance.now() - start, windows.length, true, changed, stampRefresh)
 }
 
 export function scheduleShellUiWindowsSync() {
-  if (!microtaskQueued) {
-    microtaskQueued = true
-    queueMicrotask(() => flush(true))
-  }
-  if (raf) return
-  raf = requestAnimationFrame(() => flush())
+  flush()
 }
 
 export function flushShellUiWindowsSyncNow() {
-  if (raf) {
-    cancelAnimationFrame(raf)
-    raf = 0
-  }
   flush()
 }
 
@@ -133,6 +126,13 @@ export function invalidateShellUiWindow(id: number) {
     dirtyRegistryTokens.add(token)
   }
   scheduleShellUiWindowsSync()
+}
+
+export function markShellUiWindowDirty(id: number) {
+  for (const [token, entry] of registry) {
+    if (entry.id !== id) continue
+    dirtyRegistryTokens.add(token)
+  }
 }
 
 export function invalidateAllShellUiWindows() {

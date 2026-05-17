@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { registerCompositorBridgeRuntime } from './compositorBridgeRuntime'
 import type { DerpShellDetail } from '@/host/appWindowState'
-import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
+import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellHostedSurfaceRegistry'
 
 const DOMAIN_COUNT = 14
 const SNAPSHOT_DOMAIN_OUTPUTS = 1 << 0

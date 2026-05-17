@@ -1,7 +1,7 @@
 import type { Accessor } from 'solid-js'
 import type { ShellBatteryState } from '@/apps/settings/batteryState'
 import { ShellSurfaceLayers } from '@/host/ShellSurfaceLayers'
-import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/shellUiWindows'
+import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/shellHostedSurfaceRegistry'
 import type { TaskbarPin, TaskbarSniItem, TaskbarWindowRow } from '@/features/taskbar/Taskbar'
 import type { ShellUiWindowView } from '@/features/shell-ui/shellUiWindowView'
 import type { LayoutScreen } from '@/host/types'

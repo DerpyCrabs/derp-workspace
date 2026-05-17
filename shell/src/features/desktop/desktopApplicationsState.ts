@@ -192,9 +192,9 @@ export function matchDesktopApplication(
       for (const token of titleTokens) {
         if (value.tokens.has(token)) overlap += 1
       }
-      if (overlap > 0) score = Math.max(score, 500 + overlap * 25)
+      if (overlap > 1) score = Math.max(score, 500 + overlap * 25)
       if (appId && normalized.includes(appId)) score = Math.max(score, 680)
-      if (title && normalized && title.includes(normalized)) score = Math.max(score, 640)
+      if (title && normalized.includes(' ') && title.includes(normalized)) score = Math.max(score, 640)
     }
     if (score > bestScore) {
       best = app

@@ -27,6 +27,7 @@ pub(crate) struct ShellOsrState {
     pub(crate) shell_exclusion_overlay_open: bool,
     pub(crate) shell_exclusion_zones_need_full_damage: bool,
     pub(crate) shell_ui_windows: Vec<ShellUiWindowPlacement>,
+    pub(crate) pending_shell_ui_windows: Option<PendingShellUiWindows>,
     pub(crate) shell_ui_windows_generation: u32,
     pub(crate) shell_ui_windows_shared_sequence: u64,
     pub(crate) shell_ui_windows_shared_path: PathBuf,
@@ -189,6 +190,7 @@ impl ShellOsrState {
         &self,
         stamp: ShellVisiblePlacementsStamp,
         frames: Vec<ShellUiWindowPlacement>,
+        ui_windows: Vec<ShellUiWindowPlacement>,
     ) -> ShellVisiblePlacementsCache {
         if let Some(cache) = self
             .shell_visible_placements_cache
@@ -199,7 +201,7 @@ impl ShellOsrState {
         {
             return cache;
         }
-        let mut all = self.shell_ui_windows.clone();
+        let mut all = ui_windows;
         let shell_ids: HashSet<u32> = all.iter().map(|w| w.id).collect();
         all.extend(
             frames
@@ -436,9 +438,6 @@ impl ShellOsrState {
         shell_output_logical_size: Option<(u32, u32)>,
         workspace_bounds: Option<Rectangle<i32, Logical>>,
         stack_z_by_id: &HashMap<u32, u32>,
-        focused_is_shell_hosted: bool,
-        pointer_grab_id: Option<u32>,
-        pointer_grab_is_shell_hosted: bool,
     ) -> Option<ShellUiWindowsApply> {
         if payload.len() < shell_wire::SHELL_SHARED_STATE_PREFIX_BYTES {
             return None;
@@ -472,11 +471,15 @@ impl ShellOsrState {
             return None;
         }
         let Some(ws) = workspace_bounds else {
+            let changed =
+                !self.shell_ui_windows.is_empty() || self.pending_shell_ui_windows.is_some();
             self.shell_ui_windows.clear();
+            self.pending_shell_ui_windows = None;
+            self.shell_ui_windows_generation = generation;
             return Some(ShellUiWindowsApply {
                 focus_lost: false,
                 grab_lost: false,
-                changed: false,
+                changed,
             });
         };
         let mut rows = Vec::new();
@@ -519,9 +522,32 @@ impl ShellOsrState {
                 buffer_rect: br,
             });
         }
-        let changed = out != self.shell_ui_windows;
-        self.shell_ui_windows = out;
-        self.shell_ui_windows_generation = generation;
+        let changed = self
+            .pending_shell_ui_windows
+            .as_ref()
+            .is_none_or(|pending| pending.generation != generation || pending.windows != out);
+        self.pending_shell_ui_windows = Some(PendingShellUiWindows {
+            generation,
+            windows: out,
+        });
+        Some(ShellUiWindowsApply {
+            focus_lost: false,
+            grab_lost: false,
+            changed,
+        })
+    }
+
+    pub(crate) fn promote_pending_shell_ui_windows(
+        &mut self,
+        focused_is_shell_hosted: bool,
+        pointer_grab_id: Option<u32>,
+        pointer_grab_is_shell_hosted: bool,
+    ) -> Option<ShellUiWindowsApply> {
+        let pending = self.pending_shell_ui_windows.take()?;
+        let changed = pending.windows != self.shell_ui_windows
+            || pending.generation != self.shell_ui_windows_generation;
+        self.shell_ui_windows = pending.windows;
+        self.shell_ui_windows_generation = pending.generation;
         let focus_lost = self.shell_focused_ui_window_id.is_some_and(|fid| {
             !self.shell_ui_windows.iter().any(|w| w.id == fid) && !focused_is_shell_hosted
         });
@@ -1133,5 +1159,6 @@ impl ShellOsrState {
         self.shell_dmabuf_dirty_buffer.clear();
         self.shell_dmabuf_dirty_force_full = true;
         self.shell_dmabuf_next_force_full = false;
+        self.pending_shell_ui_windows = None;
     }
 }

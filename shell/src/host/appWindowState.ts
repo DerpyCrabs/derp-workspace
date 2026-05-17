@@ -1,5 +1,5 @@
 import { pickScreenForWindow, type CanvasOrigin } from '@/lib/shellCoords'
-import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
+import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellHostedSurfaceRegistry'
 import { groupIdForWindow, type WorkspaceSnapshot } from '@/features/workspace/workspaceSnapshot'
 import type { DerpWindow } from '@/features/bridge/wireSchema.generated'
 export type { DerpShellDetail, DerpWindow } from '@/features/bridge/wireSchema.generated'

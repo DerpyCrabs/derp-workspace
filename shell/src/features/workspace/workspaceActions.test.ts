@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
+import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellHostedSurfaceRegistry'
 import type { ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
 import type { DerpWindow } from '@/host/appWindowState'
 import { createWorkspaceActions } from '@/features/workspace/workspaceActions'

@@ -2,10 +2,11 @@ import { createEffect, createSignal } from 'solid-js'
 import type { DerpShellDetail, DerpWindow } from '@/host/appWindowState'
 import { windowIsShellHosted } from '@/host/appWindowState'
 import { shellWindowFrameLayout } from '@/host/shellWindowFrameLayout'
-import { canvasRectToClientCss } from '@/lib/shellCoords'
+import { canvasRectToClientCss, rectCanvasLocalToGlobal, type CanvasOrigin } from '@/lib/shellCoords'
 import { assistShapeToDims } from '@/features/tiling/assistGrid'
 import { listCustomLayoutZones } from '@/features/tiling/customLayouts'
 import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
+import { flushShellUiWindowsSyncNow, markShellUiWindowDirty, registerShellUiWindow } from '@/features/shell-ui/shellHostedSurfaceRegistry'
 import type { AssistOverlayState, LayoutScreen, SnapAssistStripState } from '@/host/types'
 import {
   SHELL_RESIZE_BOTTOM,
@@ -85,6 +86,7 @@ type ChromeNode = {
   tabs: Map<number, HTMLDivElement>
   dropSlots: Map<string, HTMLDivElement>
   last: Record<string, string | number | boolean | null>
+  shellUiUnregister: (() => void) | null
 }
 
 type SurfaceNodes = {
@@ -183,6 +185,7 @@ type ImperativeChromeRendererOptions = {
     loaded: boolean
     image: HTMLImageElement | null
   } | null
+  shellHostedContentRoot: (windowId: number) => HTMLElement | null
   shellWireSend: (
     op: 'set_geometry' | 'taskbar_activate' | 'minimize' | 'shell_ui_grab_begin' | 'shell_ui_grab_end',
     arg?: number | string,
@@ -612,7 +615,7 @@ function createChromeNode(windowId: number): ChromeNode {
   row.append(title, controls)
   titlebar.append(row)
   frame.append(left, right, bottom, content, titlebar, resizeLeft, resizeRight, resizeBottom, resizeBottomLeft, resizeBottomRight)
-  return { frame, left, right, bottom, content, contentHost, previewCanvas, titlebar, title, tabStrip, tabStripInner, controls, minimize, maximize, close, resizeLeft, resizeRight, resizeBottom, resizeBottomLeft, resizeBottomRight, splitLeftPane, splitRightPane, splitLeftContentHost, splitRightContentHost, splitDivider, tabs: new Map(), dropSlots: new Map(), last }
+  return { frame, left, right, bottom, content, contentHost, previewCanvas, titlebar, title, tabStrip, tabStripInner, controls, minimize, maximize, close, resizeLeft, resizeRight, resizeBottom, resizeBottomLeft, resizeBottomRight, splitLeftPane, splitRightPane, splitLeftContentHost, splitRightContentHost, splitDivider, tabs: new Map(), dropSlots: new Map(), last, shellUiUnregister: null }
 }
 
 function createSurfaceNodes(): SurfaceNodes {
@@ -716,6 +719,7 @@ function tabStripRect(rect: DOMRect): WorkspaceTabStripRect {
 export function createImperativeChromeRenderer(options: ImperativeChromeRendererOptions) {
   const windows = new Map<number, DerpWindow>()
   const nodes = new Map<number, ChromeNode>()
+  const renderedChromePlacements = new Map<number, { id: number; z: number; gx: number; gy: number; gw: number; gh: number }>()
   const csdDropStrips = new Map<string, CsdDropStripNode>()
   const renderedGroupsByFrameWindowId = new Map<number, WorkspaceGroupModel<DerpWindow>>()
   let surfaceNodes: SurfaceNodes | null = null
@@ -729,11 +733,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
   let lastWindowDragPointerClient: { x: number; y: number } | null = null
   let lastWindowDragWindowId: number | null = null
   const tabStripLayouts = new Map<string, WorkspaceTabStripLayout>()
-  const shellHostedContentMounts = new Map<number, HTMLElement>()
   const [gestureRev, setGestureRev] = createSignal(0)
-  const [contentMountRev, setContentMountRev] = createSignal(0)
-  let raf = 0
-  let fullRaf = false
   let splitGesture: SplitGestureState | null = null
   let pendingTitlebarDrag: {
     pointerId: number
@@ -745,25 +745,9 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
   } | null = null
   const titlebarLastClickByWindow = new Map<number, { t: number; x: number; y: number }>()
 
-  const schedule = () => {
-    fullRaf = true
-    scheduleRaf()
-  }
+  const schedule = () => apply()
 
-  const scheduleSurface = () => {
-    scheduleRaf()
-  }
-
-  const scheduleRaf = () => {
-    if (raf !== 0) return
-    raf = requestAnimationFrame(() => {
-      const full = fullRaf
-      raf = 0
-      fullRaf = false
-      if (full) apply()
-      else applySurface()
-    })
-  }
+  const scheduleSurface = () => applySurface()
 
   function markGestureChanged() {
     setGestureRev((value) => value + 1)
@@ -773,6 +757,49 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
   function markSurfaceGestureChanged() {
     setGestureRev((value) => value + 1)
     scheduleSurface()
+  }
+
+  function canvasOrigin(): CanvasOrigin {
+    const origin = options.layoutCanvasOrigin()
+    if (!origin || typeof origin !== 'object') return null
+    const value = origin as { x?: unknown; y?: unknown }
+    return typeof value.x === 'number' && typeof value.y === 'number' ? { x: value.x, y: value.y } : null
+  }
+
+  function clearChromePlacement(node: ChromeNode, windowId: number) {
+    renderedChromePlacements.delete(windowId)
+    node.shellUiUnregister?.()
+    node.shellUiUnregister = null
+  }
+
+  function publishChromePlacement(node: ChromeNode, window: RendererWindow, layout: ReturnType<typeof shellWindowFrameLayout>, hidden: boolean) {
+    if (!windowIsShellHosted(window) || hidden) {
+      clearChromePlacement(node, window.window_id)
+      return
+    }
+    const global = rectCanvasLocalToGlobal(layout.ox, layout.oy, layout.ow, layout.oh, canvasOrigin())
+    const next = {
+      id: window.window_id,
+      z: window.stack_z,
+      gx: Math.round(global.x),
+      gy: Math.round(global.y),
+      gw: Math.max(1, Math.round(global.w)),
+      gh: Math.max(1, Math.round(global.h)),
+    }
+    const prev = renderedChromePlacements.get(window.window_id)
+    const changed =
+      !prev ||
+      prev.z !== next.z ||
+      prev.gx !== next.gx ||
+      prev.gy !== next.gy ||
+      prev.gw !== next.gw ||
+      prev.gh !== next.gh
+    renderedChromePlacements.set(window.window_id, next)
+    if (!node.shellUiUnregister) {
+      node.shellUiUnregister = registerShellUiWindow(window.window_id, () => renderedChromePlacements.get(window.window_id) ?? null)
+      return
+    }
+    if (changed) markShellUiWindowDirty(window.window_id)
   }
 
   createEffect(() => {
@@ -788,7 +815,6 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     options.snapStripScreen()
     options.snapStripExclusionActive()
     options.externalTabDropDrag()
-    options.nativeDragPreview()
     options.pointerClient()
     options.compositorPointerClient()
     options.shellWindowDragId()
@@ -800,6 +826,11 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     scheduleSurface()
   })
 
+  createEffect(() => {
+    options.nativeDragPreview()
+    schedule()
+  })
+
   const buildGroups = () => {
     previousGroups = buildWorkspaceGroups(workspace, windows, previousGroups)
     return previousGroups
@@ -809,22 +840,6 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     if (window.client_side_decoration && (!group || (group.members.length <= 1 && !splitLayout))) return false
     if (!windowIsShellHosted(window) && (!window.workspace_visible || window.minimized)) return false
     return true
-  }
-
-  function updateShellHostedContentMounts(next: Map<number, HTMLElement>) {
-    if (next.size === shellHostedContentMounts.size) {
-      let same = true
-      for (const [windowId, mount] of next) {
-        if (shellHostedContentMounts.get(windowId) !== mount) {
-          same = false
-          break
-        }
-      }
-      if (same) return
-    }
-    shellHostedContentMounts.clear()
-    for (const [windowId, mount] of next) shellHostedContentMounts.set(windowId, mount)
-    setContentMountRev((value) => value + 1)
   }
 
   function workspaceGroupIdForWindow(windowId: number): string | null {
@@ -1455,7 +1470,13 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     publishTabStripLayout(node, group)
   }
 
-  const renderWindow = (node: ChromeNode, window: RendererWindow, focused: boolean, dragging: boolean, hidden: boolean, group: WorkspaceGroupModel<DerpWindow> | null, splitLayout: SplitLayoutRects | null, contentMounts: Map<number, HTMLElement>) => {
+  const mountShellHostedContent = (windowId: number, host: HTMLElement, last: ChromeNode['last']) => {
+    setAttr(host, 'data-shell-hosted-content-mount', String(windowId), last)
+    const root = options.shellHostedContentRoot(windowId)
+    if (root && root.parentElement !== host) host.append(root)
+  }
+
+  const renderWindow = (node: ChromeNode, window: RendererWindow, focused: boolean, dragging: boolean, hidden: boolean, group: WorkspaceGroupModel<DerpWindow> | null, splitLayout: SplitLayoutRects | null) => {
     const layout = shellWindowFrameLayout(window)
     const chromeBg = focused ? 'var(--shell-window-chrome-focused)' : 'var(--shell-window-chrome-unfocused)'
     setAttr(node.frame, 'data-shell-window-hidden', hidden ? 'true' : 'false', node.last)
@@ -1517,22 +1538,23 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     setStyle(node.content, 'pointer-events', 'none', node.last)
     const shellHosted = windowIsShellHosted(window)
     if (shellHosted && !splitLayout) {
-      setAttr(node.contentHost, 'data-shell-hosted-content-mount', String(window.window_id), node.last)
-      contentMounts.set(window.window_id, node.contentHost)
+      mountShellHostedContent(window.window_id, node.contentHost, node.last)
     } else {
       removeAttr(node.contentHost, 'data-shell-hosted-content-mount', node.last)
     }
     setHidden(node.contentHost, !shellHosted || !!splitLayout, node.last)
     const preview = options.nativeDragPreview()
+    const previewImageReady = preview?.image !== null && preview?.image.complete === true && preview.image.naturalWidth > 0 && preview.image.naturalHeight > 0
     const previewVisible =
       preview?.loaded === true &&
+      previewImageReady &&
       preview.window_id === window.window_id &&
       (interaction?.move_window_id === window.window_id ||
         interaction?.move_proxy_window_id === window.window_id ||
         interaction?.move_capture_window_id === window.window_id)
     setHidden(node.content, !previewVisible && !shellHosted, node.last)
     setHidden(node.previewCanvas, !previewVisible, node.last)
-    if (previewVisible && preview?.image && preview.image.complete) {
+    if (previewVisible && preview?.image) {
       const sourceWidth = preview.image.naturalWidth
       const sourceHeight = preview.image.naturalHeight
       if (sourceWidth > 0 && sourceHeight > 0) {
@@ -1604,14 +1626,12 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       const leftShellHosted = windowIsShellHosted(windows.get(splitLayout.leftWindowId) ?? window)
       const rightShellHosted = windowIsShellHosted(windows.get(group.visibleWindowId) ?? window)
       if (leftShellHosted) {
-        setAttr(node.splitLeftContentHost, 'data-shell-hosted-content-mount', String(splitLayout.leftWindowId), node.last)
-        contentMounts.set(splitLayout.leftWindowId, node.splitLeftContentHost)
+        mountShellHostedContent(splitLayout.leftWindowId, node.splitLeftContentHost, node.last)
       } else {
         removeAttr(node.splitLeftContentHost, 'data-shell-hosted-content-mount', node.last)
       }
       if (rightShellHosted) {
-        setAttr(node.splitRightContentHost, 'data-shell-hosted-content-mount', String(group.visibleWindowId), node.last)
-        contentMounts.set(group.visibleWindowId, node.splitRightContentHost)
+        mountShellHostedContent(group.visibleWindowId, node.splitRightContentHost, node.last)
       } else {
         removeAttr(node.splitRightContentHost, 'data-shell-hosted-content-mount', node.last)
       }
@@ -1631,6 +1651,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       node.splitRightPane.remove()
       node.splitDivider.remove()
     }
+    publishChromePlacement(node, window, layout, hidden)
   }
 
   const ensureSurfaceNodes = (root: HTMLElement) => {
@@ -1870,13 +1891,27 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     const writesStart = imperativeChromeDomWriteCount
     const root = options.getRoot()
     if (!root) {
-      for (const node of nodes.values()) node.frame.remove()
+      const expectedWindows = windows.size
+      for (const [id, node] of nodes) {
+        clearChromePlacement(node, id)
+        node.frame.remove()
+        node.splitLeftPane.remove()
+        node.splitRightPane.remove()
+        node.splitDivider.remove()
+      }
+      const removedNodes = nodes.size
       nodes.clear()
       for (const entry of csdDropStrips.values()) entry.node.remove()
       csdDropStrips.clear()
       renderedGroupsByFrameWindowId.clear()
-      updateShellHostedContentMounts(new Map())
       clearSurfaceNodes()
+      noteShellImperativeChromeApply(
+        performance.now() - start,
+        0,
+        imperativeChromeDomWriteCount - writesStart,
+        { expectedWindows, renderedWindows: 0, removedNodes, rootMissing: true },
+      )
+      flushShellUiWindowsSyncNow()
       return
     }
     const surface = ensureSurfaceNodes(root)
@@ -1884,12 +1919,15 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     renderSnapStrip(surface)
     renderDragOverlays(surface)
     const live = new Set<number>()
-    const contentMounts = new Map<number, HTMLElement>()
     renderedGroupsByFrameWindowId.clear()
     const groups = buildGroups()
     renderCsdDropStrips(root, groups)
+    let expectedWindows = 0
+    let renderedWindows = 0
+    let createdNodes = 0
     const renderBase = (base: DerpWindow, group: WorkspaceGroupModel<DerpWindow> | null, splitLayout: SplitLayoutRects | null) => {
       if (!shouldRender(base, group, splitLayout)) return
+      expectedWindows += 1
       const liveVisual =
         interaction?.resize_window_id === base.window_id ? interaction.resize_rect :
           interaction?.move_window_id === base.window_id || interaction?.move_proxy_window_id === base.window_id ? interaction.move_rect :
@@ -1913,6 +1951,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       if (!node) {
         node = createChromeNode(id)
         nodes.set(id, node)
+        createdNodes += 1
       }
       renderWindow(
         node,
@@ -1922,9 +1961,9 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
         window.minimized || !window.workspace_visible,
         group,
         splitLayout,
-        contentMounts,
       )
       if (newlyCreated) root.append(node.frame)
+      renderedWindows += 1
       if (splitLayout && !node.splitLeftPane.isConnected) {
         node.frame.after(node.splitLeftPane, node.splitRightPane, node.splitDivider)
       }
@@ -1961,19 +2000,23 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       if (workspace.groups.some((group) => group.windowIds.includes(base.window_id))) continue
       renderBase(base, null, null)
     }
+    let removedNodes = 0
     for (const [id, node] of nodes) {
       if (live.has(id)) continue
+      clearChromePlacement(node, id)
       node.frame.remove()
       node.splitLeftPane.remove()
       node.splitRightPane.remove()
       node.splitDivider.remove()
       nodes.delete(id)
+      removedNodes += 1
     }
-    updateShellHostedContentMounts(contentMounts)
+    flushShellUiWindowsSyncNow()
     noteShellImperativeChromeApply(
       performance.now() - start,
       nodes.size + csdDropStrips.size + 7 + (surfaceNodes?.overlayLines.size ?? 0),
       imperativeChromeDomWriteCount - writesStart,
+      { createdNodes, removedNodes, expectedWindows, renderedWindows },
     )
   }
 
@@ -1983,6 +2026,12 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     const root = options.getRoot()
     if (!root) {
       clearSurfaceNodes()
+      noteShellImperativeChromeApply(
+        performance.now() - start,
+        0,
+        imperativeChromeDomWriteCount - writesStart,
+        { surfaceRootMissing: true },
+      )
       return
     }
     const surface = ensureSurfaceNodes(root)
@@ -2072,7 +2121,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
         changed = true
       }
     }
-    if (changed) schedule()
+    if (changed) apply()
   }
 
   const pointerWindowId = (target: EventTarget | null) => {
@@ -2324,7 +2373,6 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
   }
 
   const dispose = () => {
-    if (raf !== 0) cancelAnimationFrame(raf)
     clearPendingTitlebarDrag()
     endSplitGesture()
     const root = options.getRoot()
@@ -2337,20 +2385,21 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     document.removeEventListener('pointerup', onWindowDragPointerUp, true)
     clearTabDragListeners()
     endTabDragPointerGrab()
-    for (const node of nodes.values()) node.frame.remove()
+    for (const [id, node] of nodes) {
+      clearChromePlacement(node, id)
+      node.frame.remove()
+      node.splitLeftPane.remove()
+      node.splitRightPane.remove()
+      node.splitDivider.remove()
+    }
     nodes.clear()
     for (const entry of csdDropStrips.values()) entry.node.remove()
     csdDropStrips.clear()
-    updateShellHostedContentMounts(new Map())
     clearSurfaceNodes()
+    flushShellUiWindowsSyncNow()
   }
 
   const flush = () => {
-    if (raf !== 0) {
-      cancelAnimationFrame(raf)
-      raf = 0
-    }
-    fullRaf = false
     apply()
   }
 
@@ -2366,7 +2415,5 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     cancelSplitGroupGesture: endSplitGesture,
     finishWindowDragDrop,
     clearSuppressTabClickWindowId: () => {},
-    shellHostedContentMountRevision: contentMountRev,
-    shellHostedContentMount: (windowId: number) => shellHostedContentMounts.get(windowId) ?? null,
   }
 }

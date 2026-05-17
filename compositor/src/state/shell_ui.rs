@@ -245,8 +245,12 @@ impl CompositorState {
     pub(super) fn rebuild_shell_visible_placements_cache(&self) -> ShellVisiblePlacementsCache {
         let mut frames = self.shell_backed_placements();
         frames.extend(self.shell_native_frame_placements());
-        self.shell_osr
-            .shell_visible_placements_cache(self.shell_visible_placements_stamp(), frames)
+        let ui_windows = self.shell_visible_ui_window_placements();
+        self.shell_osr.shell_visible_placements_cache(
+            self.shell_visible_placements_stamp(),
+            frames,
+            ui_windows,
+        )
     }
 
     pub(super) fn shell_visible_placements_cache(&self) -> ShellVisiblePlacementsCache {
@@ -296,14 +300,28 @@ impl CompositorState {
         placements
     }
 
+    pub(super) fn shell_ui_window_id_can_render_without_registry(window_id: u32) -> bool {
+        matches!(window_id, 9003 | 9004)
+    }
+
+    pub(super) fn shell_visible_ui_window_placements(&self) -> Vec<ShellUiWindowPlacement> {
+        self.shell_osr
+            .shell_ui_windows
+            .iter()
+            .filter(|w| {
+                if let Some(info) = self.windows.window_registry.window_info(w.id) {
+                    return self.windows.window_registry.is_shell_hosted(w.id)
+                        && !info.minimized
+                        && self.workspace_window_is_visible_during_render(w.id);
+                }
+                Self::shell_ui_window_id_can_render_without_registry(w.id)
+            })
+            .cloned()
+            .collect()
+    }
+
     pub(super) fn shell_hosted_visible_placements(&self) -> Vec<ShellUiWindowPlacement> {
         self.shell_visible_placements()
-            .into_iter()
-            .filter(|w| {
-                self.windows.window_registry.is_shell_hosted(w.id)
-                    || self.windows.window_registry.window_info(w.id).is_none()
-            })
-            .collect()
     }
 
     pub(super) fn shell_hosted_clip_placements(
@@ -349,6 +367,21 @@ impl CompositorState {
             .enumerate()
             .map(|(idx, id)| (id, idx as u32 + 1))
             .collect();
+        let Some(applied) = self.shell_osr.apply_shell_ui_windows_payload(
+            payload,
+            self.output_topology.shell_output_topology_revision,
+            self.shell_output_logical_size(),
+            self.workspace_logical_bounds(),
+            &stack_z_by_id,
+        ) else {
+            return;
+        };
+        if applied.changed {
+            self.shell_nudge_cef_repaint();
+        }
+    }
+
+    pub(crate) fn shell_promote_pending_ui_windows_for_frame(&mut self) {
         let focused_is_shell_hosted = self
             .shell_osr
             .shell_focused_ui_window_id
@@ -356,12 +389,7 @@ impl CompositorState {
         let pointer_grab_id = self.input_routing.shell_ui_pointer_grab;
         let pointer_grab_is_shell_hosted =
             pointer_grab_id.is_some_and(|gid| self.windows.window_registry.is_shell_hosted(gid));
-        let Some(applied) = self.shell_osr.apply_shell_ui_windows_payload(
-            payload,
-            self.output_topology.shell_output_topology_revision,
-            self.shell_output_logical_size(),
-            self.workspace_logical_bounds(),
-            &stack_z_by_id,
+        let Some(applied) = self.shell_osr.promote_pending_shell_ui_windows(
             focused_is_shell_hosted,
             pointer_grab_id,
             pointer_grab_is_shell_hosted,

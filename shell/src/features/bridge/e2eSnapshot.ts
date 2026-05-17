@@ -1,7 +1,7 @@
 import type { AssistGridSpan } from '@/features/tiling/assistGrid'
 import type { DerpWindow } from '@/host/appWindowState'
 import { canvasOriginXY, canvasRectToClientCss, type CanvasOrigin } from '@/lib/shellCoords'
-import { SHELL_WINDOW_FLAG_SCRATCHPAD, SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
+import { SHELL_WINDOW_FLAG_SCRATCHPAD, SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellHostedSurfaceRegistry'
 import type { SessionSnapshot } from './sessionSnapshot'
 import type { ShellNotificationsState } from '@/features/notifications/notificationsState'
 import type { ShellBatteryState } from '@/apps/settings/batteryState'
@@ -32,6 +32,15 @@ type E2eSnapshotTaskbarPin = {
 type E2eSnapshotTaskbarSideButton = {
   output: string
   side: string
+  rect: E2eRectSnapshot | null
+}
+
+type E2eProgramsMenuItem = {
+  id: string
+  idx: number
+  category: string
+  title: string
+  text: string
   rect: E2eRectSnapshot | null
 }
 
@@ -521,6 +530,14 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     side: taskbarEl.getAttribute('data-shell-taskbar-side') ?? '',
     rect: snapshotRect(taskbarEl, args.origin),
   }))
+  const programsMenuItems: E2eProgramsMenuItem[] = cache.queryAllAttr('data-command-palette-id').map((button) => ({
+    id: button.getAttribute('data-command-palette-id') ?? '',
+    idx: Number.parseInt(button.getAttribute('data-command-palette-idx') ?? '', 10),
+    category: button.getAttribute('data-command-palette-category-row') ?? '',
+    title: button.getAttribute('title') ?? '',
+    text: (button.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    rect: snapshotRect(button, args.origin),
+  })).filter((entry) => entry.id.length > 0 && Number.isInteger(entry.idx))
   const settingsTaskbarSideButtons: E2eSnapshotTaskbarSideButton[] = cache.queryAllAttr('data-settings-taskbar-side-option').map((button) => ({
     output: button.getAttribute('data-settings-taskbar-side-output') ?? '',
     side: button.getAttribute('data-settings-taskbar-side-option') ?? '',
@@ -900,6 +917,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     screenshot_mode: args.screenshotMode,
     crosshair_cursor: args.crosshairCursor,
     programs_menu_open: args.programsMenuOpen,
+    programs_menu_items: programsMenuItems,
     window_switcher_open: windowSwitcherOpen,
     power_menu_open: args.powerMenuOpen,
     volume_menu_open: args.volumeMenuOpen,

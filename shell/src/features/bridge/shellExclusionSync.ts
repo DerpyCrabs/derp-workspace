@@ -1,6 +1,5 @@
-import { createEffect, createMemo, onCleanup, type Accessor } from 'solid-js'
-import type { DerpWindow } from '@/host/appWindowState'
-import type { ExclusionHudZone, LayoutScreen } from '@/host/types'
+import { createEffect, onCleanup, type Accessor } from 'solid-js'
+import type { ExclusionHudZone } from '@/host/types'
 import { mergeExclusionRects } from '@/lib/exclusionRects'
 import { clientRectToGlobalLogical } from '@/lib/shellCoords'
 import { sharedShellStateStampKey, writeShellExclusionState } from './sharedShellState'
@@ -15,11 +14,6 @@ type ShellExclusionSyncOptions = {
   mainEl: Accessor<HTMLElement | undefined>
   outputGeom: Accessor<{ w: number; h: number } | null>
   layoutCanvasOrigin: Accessor<{ x: number; y: number } | null>
-  taskbarScreens: Accessor<readonly LayoutScreen[]>
-  taskbarHeight: number
-  taskbarAutoHide: Accessor<boolean>
-  windows: Accessor<readonly DerpWindow[]>
-  isWindowVisible?: (window: DerpWindow) => boolean
   onHudChange: (zones: ExclusionHudZone[]) => void
   exclusionReactiveDeps: Accessor<unknown>
 }
@@ -173,25 +167,6 @@ function cloneExclusionRectArray(rects: readonly ShellExclusionRect[]): ShellExc
   return rects.map((rect) => ({ ...rect }))
 }
 
-function taskbarExclusionRect(screen: LayoutScreen, size: number, autoHide: boolean): ShellExclusionRect {
-  const side = screen.taskbar_side
-  const thickness = autoHide ? 2 : size
-  const x = screen.usable_x ?? screen.x
-  const y = screen.usable_y ?? screen.y
-  const w = screen.usable_width ?? screen.width
-  const h = screen.usable_height ?? screen.height
-  if (side === 'top') {
-    return { x, y, w, h: thickness }
-  }
-  if (side === 'left') {
-    return { x, y, w: thickness, h }
-  }
-  if (side === 'right') {
-    return { x: x + w - thickness, y, w: thickness, h }
-  }
-  return { x, y: y + h - thickness, w, h: thickness }
-}
-
 export function registerShellExclusionElement(
   kind: ShellExclusionKind,
   label: string,
@@ -211,44 +186,12 @@ export function registerShellExclusionElement(
 }
 
 export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
-  let exclusionZonesRaf = 0
   let lastExclusionStamp: string | null = null
   let lastExclusionBase: ShellExclusionRect[] | null = null
   let lastExclusionTrayStrip: ShellExclusionRect | null = null
   let lastExclusionOverlayOpen = false
   let lastExclusionFloating: ShellExclusionRect[] | null = null
   let pendingExclusionStateWrite = false
-  const isWindowVisible = (window: DerpWindow) => options.isWindowVisible?.(window) ?? true
-
-  const fullscreenTaskbarExclusionSig = createMemo(() => {
-    const outputNames = new Set<string>()
-    const outputIds = new Set<string>()
-    for (const window of options.windows()) {
-      if (!isWindowVisible(window) || window.minimized || !window.fullscreen) continue
-      if (window.output_name) outputNames.add(window.output_name)
-      if (window.output_id) outputIds.add(window.output_id)
-    }
-    return options
-      .taskbarScreens()
-      .map((screen) => `${screen.name}:${screen.taskbar_side}:${options.taskbarAutoHide() ? 1 : 0}:${fullscreenSetsHideTaskbar(outputNames, outputIds, screen) ? 1 : 0}`)
-      .join('|')
-  })
-
-  function fullscreenOutputSets() {
-    const outputNames = new Set<string>()
-    const outputIds = new Set<string>()
-    for (const window of options.windows()) {
-      if (!isWindowVisible(window) || window.minimized || !window.fullscreen) continue
-      if (window.output_name) outputNames.add(window.output_name)
-      if (window.output_id) outputIds.add(window.output_id)
-    }
-    return { outputNames, outputIds }
-  }
-
-  function fullscreenSetsHideTaskbar(outputNames: ReadonlySet<string>, outputIds: ReadonlySet<string>, screen: LayoutScreen) {
-    return outputNames.has(screen.name) || (!!screen.identity && outputIds.has(screen.identity))
-  }
-
   function syncExclusionZonesNow() {
     void options.exclusionReactiveDeps()
     const stamp = sharedShellStateStampKey()
@@ -276,25 +219,11 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
     const frame = currentShellMeasureFrame() ?? createShellMeasureFrame({ main, outputGeom: og, origin: co })
     if (!frame) return
     const snapshot = readShellExclusionRegistry(frame)
-    const fullscreen = fullscreenOutputSets()
-    const taskbarBase = options
-      .taskbarScreens()
-      .map((screen) => {
-        const hiddenForFullscreen = fullscreenSetsHideTaskbar(fullscreen.outputNames, fullscreen.outputIds, screen)
-        if (hiddenForFullscreen && !options.taskbarAutoHide()) return null
-        return {
-          label: `taskbar:${screen.name}`,
-          ...taskbarExclusionRect(screen, options.taskbarHeight, options.taskbarAutoHide() || hiddenForFullscreen),
-        }
-      })
-      .filter((entry): entry is ShellExclusionRect & { label: string } => entry !== null)
     const rects = [
-      ...taskbarBase.map(({ label: _label, ...rect }) => rect),
       ...snapshot.base.map(({ label: _label, ...rect }) => rect),
     ]
     const floatingRaw = snapshot.floating.map(({ label: _label, ...rect }) => rect)
     const hud: ExclusionHudZone[] = [
-      ...taskbarBase.map(({ label, ...rect }) => ({ label, ...rect })),
       ...snapshot.base.map(({ label, ...rect }) => ({ label, ...rect })),
       ...snapshot.floating.map(({ label, ...rect }) => ({ label, ...rect })),
     ]
@@ -329,18 +258,8 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   }
 
   function scheduleExclusionZonesSync() {
-    if (exclusionZonesRaf) return
-    exclusionZonesRaf = requestAnimationFrame(() => {
-      exclusionZonesRaf = 0
-      syncExclusionZonesNow()
-    })
+    syncExclusionZonesNow()
   }
-
-  createEffect(() => {
-    fullscreenTaskbarExclusionSig()
-    invalidateAllShellExclusionRects()
-    queueMicrotask(() => scheduleExclusionZonesSync())
-  })
 
   createEffect(() => {
     options.outputGeom()
@@ -371,7 +290,6 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   onCleanup(() => {
     if (exclusionScheduler === scheduleExclusionZonesSync) exclusionScheduler = null
     if (exclusionSyncNow === syncExclusionZonesNow) exclusionSyncNow = null
-    if (exclusionZonesRaf) cancelAnimationFrame(exclusionZonesRaf)
   })
 
   exclusionScheduler = scheduleExclusionZonesSync

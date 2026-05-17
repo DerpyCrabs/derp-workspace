@@ -39,7 +39,7 @@ import {
 import { loadFileBrowserPrefs } from '@/apps/file-browser/fileBrowserPrefs'
 import { primeFileBrowserWindowPath } from '@/apps/file-browser/fileBrowserState'
 import { primeShellWindowState } from '@/features/shell-ui/shellWindowState'
-import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
+import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellHostedSurfaceRegistry'
 import { screensListForLayout } from '@/host/appLayout'
 import type { ShellUiWindowView } from '@/features/shell-ui/shellUiWindowView'
 import type { LayoutScreen } from '@/host/types'

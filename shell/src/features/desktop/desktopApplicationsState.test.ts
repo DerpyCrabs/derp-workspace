@@ -26,6 +26,14 @@ const apps: DesktopAppMatchCandidate[] = [
     desktop_id: 'org.gnome.Nautilus.desktop',
     icon: 'org.gnome.Nautilus',
   },
+  {
+    name: 'Disks',
+    exec: 'gnome-disks',
+    executable: 'gnome-disks',
+    desktop_id: 'org.gnome.DiskUtility.desktop',
+    icon: 'org.gnome.DiskUtility',
+    keywords: ['restore', 'drive'],
+  },
 ]
 
 describe('matchDesktopApplication', () => {
@@ -70,6 +78,15 @@ describe('matchDesktopApplication', () => {
       matchDesktopApplication(apps, {
         title: 'Completely Unknown Window',
         app_id: 'totally-unknown',
+      }),
+    ).toBeNull()
+  })
+
+  it('does not match native windows from a single keyword overlap', () => {
+    expect(
+      matchDesktopApplication(apps, {
+        title: 'Derp Native Restore Probe',
+        app_id: 'derp.e2e.native',
       }),
     ).toBeNull()
   })

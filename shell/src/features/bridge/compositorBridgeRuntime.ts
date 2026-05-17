@@ -13,11 +13,13 @@ import {
   installShellRuntimePerfCounters,
   noteShellBatchApply,
   noteShellBatchCoalesce,
+  noteShellImperativeChromeDetailApply,
   noteShellInteractionApply,
   noteShellModelUpdate,
   noteShellSnapshotRead,
   noteShellSnapshotApply,
   noteShellSnapshotDecode,
+  noteShellVisualFollowup,
   noteShellWindowApply,
 } from '@/features/bridge/shellPerfCounters'
 import type { TraySniMenuEntry } from '@/host/createShellContextMenus'
@@ -426,6 +428,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     }
   }
   const scheduleCompositorVisualFollowup = (details: readonly DerpShellDetail[]) => {
+    const start = performance.now()
     let syncExclusion = false
     let flushWindows = false
     let resetScroll = false
@@ -444,6 +447,12 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       options.bumpSnapChrome()
       options.shellWireSend('invalidate_view')
     }
+    noteShellVisualFollowup(performance.now() - start)
+  }
+  const applyImperativeChromeDetails = (details: readonly DerpShellDetail[]) => {
+    const start = performance.now()
+    options.applyImperativeChromeDetails?.(details)
+    noteShellImperativeChromeDetailApply(performance.now() - start, details.length)
   }
   const detailSnapshotEpoch = (detail: DerpShellDetail) => {
     return runtimeDetailSnapshotEpoch(detail)
@@ -769,7 +778,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
 
   const applyCompositorSnapshot = (details: readonly DerpShellDetail[], domainFlags: number) => {
     const coalescedDetails = coalesceCompositorDetails(details)
-    options.applyImperativeChromeDetails?.(coalescedDetails)
+    applyImperativeChromeDetails(coalescedDetails)
     const skipOutputGeometry = coalescedDetails.some((detail) => detail.type === 'output_layout')
     let sawWindowList = false
     let sawWindowOrder = false
@@ -1014,11 +1023,15 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (details.length === 0) return
     const applyStart = performance.now()
     const coalescedDetails = coalesceCompositorDetails(details)
-    options.applyImperativeChromeDetails?.(coalescedDetails)
+    const hasSnapshotState = coalescedDetails.some(detailIsSnapshotState)
+    let synced: false | { domainFlags: number; detailsLength: number } = false
+    if (hasSnapshotState) synced = syncCompositorSnapshot()
+    const directChromeDetails = synced
+      ? coalescedDetails.filter((detail) => !detailIsSnapshotState(detail))
+      : coalescedDetails
+    applyImperativeChromeDetails(directChromeDetails)
     batch(() => {
-      const hasSnapshotState = coalescedDetails.some(detailIsSnapshotState)
       if (hasSnapshotState) {
-        const synced = syncCompositorSnapshot()
         if (!synced) scheduleCompositorVisualFollowup(coalescedDetails.filter(detailIsSnapshotState))
         bridgeDebug({
           last_drop: {

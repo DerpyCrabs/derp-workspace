@@ -79,7 +79,7 @@ impl ShellExclusionClipCtx {
         let br_log = ol.loc + ol.size;
         let p1f = br_log.to_f64().to_physical(scale);
         let p0: Point<i32, Physical> = Point::from((p0f.x.ceil() as i32, p0f.y.ceil() as i32));
-        let p1: Point<i32, Physical> = Point::from((p1f.x.ceil() as i32, p1f.y.ceil() as i32));
+        let p1: Point<i32, Physical> = Point::from((p1f.x.floor() as i32, p1f.y.floor() as i32));
         let pw = p1.x - p0.x;
         let ph = p1.y - p0.y;
         if pw <= 0 || ph <= 0 {
@@ -89,6 +89,34 @@ impl ShellExclusionClipCtx {
             Point::from((p0.x - dst.loc.x, p0.y - dst.loc.y)),
             Size::from((pw, ph)),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect_log(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new(Point::from((x, y)), Size::from((w, h)))
+    }
+
+    fn rect_phys(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Physical> {
+        Rectangle::new(Point::from((x, y)), Size::from((w, h)))
+    }
+
+    #[test]
+    fn inside_clip_rounds_bottom_right_inward_at_fractional_scale() {
+        let ctx = ShellExclusionClipCtx {
+            zones: Arc::from(Vec::new().into_boxed_slice()),
+            output_logical: rect_log(0, 0, 100, 100),
+            scale_f: 1.5,
+        };
+
+        let local = ctx
+            .global_log_rect_to_inside_local_phys(rect_log(1, 1, 2, 2), rect_phys(0, 0, 150, 150))
+            .unwrap();
+
+        assert_eq!(local, rect_phys(2, 2, 2, 2));
     }
 }
 

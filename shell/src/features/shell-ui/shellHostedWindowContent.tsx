@@ -18,7 +18,7 @@ import {
   SHELL_UI_TEST_APP_ID,
 } from '@/features/shell-ui/backedShellWindows'
 import type { ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
-import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/shellUiWindows'
+import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/shellHostedSurfaceRegistry'
 import { windowLabel as groupedWindowLabel } from '@/features/workspace/tabGroupOps'
 import type { ShellUiWindowView } from '@/features/shell-ui/shellUiWindowView'
 import type { ExclusionHudZone, LayoutScreen } from '@/host/types'

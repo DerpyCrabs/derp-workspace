@@ -31,11 +31,6 @@ type WorkspaceLayoutBridgeOptions = {
 const EMPTY_TASKBAR_ROWS: TaskbarWindowRow[] = []
 
 export function createWorkspaceLayoutBridge(options: WorkspaceLayoutBridgeOptions) {
-  let compositorFollowupQueued = false
-  let compositorFollowupFlushWindows = false
-  let compositorFollowupSyncExclusion = false
-  let compositorFollowupResetScroll = false
-
   function sendWorkspaceMutation(mutation: WorkspaceMutation): boolean {
     return options.sendWorkspaceMutation?.(mutation) ?? options.shellWireSend('workspace_mutation', JSON.stringify(mutation))
   }
@@ -138,42 +133,28 @@ export function createWorkspaceLayoutBridge(options: WorkspaceLayoutBridgeOption
   }
 
   function scheduleCompositorFollowup(next?: FollowupOptions) {
-    if (next?.flushWindows) compositorFollowupFlushWindows = true
-    if (next?.syncExclusion) compositorFollowupSyncExclusion = true
-    if (next?.resetScroll) compositorFollowupResetScroll = true
-    if (compositorFollowupQueued) return
-    compositorFollowupQueued = true
-    queueMicrotask(() => {
-      compositorFollowupQueued = false
-      const flushWindows = compositorFollowupFlushWindows
-      const syncExclusion = compositorFollowupSyncExclusion
-      const resetScroll = compositorFollowupResetScroll
-      compositorFollowupFlushWindows = false
-      compositorFollowupSyncExclusion = false
-      compositorFollowupResetScroll = false
-      try {
-        if (syncExclusion) {
-          options.requestSharedStateSync(
-            {
-              shellUi: flushWindows ? 'flush' : undefined,
-              exclusion: flushWindows ? 'sync' : 'schedule',
-            },
-            'now',
-          )
-        } else if (flushWindows) {
-          options.requestSharedStateSync({ shellUi: 'flush' }, 'now')
-        }
-        if (resetScroll) {
-          window.scrollTo(0, 0)
-          document.documentElement.scrollTop = 0
-          document.documentElement.scrollLeft = 0
-          document.body.scrollTop = 0
-          document.body.scrollLeft = 0
-        }
-      } catch (error) {
-        console.error('[derp-shell] compositor follow-up', error)
+    try {
+      if (next?.syncExclusion) {
+        options.requestSharedStateSync(
+          {
+            shellUi: next.flushWindows ? 'flush' : undefined,
+            exclusion: 'sync',
+          },
+          'now',
+        )
+      } else if (next?.flushWindows) {
+        options.requestSharedStateSync({ shellUi: 'flush' }, 'now')
       }
-    })
+      if (next?.resetScroll) {
+        window.scrollTo(0, 0)
+        document.documentElement.scrollTop = 0
+        document.documentElement.scrollLeft = 0
+        document.body.scrollTop = 0
+        document.body.scrollLeft = 0
+      }
+    } catch (error) {
+      console.error('[derp-shell] compositor follow-up', error)
+    }
   }
 
   return {

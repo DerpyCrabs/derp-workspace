@@ -10,6 +10,7 @@ import {
   clickRect,
   compositorWindowById,
   defineGroup,
+  desktopAppCommandPaletteId,
   ensureDesktopApps,
   ensureNativePair,
   findLauncherCandidate,
@@ -191,28 +192,27 @@ async function launchTerminalAppFromProgramsMenu(
     await openProgramsMenuBySuper(base),
   );
   await typeText(base, launcherCandidate.query);
+  const expectedItemId = desktopAppCommandPaletteId(launcherCandidate.app);
   const filteredMenu = await waitFor(
     `wait for launcher query ${launcherCandidate.query}`,
     async () => {
       const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
-      return shell.programs_menu_query === launcherCandidate.query &&
-        shell.controls?.programs_menu_first_item
+      const item = shell.programs_menu_items?.find((entry) => entry.id === expectedItemId && entry.rect)
+      return shell.programs_menu_query === launcherCandidate.query && item
         ? shell
         : null;
     },
     5000,
     100,
   );
-  assert(
-    filteredMenu.controls?.programs_menu_first_item,
-    "missing first launcher result rect",
-  );
+  const launchItem = filteredMenu.programs_menu_items?.find((entry) => entry.id === expectedItemId && entry.rect);
+  assert(launchItem?.rect, `missing launcher result rect for ${expectedItemId}`);
   const knownBefore = new Set(
     (
       await getJson<CompositorSnapshot>(base, "/test/state/compositor")
     ).windows.map((window) => window.window_id),
   );
-  await tapKey(base, KEY.enter);
+  await clickRect(base, launchItem.rect);
   const stableLaunch = await waitFor(
     `wait for launcher spawned window ${launcherCandidate.query}`,
     async () => {

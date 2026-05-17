@@ -5,7 +5,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('shellUiWindows', () => {
+describe('shellHostedSurfaceRegistry', () => {
   it('flushes shell-ui window payloads on the same turn', async () => {
     const send = vi.fn()
     vi.stubGlobal('window', {
@@ -15,7 +15,7 @@ describe('shellUiWindows', () => {
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
-    const mod = await import('./shellUiWindows')
+    const mod = await import('./shellHostedSurfaceRegistry')
     mod.registerShellUiWindow(8, () => ({
       id: 8,
       z: 3,
@@ -41,7 +41,7 @@ describe('shellUiWindows', () => {
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
-    const mod = await import('./shellUiWindows')
+    const mod = await import('./shellHostedSurfaceRegistry')
     const unregister = mod.registerShellUiWindow(7, () => ({
       id: 7,
       z: 2,
@@ -69,7 +69,7 @@ describe('shellUiWindows', () => {
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
-    const mod = await import('./shellUiWindows')
+    const mod = await import('./shellHostedSurfaceRegistry')
     let width = 300
     mod.registerShellUiWindow(5, () => ({
       id: 5,
@@ -88,6 +88,34 @@ describe('shellUiWindows', () => {
     expect(send).toHaveBeenCalledTimes(2)
   })
 
+  it('can mark a shell-ui window dirty without flushing immediately', async () => {
+    const send = vi.fn()
+    vi.stubGlobal('window', {
+      __DERP_SHELL_UI_WINDOWS_STATE_PATH: '/tmp/ui-windows.bin',
+      __derpShellSharedStateWrite: send.mockReturnValue(true),
+    })
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+
+    const mod = await import('./shellHostedSurfaceRegistry')
+    let gx = 10
+    mod.registerShellUiWindow(6, () => ({
+      id: 6,
+      z: 1,
+      gx,
+      gy: 20,
+      gw: 300,
+      gh: 200,
+    }))
+
+    gx = 12
+    mod.markShellUiWindowDirty(6)
+    expect(send).toHaveBeenCalledTimes(1)
+
+    mod.flushShellUiWindowsSyncNow()
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
   it('only remeasures invalidated shell-ui windows', async () => {
     const send = vi.fn()
     vi.stubGlobal('window', {
@@ -97,7 +125,7 @@ describe('shellUiWindows', () => {
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
-    const mod = await import('./shellUiWindows')
+    const mod = await import('./shellHostedSurfaceRegistry')
     const measureA = vi.fn(() => ({
       id: 11,
       z: 1,
@@ -138,7 +166,7 @@ describe('shellUiWindows', () => {
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
-    const mod = await import('./shellUiWindows')
+    const mod = await import('./shellHostedSurfaceRegistry')
     const measure = vi.fn(() => ({
       id: 21,
       z: 1,
@@ -169,7 +197,7 @@ describe('shellUiWindows', () => {
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
-    const mod = await import('./shellUiWindows')
+    const mod = await import('./shellHostedSurfaceRegistry')
     const measure = vi.fn(() => ({
       id: 31,
       z: 1,

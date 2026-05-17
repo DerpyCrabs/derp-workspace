@@ -8,6 +8,7 @@ import {
   clickRect,
   compositorWindowById,
   defineGroup,
+  desktopAppCommandPaletteId,
   ensureDesktopApps,
   findLauncherCandidate,
   getJson,
@@ -139,7 +140,7 @@ async function contextAction(base: string, actionId: string) {
   )
 }
 
-async function openProgramsSearch(base: string, query: string): Promise<ShellSnapshot> {
+async function openProgramsSearch(base: string, query: string, expectedItemId?: string): Promise<ShellSnapshot> {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   if (shell.programs_menu_open) {
     await tapKey(base, KEY.escape)
@@ -163,7 +164,11 @@ async function openProgramsSearch(base: string, query: string): Promise<ShellSna
     `wait for programs query ${query}`,
     async () => {
       const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      return next.programs_menu_query === query && next.controls?.programs_menu_first_item ? next : null
+      if (next.programs_menu_query !== query) return null
+      if (expectedItemId) {
+        return next.programs_menu_items?.some((entry) => entry.id === expectedItemId && entry.rect) ? next : null
+      }
+      return next.controls?.programs_menu_first_item ? next : null
     },
     5000,
     100,
@@ -172,9 +177,12 @@ async function openProgramsSearch(base: string, query: string): Promise<ShellSna
 
 async function pinAppFromPrograms(base: string, app: DesktopAppEntry, query: string): Promise<{ monitor: string; pinId: string; shell: ShellSnapshot; pin: ShellTaskbarPin }> {
   const pinId = desktopAppPinId(app)
+  const itemId = desktopAppCommandPaletteId(app)
   await unpinRenderedPinIfPresent(base, pinId)
-  const menu = await openProgramsSearch(base, query)
-  const itemRect = assertRectMinSize('programs first item', menu.controls.programs_menu_first_item, 32, 24)
+  const menu = await openProgramsSearch(base, query, itemId)
+  const item = menu.programs_menu_items?.find((entry) => entry.id === itemId && entry.rect)
+  assert(item?.rect, `missing programs item ${itemId}`)
+  const itemRect = assertRectMinSize(`programs item ${itemId}`, item.rect, 32, 24)
   const monitor = monitorForRect(menu, menu.controls.taskbar_programs_toggle!)
   await rightClickRect(base, itemRect)
   const pinAction = await contextAction(base, 'pin-to-monitor')

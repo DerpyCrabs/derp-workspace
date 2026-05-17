@@ -469,6 +469,7 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
   function buildSessionSnapshot(): SessionSnapshot {
     const shellWindows: SavedShellWindow[] = []
     const nativeWindows: SavedNativeWindow[] = []
+    const usedNativeWindowRefs = new Set<SessionWindowRef>()
     for (const window of [...options.getWindowsList()].sort((a, b) => a.stack_z - b.stack_z || a.window_id - b.window_id)) {
       if (windowIsShellHosted(window)) {
         const kind = backedShellWindowKind(window.window_id, window.app_id)
@@ -499,8 +500,14 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
         })
         continue
       }
-      const windowRef = nativeWindowRefForId(window.window_id)
+      let windowRef = nativeWindowRefForId(window.window_id)
       if (!windowRef) continue
+      if (usedNativeWindowRefs.has(windowRef)) {
+        windowRef = nativeWindowRef(options.getNextNativeWindowSeq())
+        options.setNextNativeWindowSeq((seq) => seq + 1)
+        options.setNativeWindowRef(window.window_id, windowRef)
+      }
+      usedNativeWindowRefs.add(windowRef)
       nativeWindows.push({
         windowRef,
         title: window.title,

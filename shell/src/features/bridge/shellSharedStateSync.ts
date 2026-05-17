@@ -1,4 +1,5 @@
 import { type ShellMeasureEnv, withShellMeasureFrame } from './shellMeasureFrame'
+import { noteShellSharedStateSync } from './shellPerfCounters'
 
 export type ShellSharedStateSyncRequest = {
   shellUi?: 'invalidate-all' | 'flush'
@@ -31,11 +32,12 @@ function mergeExclusion(
 
 export function createShellSharedStateSync(options: ShellSharedStateSyncOptions) {
   let microtaskQueued = false
-  let overlayExclusionRaf = 0
+  let overlayExclusionFollowupQueued = false
   let queuedShellUi: ShellSharedStateSyncRequest['shellUi'] | undefined
   let queuedExclusion: ShellSharedStateSyncRequest['exclusion'] | undefined
 
   const run = (request: ShellSharedStateSyncRequest) => {
+    const start = performance.now()
     const apply = () => {
       if (request.shellUi === 'invalidate-all') options.invalidateAllShellUiWindows()
       if (request.shellUi === 'flush') options.flushShellUiWindowsSyncNow()
@@ -45,11 +47,15 @@ export function createShellSharedStateSync(options: ShellSharedStateSyncOptions)
         options.scheduleExclusionZonesSync()
       }
     }
-    if (options.measureEnv) {
-      withShellMeasureFrame(options.measureEnv, apply)
-      return
+    try {
+      if (options.measureEnv) {
+        withShellMeasureFrame(options.measureEnv, apply)
+        return
+      }
+      apply()
+    } finally {
+      noteShellSharedStateSync(performance.now() - start)
     }
-    apply()
   }
 
   const flushQueued = () => {
@@ -80,9 +86,10 @@ export function createShellSharedStateSync(options: ShellSharedStateSyncOptions)
 
   const scheduleOverlayExclusionSync = () => {
     requestSharedStateSync({ exclusion: 'sync' })
-    if (overlayExclusionRaf) return
-    overlayExclusionRaf = requestAnimationFrame(() => {
-      overlayExclusionRaf = 0
+    if (overlayExclusionFollowupQueued) return
+    overlayExclusionFollowupQueued = true
+    queueMicrotask(() => {
+      overlayExclusionFollowupQueued = false
       requestSharedStateSync({ exclusion: 'schedule' }, 'now')
     })
   }

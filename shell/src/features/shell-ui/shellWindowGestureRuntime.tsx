@@ -30,9 +30,9 @@ import {
   type CustomLayout,
 } from "@/features/tiling/customLayouts";
 import {
-  SnapAssistPicker,
+  createImperativeSnapAssistPicker,
   type SnapPickerSelection,
-} from "@/features/tiling/SnapAssistPicker";
+} from "@/features/tiling/imperativeSnapAssistPicker";
 import { assistSpanFromMasterGridPoint } from "@/features/tiling/SnapAssistMasterGrid";
 import {
   hitTestSnapZoneGlobal,
@@ -65,7 +65,7 @@ import type { ShellSharedStateSyncRequest } from "@/features/bridge/shellSharedS
 import {
   SHELL_UI_PORTAL_PICKER_WINDOW_ID,
   SHELL_WINDOW_FLAG_SHELL_HOSTED,
-} from "@/features/shell-ui/shellUiWindows";
+} from "@/features/shell-ui/shellHostedSurfaceRegistry";
 import type {
   AssistOverlayState,
   LayoutScreen,
@@ -78,7 +78,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
-  Show,
+  onCleanup,
   type Accessor,
 } from "solid-js";
 
@@ -231,13 +231,37 @@ export function createShellWindowGestureRuntime(
   } | null = null;
   let releasedCompositorMove: { windowId: number; serial: number } | null =
     null;
-  let tilePreviewRaf = 0;
   let lastTilePreviewKey = "";
   let shellWindowDrag: ShellWindowDragSession | null = null;
   let shellMoveDeltaLogSeq = 0;
   let shellWindowResize: ShellResizeSession | null = null;
   let shellResizeDeltaLogSeq = 0;
   const readWindow = (windowId: number) => options.readCompositorWindow(windowId);
+  const snapAssistPickerRenderer = createImperativeSnapAssistPicker({
+    onHoverSelectionChange: (selection) => {
+      const picker = snapAssistPicker();
+      if (!picker) return;
+      const context = resolveSnapAssistContext(picker.windowId, picker.monitorName);
+      if (!context) {
+        closeSnapAssistPicker();
+        return;
+      }
+      applySnapPickerSelection(context, selection);
+    },
+    onSelectSelection: (selection) => {
+      const picker = snapAssistPicker();
+      if (!picker) return;
+      const context = resolveSnapAssistContext(picker.windowId, picker.monitorName);
+      if (!context) {
+        closeSnapAssistPicker();
+        return;
+      }
+      applySnapPickerSelection(context, selection);
+      commitSnapAssistSelection(picker.windowId, true);
+    },
+    onClose: () => closeSnapAssistPicker(),
+  });
+  onCleanup(() => snapAssistPickerRenderer.destroy());
 
   function workCanvasEqual(
     a: { x: number; y: number; w: number; h: number },
@@ -295,6 +319,7 @@ export function createShellWindowGestureRuntime(
     activeSnapWindowId = null;
     activeSnapLayout = null;
     setSnapPickerHoverSelection(null);
+    snapAssistPickerRenderer.updateHoverSelection(null);
   }
 
   function rememberRecentSnapCandidate(
@@ -317,10 +342,6 @@ export function createShellWindowGestureRuntime(
   }
 
   function clearTilePreviewWire() {
-    if (tilePreviewRaf) {
-      cancelAnimationFrame(tilePreviewRaf);
-      tilePreviewRaf = 0;
-    }
     lastTilePreviewKey = "";
     options.shellWireSend("set_tile_preview", 0, 0, 0, 0, 0);
   }
@@ -328,7 +349,7 @@ export function createShellWindowGestureRuntime(
   function clearSnapAssistSelection() {
     resetSnapAssistState();
     setAssistOverlayState(null);
-    scheduleTilePreviewSync();
+    syncTilePreviewWire();
   }
 
   function closeSnapAssistPicker() {
@@ -578,6 +599,7 @@ export function createShellWindowGestureRuntime(
       return;
     }
     setSnapPickerHoverSelection(selection);
+    snapAssistPickerRenderer.updateHoverSelection(selection);
     activeSnapZone = selection.zone;
     activeSnapScreen = context.screen;
     activeSnapWindowId = context.windowId;
@@ -626,7 +648,7 @@ export function createShellWindowGestureRuntime(
     } else {
       setAssistOverlayState(null);
     }
-    scheduleTilePreviewSync();
+    syncTilePreviewWire();
   }
 
   function updateSnapAssistFromSpan(
@@ -644,13 +666,15 @@ export function createShellWindowGestureRuntime(
       shape,
       context.workGlobal,
     );
-    setSnapPickerHoverSelection({
+    const selection = {
       zone,
       previewRect,
       snapLayout: assistMonitorSnapLayout(shape),
       shape,
       hoverSpan: span,
-    });
+    };
+    setSnapPickerHoverSelection(selection);
+    snapAssistPickerRenderer.updateHoverSelection(selection);
     applySnapAssistZonePreview(
       context,
       zone,
@@ -668,7 +692,7 @@ export function createShellWindowGestureRuntime(
     } else {
       setAssistOverlayState(null);
     }
-    scheduleTilePreviewSync();
+    syncTilePreviewWire();
   }
 
   function updateSnapAssistFromEdgeZone(
@@ -693,7 +717,7 @@ export function createShellWindowGestureRuntime(
     applySnapAssistZonePreview(context, zone, previewRect, context.snapLayout);
     setSnapPickerHoverSelection(null);
     setAssistOverlayState(null);
-    scheduleTilePreviewSync();
+    syncTilePreviewWire();
   }
 
   function updateSnapAssistFromCustomZone(
@@ -731,7 +755,7 @@ export function createShellWindowGestureRuntime(
     } else {
       setAssistOverlayState(null);
     }
-    scheduleTilePreviewSync();
+    syncTilePreviewWire();
   }
 
   function commitSnapAssistSelection(windowId: number, closePicker = false) {
@@ -1002,7 +1026,6 @@ export function createShellWindowGestureRuntime(
   }
 
   function flushTilePreviewWire() {
-    tilePreviewRaf = 0;
     if (snapAssistPicker()) {
       if (lastTilePreviewKey !== "0") {
         lastTilePreviewKey = "0";
@@ -1032,10 +1055,7 @@ export function createShellWindowGestureRuntime(
     }
   }
 
-  function scheduleTilePreviewSync() {
-    if (tilePreviewRaf) return;
-    tilePreviewRaf = requestAnimationFrame(() => flushTilePreviewWire());
-  }
+  const syncTilePreviewWire = flushTilePreviewWire;
 
   function toggleShellMaximizeForWindow(windowId: number) {
     const window = readWindow(windowId);
@@ -1699,7 +1719,7 @@ export function createShellWindowGestureRuntime(
   createEffect(() => {
     snapAssistPicker();
     queueMicrotask(() => {
-      scheduleTilePreviewSync();
+      syncTilePreviewWire();
       options.requestSharedStateSync(
         { shellUi: "flush", exclusion: "sync" },
         "now",
@@ -1719,9 +1739,13 @@ export function createShellWindowGestureRuntime(
     }
   });
 
-  function SnapAssistPickerLayer() {
+  createEffect(() => {
+    const picker = snapAssistPicker();
     const main = options.getMainRef();
-    if (!main) return null;
+    if (!picker || !main) {
+      snapAssistPickerRenderer.render(null);
+      return;
+    }
     const getShellUiMeasureEnv = () => {
       const output = options.outputGeom();
       if (!output) return null;
@@ -1731,59 +1755,20 @@ export function createShellWindowGestureRuntime(
         origin: options.layoutCanvasOrigin(),
       };
     };
-    return (
-      <Show when={snapAssistPicker()} keyed>
-        {(picker) => {
-          const context = resolveSnapAssistContext(
-            picker.windowId,
-            picker.monitorName,
-          );
-          return (
-            <SnapAssistPicker
-              anchorRect={picker.anchorRect}
-              container={main}
-              workArea={
-                context ? context.workGlobal : { x: 0, y: 0, w: 1, h: 1 }
-              }
-              currentSnapLayout={
-                context?.snapLayout ?? assistMonitorSnapLayout("3x2")
-              }
-              customLayouts={context?.customLayouts ?? []}
-              hoverSelection={snapPickerHoverSelection()}
-              autoHover={picker.autoHover}
-              shellUiWindowId={SHELL_UI_PORTAL_PICKER_WINDOW_ID}
-              shellUiWindowZ={1100000}
-              getShellUiMeasureEnv={getShellUiMeasureEnv}
-              onHoverSelectionChange={(selection) => {
-                const nextContext = resolveSnapAssistContext(
-                  picker.windowId,
-                  picker.monitorName,
-                );
-                if (!nextContext) {
-                  closeSnapAssistPicker();
-                  return;
-                }
-                applySnapPickerSelection(nextContext, selection);
-              }}
-              onSelectSelection={(selection) => {
-                const nextContext = resolveSnapAssistContext(
-                  picker.windowId,
-                  picker.monitorName,
-                );
-                if (!nextContext) {
-                  closeSnapAssistPicker();
-                  return;
-                }
-                applySnapPickerSelection(nextContext, selection);
-                commitSnapAssistSelection(picker.windowId, true);
-              }}
-              onClose={closeSnapAssistPicker}
-            />
-          );
-        }}
-      </Show>
-    );
-  }
+    const context = resolveSnapAssistContext(picker.windowId, picker.monitorName);
+    snapAssistPickerRenderer.render({
+      anchorRect: picker.anchorRect,
+      container: main,
+      workArea: context ? context.workGlobal : { x: 0, y: 0, w: 1, h: 1 },
+      currentSnapLayout: context?.snapLayout ?? assistMonitorSnapLayout("3x2"),
+      customLayouts: context?.customLayouts ?? [],
+      hoverSelection: snapPickerHoverSelection(),
+      autoHover: picker.autoHover,
+      shellUiWindowId: SHELL_UI_PORTAL_PICKER_WINDOW_ID,
+      shellUiWindowZ: 1100000,
+      getShellUiMeasureEnv,
+    });
+  });
 
   return {
     assistOverlay,
@@ -1831,6 +1816,5 @@ export function createShellWindowGestureRuntime(
     applyShellWindowResize,
     syncShellWindowResizePointer,
     endShellWindowResize,
-    SnapAssistPickerLayer,
   };
 }

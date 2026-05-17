@@ -1,7 +1,6 @@
 import path from 'node:path'
 
 import {
-  KEY,
   SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
   activateTaskbarWindow,
@@ -13,6 +12,7 @@ import {
   cleanupShellWindows,
   compositorWindowById,
   defineGroup,
+  doubleClickRect,
   dragRectToRect,
   getJson,
   getSnapshots,
@@ -26,7 +26,6 @@ import {
   shellWindowById,
   spawnNativeWindow,
   tabGroupByWindow,
-  tapKey,
   taskbarForMonitor,
   typeText,
   waitFor,
@@ -41,6 +40,7 @@ import {
 } from '../lib/runtime.ts'
 
 const FILE_BROWSER_APP_ID = 'derp.files'
+const FILE_BROWSER_COMMAND_ID = 'shell:file_browser'
 const SHELL_TEST_APP_ID = 'derp.test-shell'
 
 function fileBrowserState(shell: ShellSnapshot, windowId?: number) {
@@ -91,16 +91,19 @@ async function openFileBrowserFromLauncher(
   )
   await ensureProgramsMenuSearchReady(base, await openProgramsMenu(base, 'keybind'))
   await typeText(base, 'shell')
-  await waitFor(
+  const readyMenu = await waitFor(
     'wait for shell file browser launcher result',
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      return shell.programs_menu_query === 'shell' && shell.controls?.programs_menu_first_item ? shell : null
+      const item = shell.programs_menu_items?.find((entry) => entry.id === FILE_BROWSER_COMMAND_ID && entry.rect)
+      return shell.programs_menu_query === 'shell' && item ? shell : null
     },
     2000,
     50,
   )
-  await tapKey(base, KEY.enter)
+  const item = readyMenu.programs_menu_items?.find((entry) => entry.id === FILE_BROWSER_COMMAND_ID && entry.rect)
+  assert(item?.rect, `missing launcher item ${FILE_BROWSER_COMMAND_ID}`)
+  await clickRect(base, item.rect)
   const openedWindow = await waitFor(
     'wait for file browser window',
     async () => {
@@ -179,7 +182,7 @@ async function openDirectoryRowWithClicks(base: string, expectedPath: string, ro
   if (fileBrowserState(openedShell, windowId)?.active_path === expectedPath) return openedShell
   const selectedRow = fileBrowserRow(openedShell, rowName, windowId)
   assert(selectedRow?.rect, `missing selected row rect for ${rowName}`)
-  await clickRect(base, selectedRow.rect)
+  await doubleClickRect(base, selectedRow.rect)
   return waitForActivePath(base, expectedPath, windowId)
 }
 

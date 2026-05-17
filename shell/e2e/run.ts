@@ -2,6 +2,7 @@ import {
   ANSI,
   SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
+  assertNoUnexpectedNativeWindows,
   captureFailureArtifacts,
   cleanupNativeWindows,
   cleanupShellWindows,
@@ -112,10 +113,8 @@ async function main(): Promise<void> {
   const runStart = Date.now()
   const reporter = createReporter(selected.map((group) => group.name))
   const state = createState(base)
-  if (!args.sessionRestore) {
-    base = await disableSessionRestoreForE2e(base, state)
-    state.base = base
-  }
+  base = await disableSessionRestoreForE2e(base, state)
+  state.base = base
   let suitePassed = false
   let currentGroupName = selected[0]?.name ?? 'suite'
   let currentTestName = 'bootstrap'
@@ -129,7 +128,9 @@ async function main(): Promise<void> {
           currentTestName = entry.name
           await reporter.run(group.name, entry.name, async () => {
             await primeState(state.base, state, { sessionRestore: args.sessionRestore })
-            return entry.run({ base: state.base, state })
+            const result = await entry.run({ base: state.base, state })
+            await assertNoUnexpectedNativeWindows(state.base, state, `${group.name}-${entry.name}`)
+            return result
           })
         }
       } finally {

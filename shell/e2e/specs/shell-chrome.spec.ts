@@ -2778,6 +2778,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
             !fileBrowserWindow
           )
             return null;
+          const placement = snapshots.compositor.shell_ui_windows?.find(
+            (entry) => entry.id === fileBrowserId,
+          );
+          if (!placement) return null;
+          if (
+            Math.abs(placement.global.x - controls.titlebar.global_x) > 1 ||
+            Math.abs(placement.global.y - controls.titlebar.global_y) > 1 ||
+            Math.abs(placement.global.width - controls.titlebar.width) > 1
+          )
+            return null;
           const frameDimmed =
             (controls.frame_opacity ?? 1) <= 0.8 ||
             (fileBrowserWindow.render_alpha ?? 1) <= 0.8;
@@ -2806,6 +2816,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             compositor: snapshots.compositor,
             shell: snapshots.shell,
             controls,
+            placement,
             fileBrowserWindow,
             nativeWindow,
           };
@@ -2849,6 +2860,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           focusedShellUiWindowId:
             duringDrag.compositor.focused_shell_ui_window_id,
           titlebar: duringDrag.controls.titlebar ?? null,
+          shellUiPlacement: duringDrag.placement,
           frameOpacity: duringDrag.controls.frame_opacity ?? null,
           fileBrowserWindow: duringDrag.fileBrowserWindow,
           nativeWindow: duringDrag.nativeWindow,

@@ -473,7 +473,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     }
   })
 
-  test('v2rayN taskbar close hides to tray and restores on activation', async ({ base }) => {
+  test('v2rayN taskbar close hides to tray and restores on activation', async ({ base, state }) => {
     try {
       await access(V2RAYN_BIN)
     } catch {
@@ -491,6 +491,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await spawnCommand(base, `/bin/sh -lc ${shellQuote(V2RAYN_BIN)}`)
     }
     const opened = await waitForV2rayNVisible(base)
+    state.spawnedNativeWindowIds.add(opened.window.window_id)
     await closeV2rayNTaskbarRow(base, opened.shell, opened.window.window_id)
     const hidden = await waitForV2rayNTrayHidden(base, opened.window.window_id)
     assert(!taskbarEntry(hidden, opened.window.window_id), 'v2rayN taskbar row survived close to tray')

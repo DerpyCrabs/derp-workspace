@@ -161,6 +161,9 @@ impl CompositorState {
         {
             return Vec::new();
         }
+        if is_shell_hosted {
+            return Vec::new();
+        }
         let outer = if is_shell_hosted {
             self.shell_backed_outer_global_rect(&info)
         } else {
@@ -239,18 +242,11 @@ impl CompositorState {
                 .iter()
                 .filter_map(|z| z.intersection(visible)),
         );
-        let preview_source_window = self
-            .input_routing
-            .shell_native_drag_preview
-            .as_ref()
-            .map(|preview| preview.window_id);
-        if elem_window != preview_source_window {
-            if let Some(rect) = self
-                .shell_native_drag_preview_clip_rect()
-                .and_then(|rect| rect.intersection(visible))
-            {
-                out.push(rect);
-            }
+        if let Some(rect) = self
+            .shell_native_drag_preview_clip_rect()
+            .and_then(|rect| rect.intersection(visible))
+        {
+            out.push(rect);
         }
         let placements = self.shell_hosted_clip_placements(elem_window);
         match elem_window {

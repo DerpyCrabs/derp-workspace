@@ -102,6 +102,17 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
           }
           const visible = () => !hiddenByFullscreen() && revealed()
           const layerRect = () => (visible() ? taskbar() : trigger())
+          const taskbarExclusionRect = () => {
+            if (hiddenByFullscreen() && !props.taskbarAutoHide()) return null
+            const rect = layerRect()
+            return { x: rect.x, y: rect.y, w: rect.width, h: rect.height }
+          }
+          const taskbarRegistration = registerShellExclusionRect('base', `taskbar:${currentScreen().name}`, () => taskbarExclusionRect())
+          createEffect(() => {
+            taskbarExclusionRect()
+            taskbarRegistration.invalidate()
+          })
+          onCleanup(taskbarRegistration.unregister)
           const trailingTaskbarControlSize = () => {
             const side = currentScreen().taskbar_side
             const clock = side === 'left' || side === 'right' ? 36 : 72

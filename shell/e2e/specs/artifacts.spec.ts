@@ -64,7 +64,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('harness-smoke-result.json', result)
   })
 
-  test('debug harness reproduces native maximize over shell file browser', async () => {
+  test('debug harness reproduces native maximize over shell file browser', async ({ base, state }) => {
     const { stdout } = await execFileAsync(process.execPath, [
       'shell/e2e/harness.mjs',
       'scenario',
@@ -95,6 +95,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(scenario.after.shell, 'harness scenario missing after shell artifact')
     assert(scenario.after.html, 'harness scenario missing after html artifact')
     assert(scenario.after.screenshot?.path, 'harness scenario missing after screenshot')
+    const snapshot = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+    for (const window of snapshot.windows) {
+      if (!window.shell_hosted && !state.knownWindowIds.has(window.window_id) && window.app_id === 'foot') {
+        state.spawnedNativeWindowIds.add(window.window_id)
+      }
+    }
     await access(scenario.summary)
     await access(scenario.after.compositor)
     await access(scenario.after.shell)

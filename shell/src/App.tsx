@@ -30,7 +30,7 @@ import {
   invalidateAllShellUiWindows,
   SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
-} from "@/features/shell-ui/shellUiWindows";
+} from "@/features/shell-ui/shellHostedSurfaceRegistry";
 import { createBackedShellWindowActions } from "@/features/shell-ui/backedShellWindowActions";
 import { renderShellHostedWindowContent } from "@/features/shell-ui/shellHostedWindowContent";
 import type { ShellCompositorWireSend } from "@/features/shell-ui/shellWireSendType";
@@ -232,9 +232,10 @@ function App() {
     applyAuthoritativeSnapshotDetails: applyModelAuthoritativeSnapshotDetails,
     clearAuthoritativeSnapshotDomains: clearModelAuthoritativeSnapshotDomains,
   } = createCompositorModel();
-  const allWindowsMap = compositorWindowsMap;
-  const windows = compositorWindowsMap;
-  const windowsList = compositorWindowsList;
+  const compositorWindowsForGeometry = compositorWindowsList;
+  const compositorWindowMapForGeometry = compositorWindowsMap;
+  const readCompositorWindowForChrome = (windowId: number) =>
+    compositorWindowMapForGeometry().get(windowId);
   const [compositorInteractionState, setCompositorInteractionState] =
     createSignal<{
       revision: number;
@@ -569,8 +570,8 @@ function App() {
     sessionSnapshotHasData,
     tryAssignRestoredNativeWindow,
   } = createSessionRuntime({
-    getAllWindowsMap: allWindowsMap,
-    getWindowsList: windowsList,
+    getAllWindowsMap: compositorWindowMapForGeometry,
+    getWindowsList: compositorWindowsForGeometry,
     getWorkspaceState: workspaceSnapshot,
     getTaskbarScreens: () => taskbarScreens(),
     getWorkspacePrimary: () => workspacePartition().primary,
@@ -623,7 +624,7 @@ function App() {
   } = shellTransportBridge;
   const sessionPersistenceRuntime = createAppSessionPersistenceRuntime({
     sessionRestoreSnapshot,
-    windows,
+    windows: compositorWindowMapForGeometry,
     workspaceSnapshot,
     nativeWindowRefs,
     tilingCfgRev,
@@ -748,7 +749,7 @@ function App() {
   });
 
   const backedShellWindowActions = createBackedShellWindowActions({
-    getWindows: windowsList,
+    getWindows: shellUiWindowsList,
     getScreenDraftRows: liveScreenRows,
     getOutputGeom: outputGeom,
     getLayoutCanvasOrigin: layoutCanvasOrigin,
@@ -820,7 +821,7 @@ function App() {
     screenDraftRows: liveScreenRows,
     shellChromePrimaryName,
     getWorkspacePrimary: () => workspacePartition().primary,
-    getWindows: windowsList,
+    getWindows: compositorWindowsForGeometry,
     focusedWindowId,
     shellWireReadyRev,
     getMenuLayerHostEl: () => shellContextMenus.menuLayerHostEl(),
@@ -1005,7 +1006,7 @@ function App() {
     shellHostedAppByWindow,
   });
   const compositorWindowsByMonitor = createMemo(() =>
-    buildWindowsByMonitor(windowsList(), fallbackMonitorName()),
+    buildWindowsByMonitor(compositorWindowsForGeometry(), fallbackMonitorName()),
   );
   function requestWindowSyncRecovery() {
     if (hasPendingClientMutation()) return;
@@ -1044,7 +1045,7 @@ function App() {
     setSplitGroupFraction,
   } = createWorkspaceActions({
     workspaceSnapshot,
-    allWindowsMap,
+    allWindowsMap: compositorWindowMapForGeometry,
     workspaceGroups,
     workspaceGroupsById,
     activeWorkspaceGroupId,
@@ -1472,18 +1473,6 @@ function App() {
   const taskbarScreens = createMemo(() =>
     screensListForLayout(liveScreenRows(), outputGeom(), layoutCanvasOrigin()),
   );
-  const shellExclusionVisibleWindowIds = createMemo(() => {
-    const visible = new Set<number>();
-    for (const group of workspaceGroups()) {
-      for (const windowId of group.visibleWindowIds) visible.add(windowId);
-    }
-    for (const window of windowsList()) {
-      if (workspaceGroupIdForWindow(window.window_id) === null)
-        visible.add(window.window_id);
-    }
-    return visible;
-  });
-
   const exclusionReactiveDeps = createMemo(() => {
     void shellContextMenus.ctxMenuOpen();
     void shellContextMenus.powerMenuOpen();
@@ -1501,12 +1490,6 @@ function App() {
       mainEl: () => mainRef,
       outputGeom,
       layoutCanvasOrigin,
-      taskbarScreens,
-      taskbarHeight: TASKBAR_HEIGHT,
-      taskbarAutoHide,
-      windows: windowsList,
-      isWindowVisible: (window) =>
-        shellExclusionVisibleWindowIds().has(window.window_id),
       onHudChange: debugHudRuntime.setExclusionZonesHud,
       exclusionReactiveDeps,
     });
@@ -1539,7 +1522,7 @@ function App() {
 
   const workspaceLayoutBridge = createWorkspaceLayoutBridge({
     getWorkspaceState: workspaceSnapshot,
-    getAllWindowsMap: allWindowsMap,
+    getAllWindowsMap: compositorWindowMapForGeometry,
     getWindowsByMonitor: compositorWindowsByMonitor,
     getTaskbarRowsByMonitor: taskbarRowsByMonitor,
     getFallbackMonitorName: fallbackMonitorName,
@@ -1669,7 +1652,7 @@ function App() {
     outputGeom,
     layoutCanvasOrigin,
     screenDraftRows: liveScreenRows,
-    readCompositorWindow: (windowId) => allWindowsMap().get(windowId),
+    readCompositorWindow: readCompositorWindowForChrome,
     reserveTaskbarForMon: workspaceLayoutBridge.reserveTaskbarForMon,
     occupiedSnapZonesOnMonitor:
       workspaceLayoutBridge.occupiedSnapZonesOnMonitor,
@@ -1748,8 +1731,22 @@ function App() {
     closeWindow,
     shellContextOpenTabMenu: shellContextMenus.openTabMenu,
     nativeDragPreview: nativeDragPreviewAsset,
+    shellHostedContentRoot: getShellHostedContentRoot,
     shellWireSend,
   });
+
+  const shellHostedContentRoots = new Map<number, HTMLDivElement>();
+
+  function getShellHostedContentRoot(windowId: number) {
+    let root = shellHostedContentRoots.get(windowId);
+    if (!root) {
+      root = document.createElement("div");
+      root.className = "h-full min-h-0 min-w-0 [&>*]:h-full [&>*]:min-h-0 [&>*]:min-w-0";
+      root.dataset.shellHostedContentRoot = String(windowId);
+      shellHostedContentRoots.set(windowId, root);
+    }
+    return root;
+  }
 
   const shellHostedContentWindowIds = createMemo((prev: readonly number[] = []) => {
     const next = [...shellUiWindowsMap().values()]
@@ -1759,26 +1756,27 @@ function App() {
     return sameNumberList(prev, next) ? prev : next;
   });
 
+  createEffect(() => {
+    const live = new Set(shellHostedContentWindowIds());
+    for (const [windowId, root] of shellHostedContentRoots) {
+      if (live.has(windowId)) continue;
+      root.remove();
+      shellHostedContentRoots.delete(windowId);
+    }
+  });
+
   function ShellHostedContentPortal(props: { windowId: number }) {
-    const mount = createMemo(() => {
-      imperativeChromeRenderer.shellHostedContentMountRevision();
-      return imperativeChromeRenderer.shellHostedContentMount(props.windowId);
-    });
     return (
-      <Show when={mount()} keyed>
-        {(el) => (
-          <Portal mount={el}>
-            <div
-              class="h-full min-h-0 min-w-0"
-              onPointerDown={() => {
-                focusWindowViaShell(props.windowId);
-              }}
-            >
-              {renderShellWindowContent(props.windowId)}
-            </div>
-          </Portal>
-        )}
-      </Show>
+      <Portal mount={getShellHostedContentRoot(props.windowId)}>
+        <div
+          class="h-full min-h-0 min-w-0"
+          onPointerDown={() => {
+            focusWindowViaShell(props.windowId);
+          }}
+        >
+          {renderShellWindowContent(props.windowId)}
+        </div>
+      </Portal>
     );
   }
 
@@ -2076,7 +2074,7 @@ function App() {
             ? { w: logicalCanvas.w, h: logicalCanvas.h }
             : outputGeom();
         },
-        getWindows: windowsList,
+        getWindows: compositorWindowsForGeometry,
         getWorkspaceGroups: workspaceGroups,
         getTaskbarRowsByMonitor: taskbarRowsByMonitor,
         getFocusedWindowId: focusedWindowId,
@@ -2164,8 +2162,8 @@ function App() {
           shellWindowGestureRuntime.toggleShellMaximizeForWindow,
         spawnInCompositor: (cmd) => spawnInCompositor(cmd),
         focusedWindowId,
-        allWindowsMap,
-        windows,
+        allWindowsMap: compositorWindowMapForGeometry,
+        windows: compositorWindowMapForGeometry,
         layoutCanvasOrigin,
         screenDraftRows: liveScreenRows,
         outputGeom,
@@ -2228,7 +2226,7 @@ function App() {
       uiFps: debugHudRuntime.hudFps(),
       screens: liveScreenRows().map((r) => ({ ...r })),
       outputGeom: g ? { w: g.w, h: g.h } : null,
-      windowCount: windowsList().length,
+      windowCount: compositorWindowsForGeometry().length,
       layoutUnion: layoutUnionBbox(),
     };
     const text = JSON.stringify(payload);
@@ -2377,8 +2375,6 @@ function App() {
             }
             scheduleExclusionZonesSync={scheduleExclusionZonesSync}
           />
-
-          <shellWindowGestureRuntime.SnapAssistPickerLayer />
 
           <shellSurfaceRuntime.ShellSurfaceLayer />
 

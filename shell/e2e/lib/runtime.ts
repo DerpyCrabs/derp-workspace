@@ -449,6 +449,15 @@ export interface ProgramsMenuListScroll {
   client_height: number
 }
 
+export interface ProgramsMenuItemSnapshot {
+  id: string
+  idx: number
+  category: string
+  title: string
+  text: string
+  rect: Rect | null
+}
+
 export interface FileBrowserSnapshotRow {
   path: string
   name: string
@@ -587,6 +596,7 @@ export interface ShellSnapshot {
   settings_window_visible: boolean
   debug_window_visible: boolean
   programs_menu_open: boolean
+  programs_menu_items?: ProgramsMenuItemSnapshot[]
   power_menu_open: boolean
   volume_menu_open?: boolean
   tray_sni_menu_open?: boolean
@@ -739,23 +749,53 @@ export interface PerfShellRuntimeSnapshot {
   snapshot_decode_bytes: number
   snapshot_apply_count: number
   snapshot_apply_ms: number
+  snapshot_apply_max_ms: number
   snapshot_apply_details: number
   model_update_count: number
   model_update_ms: number
+  model_update_max_ms: number
   interaction_apply_count: number
   interaction_apply_ms: number
+  interaction_apply_max_ms: number
   window_apply_count: number
   window_apply_ms: number
+  window_apply_max_ms: number
   batch_apply_count: number
   batch_apply_ms: number
+  batch_apply_max_ms: number
   batch_apply_details: number
+  visual_followup_count: number
+  visual_followup_ms: number
+  visual_followup_max_ms: number
   dom_measure_count: number
   dom_measure_ms: number
+  imperative_chrome_detail_apply_count: number
+  imperative_chrome_detail_apply_ms: number
+  imperative_chrome_detail_apply_max_ms: number
+  imperative_chrome_detail_apply_details: number
   imperative_chrome_apply_count: number
   imperative_chrome_apply_ms: number
   imperative_chrome_apply_max_ms: number
   imperative_chrome_nodes: number
   imperative_chrome_dom_writes: number
+  imperative_chrome_created_nodes: number
+  imperative_chrome_removed_nodes: number
+  imperative_chrome_expected_windows: number
+  imperative_chrome_rendered_windows: number
+  imperative_chrome_render_gap_count: number
+  imperative_chrome_render_gap_max_windows: number
+  imperative_chrome_root_missing_count: number
+  imperative_chrome_surface_root_missing_count: number
+  shell_ui_windows_flush_count: number
+  shell_ui_windows_flush_ms: number
+  shell_ui_windows_flush_max_ms: number
+  shell_ui_windows_write_count: number
+  shell_ui_windows_changed_count: number
+  shell_ui_windows_stamp_refresh_count: number
+  shell_ui_windows_rows: number
+  shared_state_sync_count: number
+  shared_state_sync_ms: number
+  shared_state_sync_max_ms: number
   raf_sample_count: number
   raf_sample_ms: number
   raf_max_delta_ms: number
@@ -1312,6 +1352,10 @@ function e2eOwnedNativeWindow(window: WindowSnapshot): boolean {
   return false
 }
 
+function unexpectedNativeWindows(compositor: CompositorSnapshot, state: E2eState): WindowSnapshot[] {
+  return compositor.windows.filter((window) => !window.shell_hosted && !state.spawnedNativeWindowIds.has(window.window_id))
+}
+
 function emptySessionStateBody(): Record<string, unknown> {
   return { version: 1, shell: {} }
 }
@@ -1352,6 +1396,7 @@ export async function primeState(
     base = await disableSessionRestoreForE2e(base, state)
   }
   await cleanupNativeWindows(base, state.spawnedNativeWindowIds)
+  await cleanupUnexpectedNativeWindows(base, state)
   await cleanupShellWindows(base, [...state.spawnedShellWindowIds])
   state.spawnedShellWindowIds.clear()
   let recovered = false
@@ -1382,7 +1427,7 @@ export async function primeState(
   }
   await ensureDesktopApps(base, state)
   if (options.sessionRestore) {
-    shell = await waitForSessionRestoreIdle(base)
+    shell = await waitForSessionRestoreIdle(base, 20000)
   } else {
     shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   }
@@ -1646,23 +1691,42 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
           snapshot_apply_count:
             after.shell_runtime.snapshot_apply_count - before.shell_runtime.snapshot_apply_count,
           snapshot_apply_ms: after.shell_runtime.snapshot_apply_ms - before.shell_runtime.snapshot_apply_ms,
+          snapshot_apply_max_ms: after.shell_runtime.snapshot_apply_max_ms,
           snapshot_apply_details:
             after.shell_runtime.snapshot_apply_details - before.shell_runtime.snapshot_apply_details,
           model_update_count:
             after.shell_runtime.model_update_count - before.shell_runtime.model_update_count,
           model_update_ms: after.shell_runtime.model_update_ms - before.shell_runtime.model_update_ms,
+          model_update_max_ms: after.shell_runtime.model_update_max_ms,
           interaction_apply_count:
             after.shell_runtime.interaction_apply_count - before.shell_runtime.interaction_apply_count,
           interaction_apply_ms:
             after.shell_runtime.interaction_apply_ms - before.shell_runtime.interaction_apply_ms,
+          interaction_apply_max_ms: after.shell_runtime.interaction_apply_max_ms,
           window_apply_count:
             after.shell_runtime.window_apply_count - before.shell_runtime.window_apply_count,
           window_apply_ms: after.shell_runtime.window_apply_ms - before.shell_runtime.window_apply_ms,
+          window_apply_max_ms: after.shell_runtime.window_apply_max_ms,
           batch_apply_count: after.shell_runtime.batch_apply_count - before.shell_runtime.batch_apply_count,
           batch_apply_ms: after.shell_runtime.batch_apply_ms - before.shell_runtime.batch_apply_ms,
+          batch_apply_max_ms: after.shell_runtime.batch_apply_max_ms,
           batch_apply_details: after.shell_runtime.batch_apply_details - before.shell_runtime.batch_apply_details,
+          visual_followup_count:
+            after.shell_runtime.visual_followup_count - before.shell_runtime.visual_followup_count,
+          visual_followup_ms: after.shell_runtime.visual_followup_ms - before.shell_runtime.visual_followup_ms,
+          visual_followup_max_ms: after.shell_runtime.visual_followup_max_ms,
           dom_measure_count: after.shell_runtime.dom_measure_count - before.shell_runtime.dom_measure_count,
           dom_measure_ms: after.shell_runtime.dom_measure_ms - before.shell_runtime.dom_measure_ms,
+          imperative_chrome_detail_apply_count:
+            after.shell_runtime.imperative_chrome_detail_apply_count -
+            before.shell_runtime.imperative_chrome_detail_apply_count,
+          imperative_chrome_detail_apply_ms:
+            after.shell_runtime.imperative_chrome_detail_apply_ms -
+            before.shell_runtime.imperative_chrome_detail_apply_ms,
+          imperative_chrome_detail_apply_max_ms: after.shell_runtime.imperative_chrome_detail_apply_max_ms,
+          imperative_chrome_detail_apply_details:
+            after.shell_runtime.imperative_chrome_detail_apply_details -
+            before.shell_runtime.imperative_chrome_detail_apply_details,
           imperative_chrome_apply_count:
             after.shell_runtime.imperative_chrome_apply_count - before.shell_runtime.imperative_chrome_apply_count,
           imperative_chrome_apply_ms:
@@ -1671,6 +1735,40 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
           imperative_chrome_nodes: after.shell_runtime.imperative_chrome_nodes,
           imperative_chrome_dom_writes:
             after.shell_runtime.imperative_chrome_dom_writes - before.shell_runtime.imperative_chrome_dom_writes,
+          imperative_chrome_created_nodes:
+            after.shell_runtime.imperative_chrome_created_nodes - before.shell_runtime.imperative_chrome_created_nodes,
+          imperative_chrome_removed_nodes:
+            after.shell_runtime.imperative_chrome_removed_nodes - before.shell_runtime.imperative_chrome_removed_nodes,
+          imperative_chrome_expected_windows: after.shell_runtime.imperative_chrome_expected_windows,
+          imperative_chrome_rendered_windows: after.shell_runtime.imperative_chrome_rendered_windows,
+          imperative_chrome_render_gap_count:
+            after.shell_runtime.imperative_chrome_render_gap_count -
+            before.shell_runtime.imperative_chrome_render_gap_count,
+          imperative_chrome_render_gap_max_windows: after.shell_runtime.imperative_chrome_render_gap_max_windows,
+          imperative_chrome_root_missing_count:
+            after.shell_runtime.imperative_chrome_root_missing_count -
+            before.shell_runtime.imperative_chrome_root_missing_count,
+          imperative_chrome_surface_root_missing_count:
+            after.shell_runtime.imperative_chrome_surface_root_missing_count -
+            before.shell_runtime.imperative_chrome_surface_root_missing_count,
+          shell_ui_windows_flush_count:
+            after.shell_runtime.shell_ui_windows_flush_count - before.shell_runtime.shell_ui_windows_flush_count,
+          shell_ui_windows_flush_ms:
+            after.shell_runtime.shell_ui_windows_flush_ms - before.shell_runtime.shell_ui_windows_flush_ms,
+          shell_ui_windows_flush_max_ms: after.shell_runtime.shell_ui_windows_flush_max_ms,
+          shell_ui_windows_write_count:
+            after.shell_runtime.shell_ui_windows_write_count - before.shell_runtime.shell_ui_windows_write_count,
+          shell_ui_windows_changed_count:
+            after.shell_runtime.shell_ui_windows_changed_count - before.shell_runtime.shell_ui_windows_changed_count,
+          shell_ui_windows_stamp_refresh_count:
+            after.shell_runtime.shell_ui_windows_stamp_refresh_count -
+            before.shell_runtime.shell_ui_windows_stamp_refresh_count,
+          shell_ui_windows_rows: after.shell_runtime.shell_ui_windows_rows,
+          shared_state_sync_count:
+            after.shell_runtime.shared_state_sync_count - before.shell_runtime.shared_state_sync_count,
+          shared_state_sync_ms:
+            after.shell_runtime.shared_state_sync_ms - before.shell_runtime.shared_state_sync_ms,
+          shared_state_sync_max_ms: after.shell_runtime.shared_state_sync_max_ms,
           raf_sample_count: after.shell_runtime.raf_sample_count - before.shell_runtime.raf_sample_count,
           raf_sample_ms: after.shell_runtime.raf_sample_ms - before.shell_runtime.raf_sample_ms,
           raf_max_delta_ms: after.shell_runtime.raf_max_delta_ms,
@@ -4020,6 +4118,13 @@ export function findLauncherCandidate(apps: DesktopAppEntry[]): { query: string;
   return null
 }
 
+export function desktopAppCommandPaletteId(app: DesktopAppEntry): string {
+  const desktopId = typeof app.desktop_id === 'string' ? app.desktop_id.trim() : ''
+  const exec = typeof app.exec === 'string' ? app.exec.trim() : ''
+  const name = typeof app.name === 'string' ? app.name : ''
+  return `app:${desktopId || exec || name}`
+}
+
 export async function cleanupNativeWindows(base: string, windowIds: Set<number>): Promise<void> {
   const ids = new Set(windowIds)
   try {
@@ -4049,6 +4154,48 @@ export async function cleanupNativeWindows(base: string, windowIds: Set<number>)
       }
     } catch {}
   }
+}
+
+export async function cleanupUnexpectedNativeWindows(base: string, state: E2eState): Promise<void> {
+  try {
+    const { compositor } = await getSnapshots(base)
+    for (const window of unexpectedNativeWindows(compositor, state)) {
+      try {
+        await closeWindow(base, window.window_id)
+        await waitForWindowGone(base, window.window_id, 4000)
+      } catch {
+        try {
+          await crashWindow(base, window.window_id)
+          await waitForWindowGone(base, window.window_id, 4000)
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
+export async function assertNoUnexpectedNativeWindows(base: string, state: E2eState, label: string): Promise<void> {
+  const { compositor, shell } = await getSnapshots(base)
+  const unexpected = unexpectedNativeWindows(compositor, state)
+  if (unexpected.length === 0) return
+  await writeJsonArtifact(`${testLabel(label)}-unexpected-native-windows.json`, {
+    unexpected: unexpected.map((window) => ({
+      window_id: window.window_id,
+      title: window.title,
+      app_id: window.app_id,
+      output_name: window.output_name,
+      x: window.x,
+      y: window.y,
+      width: window.width,
+      height: window.height,
+    })),
+    compositor,
+    shell,
+  })
+  throw new Error(
+    `${label}: unexpected native windows: ${unexpected
+      .map((window) => `${window.window_id}:${window.app_id}:${window.title}`)
+      .join(', ')}`,
+  )
 }
 
 export async function cleanupShellWindows(base: string, windowIds: number[]): Promise<void> {

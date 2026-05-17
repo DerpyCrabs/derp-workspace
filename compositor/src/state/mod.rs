@@ -519,6 +519,11 @@ pub(crate) struct ShellUiWindowPlacement {
     pub buffer_rect: Rectangle<i32, Buffer>,
 }
 
+pub(crate) struct PendingShellUiWindows {
+    pub generation: u32,
+    pub windows: Vec<ShellUiWindowPlacement>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ShellVisiblePlacementsStamp {
     ui_generation: u32,
@@ -960,6 +965,7 @@ impl CompositorState {
                 shell_exclusion_overlay_open: false,
                 shell_exclusion_zones_need_full_damage: false,
                 shell_ui_windows: Vec::new(),
+                pending_shell_ui_windows: None,
                 shell_ui_windows_generation: 0,
                 shell_ui_windows_shared_sequence: 0,
                 shell_ui_windows_shared_path: crate::cef::shared_state::path_for_kind(

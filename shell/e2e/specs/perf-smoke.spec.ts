@@ -13,8 +13,11 @@ import {
   resetPerfCounters,
   setShellFrameSampling,
   tapKey,
+  waitFor,
   waitForCompositorQuiet,
+  windowControls,
   writeJsonArtifact,
+  openShellTestWindow,
   type PerfCounterSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
@@ -69,9 +72,25 @@ function summarizePerf(perf: PerfCounterSnapshot) {
     shell_snapshot_read_ms: raf?.snapshot_read_ms ?? 0,
     shell_snapshot_decode_ms: raf?.snapshot_decode_ms ?? 0,
     shell_snapshot_apply_ms: raf?.snapshot_apply_ms ?? 0,
+    shell_snapshot_apply_max_ms: raf?.snapshot_apply_max_ms ?? 0,
     shell_model_update_ms: raf?.model_update_ms ?? 0,
+    shell_model_update_max_ms: raf?.model_update_max_ms ?? 0,
     shell_interaction_apply_ms: raf?.interaction_apply_ms ?? 0,
+    shell_interaction_apply_max_ms: raf?.interaction_apply_max_ms ?? 0,
     shell_window_apply_ms: raf?.window_apply_ms ?? 0,
+    shell_window_apply_max_ms: raf?.window_apply_max_ms ?? 0,
+    shell_batch_apply_max_ms: raf?.batch_apply_max_ms ?? 0,
+    shell_visual_followup_count: raf?.visual_followup_count ?? 0,
+    shell_visual_followup_ms: raf?.visual_followup_ms ?? 0,
+    shell_visual_followup_max_ms: raf?.visual_followup_max_ms ?? 0,
+    shell_imperative_chrome_detail_apply_count: raf?.imperative_chrome_detail_apply_count ?? 0,
+    shell_imperative_chrome_detail_apply_ms: raf?.imperative_chrome_detail_apply_ms ?? 0,
+    shell_imperative_chrome_detail_apply_avg_ms:
+      raf && raf.imperative_chrome_detail_apply_count > 0
+        ? Math.round((raf.imperative_chrome_detail_apply_ms / raf.imperative_chrome_detail_apply_count) * 1000) / 1000
+        : 0,
+    shell_imperative_chrome_detail_apply_max_ms: raf?.imperative_chrome_detail_apply_max_ms ?? 0,
+    shell_imperative_chrome_detail_apply_details: raf?.imperative_chrome_detail_apply_details ?? 0,
     shell_imperative_chrome_apply_count: raf?.imperative_chrome_apply_count ?? 0,
     shell_imperative_chrome_apply_ms: raf?.imperative_chrome_apply_ms ?? 0,
     shell_imperative_chrome_apply_avg_ms:
@@ -81,6 +100,32 @@ function summarizePerf(perf: PerfCounterSnapshot) {
     shell_imperative_chrome_apply_max_ms: raf?.imperative_chrome_apply_max_ms ?? 0,
     shell_imperative_chrome_nodes: raf?.imperative_chrome_nodes ?? 0,
     shell_imperative_chrome_dom_writes: raf?.imperative_chrome_dom_writes ?? 0,
+    shell_imperative_chrome_created_nodes: raf?.imperative_chrome_created_nodes ?? 0,
+    shell_imperative_chrome_removed_nodes: raf?.imperative_chrome_removed_nodes ?? 0,
+    shell_imperative_chrome_expected_windows: raf?.imperative_chrome_expected_windows ?? 0,
+    shell_imperative_chrome_rendered_windows: raf?.imperative_chrome_rendered_windows ?? 0,
+    shell_imperative_chrome_render_gap_count: raf?.imperative_chrome_render_gap_count ?? 0,
+    shell_imperative_chrome_render_gap_max_windows: raf?.imperative_chrome_render_gap_max_windows ?? 0,
+    shell_imperative_chrome_root_missing_count: raf?.imperative_chrome_root_missing_count ?? 0,
+    shell_imperative_chrome_surface_root_missing_count: raf?.imperative_chrome_surface_root_missing_count ?? 0,
+    shell_ui_windows_flush_count: raf?.shell_ui_windows_flush_count ?? 0,
+    shell_ui_windows_flush_ms: raf?.shell_ui_windows_flush_ms ?? 0,
+    shell_ui_windows_flush_avg_ms:
+      raf && raf.shell_ui_windows_flush_count > 0
+        ? Math.round((raf.shell_ui_windows_flush_ms / raf.shell_ui_windows_flush_count) * 1000) / 1000
+        : 0,
+    shell_ui_windows_flush_max_ms: raf?.shell_ui_windows_flush_max_ms ?? 0,
+    shell_ui_windows_write_count: raf?.shell_ui_windows_write_count ?? 0,
+    shell_ui_windows_changed_count: raf?.shell_ui_windows_changed_count ?? 0,
+    shell_ui_windows_stamp_refresh_count: raf?.shell_ui_windows_stamp_refresh_count ?? 0,
+    shell_ui_windows_rows: raf?.shell_ui_windows_rows ?? 0,
+    shared_state_sync_count: raf?.shared_state_sync_count ?? 0,
+    shared_state_sync_ms: raf?.shared_state_sync_ms ?? 0,
+    shared_state_sync_avg_ms:
+      raf && raf.shared_state_sync_count > 0
+        ? Math.round((raf.shared_state_sync_ms / raf.shared_state_sync_count) * 1000) / 1000
+        : 0,
+    shared_state_sync_max_ms: raf?.shared_state_sync_max_ms ?? 0,
     dom_measure_count: raf?.dom_measure_count ?? 0,
     dom_measure_ms: raf?.dom_measure_ms ?? 0,
     schedule_to_render_max_us: perf.latency.schedule_to_render_max_us,
@@ -118,6 +163,51 @@ function summarizePerf(perf: PerfCounterSnapshot) {
   }
 }
 
+function assertHotChromeBudget(
+  label: string,
+  summary: ReturnType<typeof summarizePerf>,
+  options: { snapshotTotals?: boolean } = {},
+) {
+  assert(
+    summary.shell_imperative_chrome_apply_avg_ms <= 2.5,
+    `${label} imperative chrome avg apply too high: ${summary.shell_imperative_chrome_apply_avg_ms}ms`,
+  )
+  assert(
+    summary.shell_imperative_chrome_apply_max_ms <= 12,
+    `${label} imperative chrome max apply too high: ${summary.shell_imperative_chrome_apply_max_ms}ms`,
+  )
+  assert(
+    summary.shell_imperative_chrome_detail_apply_max_ms <= 14,
+    `${label} imperative chrome detail apply too high: ${summary.shell_imperative_chrome_detail_apply_max_ms}ms`,
+  )
+  assert(
+    summary.shell_imperative_chrome_root_missing_count === 0,
+    `${label} imperative chrome root was missing during hot path: ${summary.shell_imperative_chrome_root_missing_count}`,
+  )
+  assert(
+    summary.shell_imperative_chrome_expected_windows === summary.shell_imperative_chrome_rendered_windows,
+    `${label} imperative chrome rendered ${summary.shell_imperative_chrome_rendered_windows}/${summary.shell_imperative_chrome_expected_windows} expected windows`,
+  )
+  assert(
+    summary.shell_imperative_chrome_render_gap_count === 0,
+    `${label} imperative chrome had ${summary.shell_imperative_chrome_render_gap_count} render gaps, max missing ${summary.shell_imperative_chrome_render_gap_max_windows}`,
+  )
+  if (options.snapshotTotals !== false) {
+    assert(
+      summary.shell_snapshot_apply_max_ms <= 14,
+      `${label} snapshot apply spike too high: ${summary.shell_snapshot_apply_max_ms}ms`,
+    )
+    assert(
+      summary.shell_model_update_max_ms <= 5,
+      `${label} Solid model update spike too high: ${summary.shell_model_update_max_ms}ms`,
+    )
+  }
+  assert(
+    summary.shell_batch_coalesce_dropped <= 2,
+    `${label} dropped too many coalesced batch details: ${summary.shell_batch_coalesce_dropped}`,
+  )
+}
+
 async function closeProgramsMenuIfOpen(base: string): Promise<ShellSnapshot> {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   if (shell.programs_menu_open) {
@@ -139,6 +229,10 @@ async function captureDragPerf(
     strip: 'blue',
   })
   state.spawnedNativeWindowIds.add(native.window.window_id)
+  await waitFor(`wait for perf drag chrome ${native.window.window_id}`, async () => {
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    return windowControls(shell, native.window.window_id)?.titlebar ? shell : null
+  })
   const start = {
     x: native.window.x + native.window.width / 2,
     y: native.window.y + 14,
@@ -177,6 +271,10 @@ async function captureSnapOverlayPerf(
     strip: 'blue',
   })
   state.spawnedNativeWindowIds.add(native.window.window_id)
+  await waitFor(`wait for perf snap chrome ${native.window.window_id}`, async () => {
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    return windowControls(shell, native.window.window_id)?.titlebar ? shell : null
+  })
   const start = {
     x: native.window.x + native.window.width / 2,
     y: native.window.y + 14,
@@ -210,6 +308,45 @@ async function captureSnapOverlayPerf(
   return { load, summary, perf }
 }
 
+async function captureShellHostedDragPerf(
+  base: string,
+  state: Parameters<typeof openShellTestWindow>[1],
+) {
+  const opened = await openShellTestWindow(base, state)
+  await waitFor(`wait for shell-hosted perf drag chrome ${opened.window.window_id}`, async () => {
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    return windowControls(shell, opened.window.window_id)?.titlebar ? shell : null
+  })
+  const controls = windowControls(opened.shell, opened.window.window_id)
+  const titlebar = controls?.titlebar
+  assert(titlebar, 'missing shell-hosted perf drag titlebar')
+  const start = {
+    x: titlebar.x + titlebar.width / 2,
+    y: titlebar.y + titlebar.height / 2,
+  }
+  const end = {
+    x: start.x + 300,
+    y: start.y + 80,
+  }
+  await resetPerfCounters(base)
+  await setShellFrameSampling(base, true)
+  const load = startCpuLoad(2500)
+  try {
+    await movePoint(base, start.x, start.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    for (const point of linePoints(start.x, start.y, end.x, end.y, 96)) {
+      await movePoint(base, point.x, point.y)
+    }
+    await pointerButton(base, BTN_LEFT, 'release')
+  } finally {
+    await setShellFrameSampling(base, false)
+    await load.stop()
+  }
+  const perf = await getPerfCounters(base)
+  const summary = summarizePerf(perf)
+  return { load, summary, perf }
+}
+
 export default defineGroup(import.meta.url, ({ test }) => {
   test('idle compositor does not redraw at refresh cadence', async ({ base }) => {
     const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
@@ -230,31 +367,49 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
   test('captures active drag frame pacing under CPU load', async ({ base, state }) => {
     const sample = await captureDragPerf(base, state, 'imperative')
+    await writeJsonArtifact('active-drag-load-perf.json', {
+      load_workers: sample.load.workerCount,
+      summary: sample.summary,
+      perf: sample.perf,
+    })
     assert(
       sample.summary.shell_imperative_chrome_apply_count > 0,
       `expected imperative chrome applies during loaded drag, got ${sample.summary.shell_imperative_chrome_apply_count}`,
     )
     assert(sample.summary.raf_sample_count >= 3, `expected RAF frame samples during loaded drag, got ${sample.summary.raf_sample_count}`)
     assert(sample.summary.drm_render_ticks > 0, `expected compositor render ticks during loaded drag, got ${sample.summary.drm_render_ticks}`)
-    await writeJsonArtifact('active-drag-load-perf.json', {
-      load_workers: sample.load.workerCount,
-      summary: sample.summary,
-      perf: sample.perf,
-    })
+    assertHotChromeBudget('loaded drag', sample.summary)
   })
 
   test('captures snap overlay frame pacing under CPU load', async ({ base, state }) => {
     const sample = await captureSnapOverlayPerf(base, state, 'imperative')
-    assert(
-      sample.summary.shell_imperative_chrome_apply_count > 0,
-      `expected imperative snap overlay applies during loaded drag, got ${sample.summary.shell_imperative_chrome_apply_count}`,
-    )
-    assert(sample.summary.raf_sample_count >= 3, `expected RAF frame samples during loaded snap overlay drag, got ${sample.summary.raf_sample_count}`)
     await writeJsonArtifact('snap-overlay-load-perf.json', {
       load_workers: sample.load.workerCount,
       summary: sample.summary,
       perf: sample.perf,
     })
+    assert(
+      sample.summary.shell_imperative_chrome_apply_count > 0,
+      `expected imperative snap overlay applies during loaded drag, got ${sample.summary.shell_imperative_chrome_apply_count}`,
+    )
+    assert(sample.summary.raf_sample_count >= 3, `expected RAF frame samples during loaded snap overlay drag, got ${sample.summary.raf_sample_count}`)
+    assertHotChromeBudget('loaded snap overlay', sample.summary)
+  })
+
+  test('captures shell-hosted drag placement sync under CPU load', async ({ base, state }) => {
+    const sample = await captureShellHostedDragPerf(base, state)
+    await writeJsonArtifact('shell-hosted-drag-load-perf.json', {
+      load_workers: sample.load.workerCount,
+      summary: sample.summary,
+      perf: sample.perf,
+    })
+    assert(
+      sample.summary.shell_imperative_chrome_apply_count > 0,
+      `expected imperative chrome applies during shell-hosted loaded drag, got ${sample.summary.shell_imperative_chrome_apply_count}`,
+    )
+    assert(sample.summary.shell_ui_windows_flush_count > 0, 'expected shell-hosted drag to flush shell-ui placement state')
+    assert(sample.summary.shared_state_sync_max_ms <= 4, `shell-hosted shared state sync too high: ${sample.summary.shared_state_sync_max_ms}ms`)
+    assertHotChromeBudget('loaded shell-hosted drag', sample.summary, { snapshotTotals: false })
   })
 
   test('captures shell action latency under CPU load', async ({ base }) => {
@@ -291,6 +446,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(
       summary.state_browser_to_renderer_count > 0,
       `expected state updates to reach renderer, got ${summary.state_browser_to_renderer_count}`,
+    )
+    assert(
+      summary.shell_snapshot_apply_ms <= 8,
+      `shell action snapshot apply too high: ${summary.shell_snapshot_apply_ms}ms`,
+    )
+    assert(
+      summary.shell_model_update_ms <= 8,
+      `shell action Solid model updates too high: ${summary.shell_model_update_ms}ms`,
     )
   })
 })

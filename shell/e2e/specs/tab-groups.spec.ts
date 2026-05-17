@@ -1741,6 +1741,32 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await timing.step('assert compositor owns csd source merged group', () =>
         assertShellTabGroupMatchesCompositorWorkspace(merged.group, [csdWindowId!, jsWindowId!]),
       )
+      const groupedTitlebarPreview = await timing.step('drag grouped csd titlebar uses native preview', async () => {
+        const shellBeforeDrag = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const startPoint = titlebarDragPoint(shellBeforeDrag, csdWindowId!)
+        await movePoint(base, startPoint.x, startPoint.y)
+        await pointerButton(base, BTN_LEFT, 'press')
+        released = false
+        await movePoint(base, startPoint.x + 88, startPoint.y + 28)
+        return waitFor(
+          `wait for grouped csd titlebar preview ${csdWindowId}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const group = tabGroupByWindow(shell, csdWindowId!)
+            const controls = windowControls(shell, csdWindowId!)
+            if (!group || group.member_window_ids.length !== 2 || group.visible_window_id !== csdWindowId) return null
+            if (compositor.shell_move_window_id !== csdWindowId) return null
+            if (compositor.shell_native_drag_preview_window_id !== csdWindowId) return null
+            if (compositor.shell_native_drag_preview_shell_ready !== true) return null
+            if (!controls?.titlebar || !controls.native_drag_preview_rect || controls.native_drag_preview_loaded !== true) return null
+            return { compositor, shell, group, controls }
+          },
+          3000,
+          40,
+        )
+      })
+      await timing.step('release grouped csd titlebar preview drag', () => finishDrag(base))
+      released = true
       await timing.step('write csd source drop artifact', () =>
         writeJsonArtifact('tab-groups-csd-source-drop.json', {
           targetMoved,
@@ -1748,6 +1774,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           start,
           dropIndicator,
           merged,
+          groupedTitlebarPreview,
         }),
       )
     } finally {

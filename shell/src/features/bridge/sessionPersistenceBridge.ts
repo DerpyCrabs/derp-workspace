@@ -113,7 +113,13 @@ export function createSessionPersistenceBridge(options: SessionPersistenceBridge
     options.setHasSeenCompositorWindowSync(false)
     lastPersistedSessionJson = JSON.stringify(snapshot)
     lastAppliedRestoreSignature = ''
-    options.setNextNativeWindowSeq(Math.max(1, snapshot.nextNativeWindowSeq))
+    let nextNativeSeq = Math.max(1, snapshot.nextNativeWindowSeq)
+    for (const nativeWindow of snapshot.nativeWindows) {
+      const match = /^native:(\d+)$/.exec(nativeWindow.windowRef)
+      const seq = match ? Number.parseInt(match[1]!, 10) : 0
+      if (Number.isFinite(seq)) nextNativeSeq = Math.max(nextNativeSeq, seq + 1)
+    }
+    options.setNextNativeWindowSeq(nextNativeSeq)
     for (const nativeWindow of snapshot.nativeWindows) {
       if (nativeWindow.launch) options.nativeLaunchMetadataByRef.set(nativeWindow.windowRef, nativeWindow.launch)
     }

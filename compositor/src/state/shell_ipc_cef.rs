@@ -287,6 +287,7 @@ impl CompositorState {
             workspace_ready,
             shell_output_logical_size,
         )?;
+        self.shell_promote_pending_ui_windows_for_frame();
         let mut handoff_shell_move_proxy = false;
         let proxy_release_state = self
             .input_routing
@@ -345,6 +346,7 @@ impl CompositorState {
             dirty_buffer,
             workspace_ready,
         )?;
+        self.shell_promote_pending_ui_windows_for_frame();
         self.shell_move_proxy_try_arm_capture();
         self.shell_move_try_activate_deferred();
         self.shell_move_flush_pending_deltas();

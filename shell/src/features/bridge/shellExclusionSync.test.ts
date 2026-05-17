@@ -1,4 +1,4 @@
-import { createRoot, createSignal } from 'solid-js'
+import { createRoot } from 'solid-js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 afterEach(() => {
@@ -50,28 +50,24 @@ describe('createShellExclusionSync', () => {
         mainEl: () => main,
         outputGeom: () => ({ w: 1920, h: 1080 }),
         layoutCanvasOrigin: () => null,
-        taskbarScreens: () => [],
-        taskbarHeight: 36,
-        taskbarAutoHide: () => false,
-        windows: () => [],
         onHudChange,
         exclusionReactiveDeps: () => 0,
       })
       return dispose
     })
 
+    const setupMeasureCalls = measure.mock.calls.length
+    const setupSendCalls = send.mock.calls.length
     runtime!.syncExclusionZonesNow()
     runtime!.syncExclusionZonesNow()
-    expect(measure).toHaveBeenCalledTimes(1)
-    expect(send).toHaveBeenCalledTimes(1)
+    expect(measure).toHaveBeenCalledTimes(setupMeasureCalls)
+    expect(send).toHaveBeenCalledTimes(setupSendCalls)
     expect(onHudChange).toHaveBeenLastCalledWith([{ label: 'taskbar:one', x: 10, y: 20, w: 80, h: 40 }])
 
     width = 96
     registration.invalidate()
-    runtime!.syncExclusionZonesNow()
-    expect(measure).toHaveBeenCalledTimes(2)
-    expect(send).toHaveBeenCalledTimes(2)
-    expect(main.getBoundingClientRect).toHaveBeenCalledTimes(2)
+    expect(measure).toHaveBeenCalledTimes(setupMeasureCalls + 1)
+    expect(send).toHaveBeenCalledTimes(setupSendCalls + 1)
 
     registration.unregister()
     dispose()
@@ -87,7 +83,8 @@ describe('createShellExclusionSync', () => {
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
     const mod = await import('./shellExclusionSync')
-    const measure = vi.fn(() => ({ x: 1, y: 2, w: 3, h: 4 }))
+    let width = 3
+    const measure = vi.fn(() => ({ x: 1, y: 2, w: width, h: 4 }))
     const registration = mod.registerShellExclusionRect('base', 'taskbar:retry', measure)
     const main = {
       getBoundingClientRect: vi.fn(() => rect(0, 0, 1920, 1080)),
@@ -99,20 +96,21 @@ describe('createShellExclusionSync', () => {
         mainEl: () => main,
         outputGeom: () => ({ w: 1920, h: 1080 }),
         layoutCanvasOrigin: () => null,
-        taskbarScreens: () => [],
-        taskbarHeight: 36,
-        taskbarAutoHide: () => false,
-        windows: () => [],
         onHudChange: vi.fn(),
         exclusionReactiveDeps: () => 0,
       })
       return dispose
     })
 
+    send.mockReset()
+    send.mockReturnValueOnce(false).mockReturnValue(true)
+    width = 5
+    registration.invalidate()
+    const setupMeasureCalls = measure.mock.calls.length
+    const setupSendCalls = send.mock.calls.length
     runtime!.syncExclusionZonesNow()
-    runtime!.syncExclusionZonesNow()
-    expect(send).toHaveBeenCalledTimes(2)
-    expect(measure).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledTimes(setupSendCalls + 1)
+    expect(measure).toHaveBeenCalledTimes(setupMeasureCalls)
 
     registration.unregister()
     dispose()
@@ -143,22 +141,19 @@ describe('createShellExclusionSync', () => {
         mainEl: () => main,
         outputGeom: () => ({ w: 1920, h: 1080 }),
         layoutCanvasOrigin: () => null,
-        taskbarScreens: () => [],
-        taskbarHeight: 36,
-        taskbarAutoHide: () => false,
-        windows: () => [],
         onHudChange: vi.fn(),
         exclusionReactiveDeps: () => 0,
       })
       return dispose
     })
 
-    runtime!.syncExclusionZonesNow()
+    const setupMeasureCalls = measure.mock.calls.length
+    const setupSendCalls = send.mock.calls.length
     ;(window as Window & { __DERP_LAST_COMPOSITOR_STATE_EPOCH?: number }).__DERP_LAST_COMPOSITOR_STATE_EPOCH = 4
     runtime!.syncExclusionZonesNow()
 
-    expect(send).toHaveBeenCalledTimes(1)
-    expect(measure).toHaveBeenCalledTimes(2)
+    expect(send).toHaveBeenCalledTimes(setupSendCalls)
+    expect(measure).toHaveBeenCalledTimes(setupMeasureCalls + 1)
 
     registration.unregister()
     dispose()
@@ -184,10 +179,6 @@ describe('createShellExclusionSync', () => {
         mainEl: () => main,
         outputGeom: () => ({ w: 1920, h: 1080 }),
         layoutCanvasOrigin: () => null,
-        taskbarScreens: () => [],
-        taskbarHeight: 36,
-        taskbarAutoHide: () => false,
-        windows: () => [],
         onHudChange: vi.fn(),
         exclusionReactiveDeps: () => 0,
       })
@@ -200,250 +191,6 @@ describe('createShellExclusionSync', () => {
 
     registration.unregister()
     expect(send).toHaveBeenCalledTimes(1)
-
-    dispose()
-  })
-
-  it('does not dirty exclusions for window geometry changes that do not affect taskbar fullscreen state', async () => {
-    const send = vi.fn().mockReturnValue(true)
-    vi.stubGlobal('window', {
-      __DERP_SHELL_EXCLUSION_STATE_PATH: '/tmp/exclusion.bin',
-      __derpShellSharedStateWrite: send,
-    })
-    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
-    vi.stubGlobal('cancelAnimationFrame', vi.fn())
-
-    const mod = await import('./shellExclusionSync')
-    const main = {
-      getBoundingClientRect: vi.fn(() => rect(0, 0, 1920, 1080)),
-    } as unknown as HTMLElement
-    const screen = {
-      name: 'DP-1',
-      identity: 'make:model:serial',
-      x: 0,
-      y: 0,
-      width: 1200,
-      height: 900,
-      physical_width: 1200,
-      physical_height: 900,
-      transform: 0,
-      refresh_milli_hz: 60000,
-      vrr_supported: false,
-      vrr_enabled: false,
-      taskbar_side: 'bottom' as const,
-    }
-    const windowRow = {
-      window_id: 7,
-      surface_id: 7,
-      stack_z: 1,
-      x: 0,
-      y: 0,
-      width: 400,
-      height: 300,
-      title: 'moving',
-      app_id: 'test',
-      icon_name: '',
-      icon_buffers: [],
-      output_id: 'make:model:serial',
-      output_name: 'DP-1',
-      kind: 'native',
-      x11_class: '',
-      x11_instance: '',
-      minimized: false,
-      maximized: false,
-      fullscreen: false,
-      shell_flags: 0,
-      capture_identifier: '',
-      workspace_visible: true,
-    }
-
-    let runtime: ReturnType<typeof mod.createShellExclusionSync> | null = null
-    const dispose = createRoot((dispose) => {
-      const [windows, setWindows] = createSignal([windowRow])
-      runtime = mod.createShellExclusionSync({
-        mainEl: () => main,
-        outputGeom: () => ({ w: 1920, h: 1080 }),
-        layoutCanvasOrigin: () => null,
-        taskbarScreens: () => [screen],
-        taskbarHeight: 36,
-        taskbarAutoHide: () => false,
-        windows,
-        onHudChange: vi.fn(),
-        exclusionReactiveDeps: () => 0,
-      })
-      return { dispose, setWindows }
-    })
-
-    runtime!.syncExclusionZonesNow()
-    send.mockClear()
-
-    dispose.setWindows([{ ...windowRow, x: 100, y: 40 }])
-    await Promise.resolve()
-    runtime!.syncExclusionZonesNow()
-    expect(send).not.toHaveBeenCalled()
-
-    dispose.dispose()
-  })
-
-  it('emits taskbar exclusions for configured sides and auto-hide trigger strips', async () => {
-    const send = vi.fn().mockReturnValue(true)
-    vi.stubGlobal('window', {
-      __DERP_SHELL_EXCLUSION_STATE_PATH: '/tmp/exclusion.bin',
-      __derpShellSharedStateWrite: send,
-    })
-    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
-    vi.stubGlobal('cancelAnimationFrame', vi.fn())
-
-    const mod = await import('./shellExclusionSync')
-    const onHudChange = vi.fn()
-    const main = {
-      getBoundingClientRect: vi.fn(() => rect(0, 0, 1920, 1080)),
-    } as unknown as HTMLElement
-    const screens = [
-      {
-        name: 'DP-1',
-        x: 0,
-        y: 0,
-        width: 1200,
-        height: 900,
-        physical_width: 1200,
-        physical_height: 900,
-        transform: 0,
-        refresh_milli_hz: 60000,
-        vrr_supported: false,
-        vrr_enabled: false,
-        taskbar_side: 'left' as const,
-      },
-      {
-        name: 'HDMI-A-1',
-        x: 1200,
-        y: 0,
-        width: 720,
-        height: 900,
-        physical_width: 720,
-        physical_height: 900,
-        transform: 0,
-        refresh_milli_hz: 60000,
-        vrr_supported: false,
-        vrr_enabled: false,
-        taskbar_side: 'right' as const,
-      },
-    ]
-    let autoHide = false
-
-    let runtime: ReturnType<typeof mod.createShellExclusionSync> | null = null
-    const dispose = createRoot((dispose) => {
-      runtime = mod.createShellExclusionSync({
-        mainEl: () => main,
-        outputGeom: () => ({ w: 1920, h: 1080 }),
-        layoutCanvasOrigin: () => null,
-        taskbarScreens: () => screens,
-        taskbarHeight: 36,
-        taskbarAutoHide: () => autoHide,
-        windows: () => [],
-        onHudChange,
-        exclusionReactiveDeps: () => autoHide,
-      })
-      return dispose
-    })
-
-    runtime!.syncExclusionZonesNow()
-    expect(onHudChange).toHaveBeenLastCalledWith([
-      { label: 'taskbar:DP-1', x: 0, y: 0, w: 36, h: 900 },
-      { label: 'taskbar:HDMI-A-1', x: 1884, y: 0, w: 36, h: 900 },
-    ])
-
-    autoHide = true
-    mod.invalidateAllShellExclusionRects()
-    runtime!.syncExclusionZonesNow()
-    expect(onHudChange).toHaveBeenLastCalledWith([
-      { label: 'taskbar:DP-1', x: 0, y: 0, w: 2, h: 900 },
-      { label: 'taskbar:HDMI-A-1', x: 1918, y: 0, w: 2, h: 900 },
-    ])
-
-    dispose()
-  })
-
-  it('omits pinned fullscreen taskbars but keeps auto-hide triggers', async () => {
-    const send = vi.fn().mockReturnValue(true)
-    vi.stubGlobal('window', {
-      __DERP_SHELL_EXCLUSION_STATE_PATH: '/tmp/exclusion.bin',
-      __derpShellSharedStateWrite: send,
-    })
-    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
-    vi.stubGlobal('cancelAnimationFrame', vi.fn())
-
-    const mod = await import('./shellExclusionSync')
-    const onHudChange = vi.fn()
-    const main = {
-      getBoundingClientRect: vi.fn(() => rect(0, 0, 1920, 1080)),
-    } as unknown as HTMLElement
-    const screen = {
-      name: 'DP-1',
-      identity: 'make:model:serial',
-      x: 0,
-      y: 0,
-      width: 1200,
-      height: 900,
-      physical_width: 1200,
-      physical_height: 900,
-      transform: 0,
-      refresh_milli_hz: 60000,
-      vrr_supported: false,
-      vrr_enabled: false,
-      taskbar_side: 'top' as const,
-    }
-    const fullscreenWindow = {
-      window_id: 7,
-      surface_id: 7,
-      stack_z: 1,
-      x: 0,
-      y: 0,
-      width: 1200,
-      height: 900,
-      title: 'fullscreen',
-      app_id: 'test',
-      icon_name: '',
-      icon_buffers: [],
-      output_id: 'make:model:serial',
-      output_name: 'DP-1',
-      kind: 'native',
-      x11_class: '',
-      x11_instance: '',
-      minimized: false,
-      maximized: false,
-      fullscreen: true,
-      shell_flags: 0,
-      capture_identifier: '',
-      workspace_visible: true,
-    }
-    let autoHide = false
-
-    let runtime: ReturnType<typeof mod.createShellExclusionSync> | null = null
-    const dispose = createRoot((dispose) => {
-      runtime = mod.createShellExclusionSync({
-        mainEl: () => main,
-        outputGeom: () => ({ w: 1920, h: 1080 }),
-        layoutCanvasOrigin: () => null,
-        taskbarScreens: () => [screen],
-        taskbarHeight: 36,
-        taskbarAutoHide: () => autoHide,
-        windows: () => [fullscreenWindow],
-        onHudChange,
-        exclusionReactiveDeps: () => autoHide,
-      })
-      return dispose
-    })
-
-    runtime!.syncExclusionZonesNow()
-    expect(onHudChange).toHaveBeenLastCalledWith([])
-
-    autoHide = true
-    mod.invalidateAllShellExclusionRects()
-    runtime!.syncExclusionZonesNow()
-    expect(onHudChange).toHaveBeenLastCalledWith([
-      { label: 'taskbar:DP-1', x: 0, y: 0, w: 1200, h: 2 },
-    ])
 
     dispose()
   })
