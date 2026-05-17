@@ -43,6 +43,15 @@ export type ShellRuntimePerfSnapshot = {
   imperative_chrome_removed_nodes: number
   imperative_chrome_expected_windows: number
   imperative_chrome_rendered_windows: number
+  imperative_chrome_full_apply_count: number
+  imperative_chrome_surface_apply_count: number
+  imperative_chrome_state_driven_apply_count: number
+  imperative_chrome_local_apply_count: number
+  imperative_chrome_visual_apply_count: number
+  imperative_chrome_visual_windows: number
+  imperative_chrome_state_age_ms: number
+  imperative_chrome_state_age_max_ms: number
+  imperative_chrome_state_age_p95_ms: number
   imperative_chrome_render_gap_count: number
   imperative_chrome_render_gap_max_windows: number
   imperative_chrome_root_missing_count: number
@@ -57,6 +66,31 @@ export type ShellRuntimePerfSnapshot = {
   shared_state_sync_count: number
   shared_state_sync_ms: number
   shared_state_sync_max_ms: number
+  state_to_chrome_count: number
+  state_to_chrome_ms: number
+  state_to_chrome_max_ms: number
+  state_to_chrome_p95_ms: number
+  action_to_chrome_count: number
+  action_to_chrome_ms: number
+  action_to_chrome_max_ms: number
+  action_to_chrome_p95_ms: number
+  action_to_chrome_pending_count: number
+  action_to_chrome_expired_count: number
+  action_to_chrome_move_count: number
+  action_to_chrome_move_max_ms: number
+  action_to_chrome_move_p95_ms: number
+  action_to_chrome_resize_count: number
+  action_to_chrome_resize_max_ms: number
+  action_to_chrome_resize_p95_ms: number
+  action_to_chrome_activation_count: number
+  action_to_chrome_activation_max_ms: number
+  action_to_chrome_activation_p95_ms: number
+  action_to_chrome_window_state_count: number
+  action_to_chrome_window_state_max_ms: number
+  action_to_chrome_window_state_p95_ms: number
+  action_to_chrome_workspace_count: number
+  action_to_chrome_workspace_max_ms: number
+  action_to_chrome_workspace_p95_ms: number
   raf_sample_count: number
   raf_sample_ms: number
   raf_max_delta_ms: number
@@ -110,6 +144,15 @@ const counters: ShellRuntimePerfSnapshot = {
   imperative_chrome_removed_nodes: 0,
   imperative_chrome_expected_windows: 0,
   imperative_chrome_rendered_windows: 0,
+  imperative_chrome_full_apply_count: 0,
+  imperative_chrome_surface_apply_count: 0,
+  imperative_chrome_state_driven_apply_count: 0,
+  imperative_chrome_local_apply_count: 0,
+  imperative_chrome_visual_apply_count: 0,
+  imperative_chrome_visual_windows: 0,
+  imperative_chrome_state_age_ms: 0,
+  imperative_chrome_state_age_max_ms: 0,
+  imperative_chrome_state_age_p95_ms: 0,
   imperative_chrome_render_gap_count: 0,
   imperative_chrome_render_gap_max_windows: 0,
   imperative_chrome_root_missing_count: 0,
@@ -124,6 +167,31 @@ const counters: ShellRuntimePerfSnapshot = {
   shared_state_sync_count: 0,
   shared_state_sync_ms: 0,
   shared_state_sync_max_ms: 0,
+  state_to_chrome_count: 0,
+  state_to_chrome_ms: 0,
+  state_to_chrome_max_ms: 0,
+  state_to_chrome_p95_ms: 0,
+  action_to_chrome_count: 0,
+  action_to_chrome_ms: 0,
+  action_to_chrome_max_ms: 0,
+  action_to_chrome_p95_ms: 0,
+  action_to_chrome_pending_count: 0,
+  action_to_chrome_expired_count: 0,
+  action_to_chrome_move_count: 0,
+  action_to_chrome_move_max_ms: 0,
+  action_to_chrome_move_p95_ms: 0,
+  action_to_chrome_resize_count: 0,
+  action_to_chrome_resize_max_ms: 0,
+  action_to_chrome_resize_p95_ms: 0,
+  action_to_chrome_activation_count: 0,
+  action_to_chrome_activation_max_ms: 0,
+  action_to_chrome_activation_p95_ms: 0,
+  action_to_chrome_window_state_count: 0,
+  action_to_chrome_window_state_max_ms: 0,
+  action_to_chrome_window_state_p95_ms: 0,
+  action_to_chrome_workspace_count: 0,
+  action_to_chrome_workspace_max_ms: 0,
+  action_to_chrome_workspace_p95_ms: 0,
   raf_sample_count: 0,
   raf_sample_ms: 0,
   raf_max_delta_ms: 0,
@@ -135,6 +203,76 @@ const counters: ShellRuntimePerfSnapshot = {
 const roundMs = (value: number) => Math.round(value * 1000) / 1000
 let rafSampleId = 0
 let rafSampleLast = 0
+const stateToChromeSamples: number[] = []
+const actionToChromeSamples: number[] = []
+const actionToChromeBucketSamples = {
+  move: [] as number[],
+  resize: [] as number[],
+  activation: [] as number[],
+  windowState: [] as number[],
+  workspace: [] as number[],
+}
+const chromeStateAgeSamples: number[] = []
+let pendingShellActionId = 1
+const pendingShellActions: Array<{ id: number; op: string; windowId: number | null; startedAt: number }> = []
+
+function perfNow() {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now()
+}
+
+function pushSample(samples: number[], elapsed: number) {
+  samples.push(elapsed)
+  if (samples.length > 512) samples.splice(0, samples.length - 512)
+}
+
+function sampleP95(samples: readonly number[]) {
+  if (samples.length === 0) return 0
+  const sorted = [...samples].sort((a, b) => a - b)
+  return roundMs(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0)
+}
+
+function expireShellActions(now = perfNow()) {
+  let expired = 0
+  for (let index = pendingShellActions.length - 1; index >= 0; index -= 1) {
+    if (now - pendingShellActions[index].startedAt <= 2000) continue
+    pendingShellActions.splice(index, 1)
+    expired += 1
+  }
+  if (expired > 0) counters.action_to_chrome_expired_count += expired
+  counters.action_to_chrome_pending_count = pendingShellActions.length
+}
+
+function trackedShellActionWindowId(op: string, args: readonly unknown[]) {
+  if (op === 'resize_delta' || op === 'resize_shell_grab_end' || op === 'invalidate_view') return null
+  const first = args[0]
+  if (typeof first !== 'number' || !Number.isFinite(first)) return null
+  const id = Math.trunc(first)
+  return id > 0 ? id : null
+}
+
+function isTrackedShellAction(op: string) {
+  return (
+    op === 'move_begin' ||
+    op === 'resize_begin' ||
+    op === 'resize_delta' ||
+    op === 'activate_window' ||
+    op === 'taskbar_activate' ||
+    op === 'minimize' ||
+    op === 'set_maximized' ||
+    op === 'set_geometry' ||
+    op === 'window_intent' ||
+    op === 'workspace_mutation'
+  )
+}
+
+function actionLatencyBucket(op: string) {
+  if (op === 'move_begin') return 'move'
+  if (op === 'resize_begin' || op === 'resize_delta') return 'resize'
+  if (op === 'activate_window' || op === 'taskbar_activate') return 'activation'
+  if (op === 'minimize' || op === 'set_maximized' || op === 'set_geometry') return 'windowState'
+  if (op === 'window_intent' || op === 'workspace_mutation') return 'workspace'
+  return null
+}
 
 function resetShellRuntimeRafCounters() {
   counters.raf_sample_count = 0
@@ -261,6 +399,10 @@ export function noteShellImperativeChromeApply(
     renderedWindows?: number
     rootMissing?: boolean
     surfaceRootMissing?: boolean
+    surfaceOnly?: boolean
+    stateDriven?: boolean
+    visualWindows?: number
+    stateAgeMs?: number
   } = {},
 ) {
   const elapsed = Math.max(0, ms)
@@ -273,6 +415,22 @@ export function noteShellImperativeChromeApply(
   counters.imperative_chrome_removed_nodes += Math.max(0, Math.trunc(stats.removedNodes ?? 0))
   counters.imperative_chrome_expected_windows = Math.max(0, Math.trunc(stats.expectedWindows ?? counters.imperative_chrome_expected_windows))
   counters.imperative_chrome_rendered_windows = Math.max(0, Math.trunc(stats.renderedWindows ?? counters.imperative_chrome_rendered_windows))
+  if (stats.surfaceOnly) counters.imperative_chrome_surface_apply_count += 1
+  else counters.imperative_chrome_full_apply_count += 1
+  if (stats.stateDriven) counters.imperative_chrome_state_driven_apply_count += 1
+  else counters.imperative_chrome_local_apply_count += 1
+  const visualWindows = Math.max(0, Math.trunc(stats.visualWindows ?? 0))
+  if (visualWindows > 0) {
+    counters.imperative_chrome_visual_apply_count += 1
+    counters.imperative_chrome_visual_windows += visualWindows
+  }
+  if (typeof stats.stateAgeMs === 'number' && Number.isFinite(stats.stateAgeMs)) {
+    const stateAge = Math.max(0, stats.stateAgeMs)
+    counters.imperative_chrome_state_age_ms += stateAge
+    counters.imperative_chrome_state_age_max_ms = Math.max(counters.imperative_chrome_state_age_max_ms, stateAge)
+    pushSample(chromeStateAgeSamples, stateAge)
+    counters.imperative_chrome_state_age_p95_ms = sampleP95(chromeStateAgeSamples)
+  }
   const missingWindows = Math.max(0, counters.imperative_chrome_expected_windows - counters.imperative_chrome_rendered_windows)
   if (missingWindows > 0) {
     counters.imperative_chrome_render_gap_count += 1
@@ -304,6 +462,99 @@ export function noteShellSharedStateSync(ms: number) {
   counters.shared_state_sync_count += 1
   counters.shared_state_sync_ms += elapsed
   counters.shared_state_sync_max_ms = Math.max(counters.shared_state_sync_max_ms, elapsed)
+}
+
+export function beginShellActionToChrome(op: string, ...args: readonly unknown[]) {
+  if (!isTrackedShellAction(op)) return
+  expireShellActions()
+  pendingShellActions.push({
+    id: pendingShellActionId++,
+    op,
+    windowId: trackedShellActionWindowId(op, args),
+    startedAt: perfNow(),
+  })
+  if (pendingShellActions.length > 128) {
+    const dropped = pendingShellActions.length - 128
+    pendingShellActions.splice(0, dropped)
+    counters.action_to_chrome_expired_count += dropped
+  }
+  counters.action_to_chrome_pending_count = pendingShellActions.length
+}
+
+function completeShellActionToChrome(windowId: number | null, ops: readonly string[]) {
+  expireShellActions()
+  const now = perfNow()
+  const index = pendingShellActions.findIndex((entry) =>
+    ops.includes(entry.op) && (windowId === null || entry.windowId === null || entry.windowId === windowId),
+  )
+  if (index < 0) return
+  const [entry] = pendingShellActions.splice(index, 1)
+  const elapsed = Math.max(0, now - entry.startedAt)
+  counters.action_to_chrome_count += 1
+  counters.action_to_chrome_ms += elapsed
+  counters.action_to_chrome_max_ms = Math.max(counters.action_to_chrome_max_ms, elapsed)
+  pushSample(actionToChromeSamples, elapsed)
+  counters.action_to_chrome_p95_ms = sampleP95(actionToChromeSamples)
+  const bucket = actionLatencyBucket(entry.op)
+  if (bucket === 'move') {
+    counters.action_to_chrome_move_count += 1
+    counters.action_to_chrome_move_max_ms = Math.max(counters.action_to_chrome_move_max_ms, elapsed)
+    pushSample(actionToChromeBucketSamples.move, elapsed)
+    counters.action_to_chrome_move_p95_ms = sampleP95(actionToChromeBucketSamples.move)
+  } else if (bucket === 'resize') {
+    counters.action_to_chrome_resize_count += 1
+    counters.action_to_chrome_resize_max_ms = Math.max(counters.action_to_chrome_resize_max_ms, elapsed)
+    pushSample(actionToChromeBucketSamples.resize, elapsed)
+    counters.action_to_chrome_resize_p95_ms = sampleP95(actionToChromeBucketSamples.resize)
+  } else if (bucket === 'activation') {
+    counters.action_to_chrome_activation_count += 1
+    counters.action_to_chrome_activation_max_ms = Math.max(counters.action_to_chrome_activation_max_ms, elapsed)
+    pushSample(actionToChromeBucketSamples.activation, elapsed)
+    counters.action_to_chrome_activation_p95_ms = sampleP95(actionToChromeBucketSamples.activation)
+  } else if (bucket === 'windowState') {
+    counters.action_to_chrome_window_state_count += 1
+    counters.action_to_chrome_window_state_max_ms = Math.max(counters.action_to_chrome_window_state_max_ms, elapsed)
+    pushSample(actionToChromeBucketSamples.windowState, elapsed)
+    counters.action_to_chrome_window_state_p95_ms = sampleP95(actionToChromeBucketSamples.windowState)
+  } else if (bucket === 'workspace') {
+    counters.action_to_chrome_workspace_count += 1
+    counters.action_to_chrome_workspace_max_ms = Math.max(counters.action_to_chrome_workspace_max_ms, elapsed)
+    pushSample(actionToChromeBucketSamples.workspace, elapsed)
+    counters.action_to_chrome_workspace_p95_ms = sampleP95(actionToChromeBucketSamples.workspace)
+  }
+  counters.action_to_chrome_pending_count = pendingShellActions.length
+}
+
+function detailWindowId(detail: { window_id?: unknown }) {
+  const raw = detail.window_id
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return null
+  const id = Math.trunc(raw)
+  return id > 0 ? id : null
+}
+
+export function noteShellStateToChromeApply(startedAt: number, details: readonly { type?: unknown; window_id?: unknown; move_window_id?: unknown; resize_window_id?: unknown }[]) {
+  const elapsed = Math.max(0, perfNow() - startedAt)
+  counters.state_to_chrome_count += 1
+  counters.state_to_chrome_ms += elapsed
+  counters.state_to_chrome_max_ms = Math.max(counters.state_to_chrome_max_ms, elapsed)
+  pushSample(stateToChromeSamples, elapsed)
+  counters.state_to_chrome_p95_ms = sampleP95(stateToChromeSamples)
+  for (const detail of details) {
+    if (detail.type === 'window_geometry') {
+      completeShellActionToChrome(detailWindowId(detail), ['move_begin', 'resize_begin', 'resize_delta', 'resize_end', 'set_geometry', 'set_maximized', 'window_intent', 'workspace_mutation'])
+    } else if (detail.type === 'interaction_state') {
+      const moveId = detailWindowId({ window_id: detail.move_window_id })
+      const resizeId = detailWindowId({ window_id: detail.resize_window_id })
+      if (moveId !== null) completeShellActionToChrome(moveId, ['move_begin'])
+      if (resizeId !== null) completeShellActionToChrome(resizeId, ['resize_begin', 'resize_delta'])
+    } else if (detail.type === 'focus_changed') {
+      completeShellActionToChrome(detailWindowId(detail), ['activate_window', 'taskbar_activate'])
+    } else if (detail.type === 'window_state') {
+      completeShellActionToChrome(detailWindowId(detail), ['minimize', 'set_maximized'])
+    } else if (detail.type === 'window_order' || detail.type === 'workspace_state') {
+      completeShellActionToChrome(null, ['workspace_mutation', 'window_intent'])
+    }
+  }
 }
 
 export function resetShellRuntimePerfCounters() {
@@ -351,6 +602,15 @@ export function resetShellRuntimePerfCounters() {
   counters.imperative_chrome_removed_nodes = 0
   counters.imperative_chrome_expected_windows = 0
   counters.imperative_chrome_rendered_windows = 0
+  counters.imperative_chrome_full_apply_count = 0
+  counters.imperative_chrome_surface_apply_count = 0
+  counters.imperative_chrome_state_driven_apply_count = 0
+  counters.imperative_chrome_local_apply_count = 0
+  counters.imperative_chrome_visual_apply_count = 0
+  counters.imperative_chrome_visual_windows = 0
+  counters.imperative_chrome_state_age_ms = 0
+  counters.imperative_chrome_state_age_max_ms = 0
+  counters.imperative_chrome_state_age_p95_ms = 0
   counters.imperative_chrome_render_gap_count = 0
   counters.imperative_chrome_render_gap_max_windows = 0
   counters.imperative_chrome_root_missing_count = 0
@@ -365,6 +625,40 @@ export function resetShellRuntimePerfCounters() {
   counters.shared_state_sync_count = 0
   counters.shared_state_sync_ms = 0
   counters.shared_state_sync_max_ms = 0
+  counters.state_to_chrome_count = 0
+  counters.state_to_chrome_ms = 0
+  counters.state_to_chrome_max_ms = 0
+  counters.state_to_chrome_p95_ms = 0
+  counters.action_to_chrome_count = 0
+  counters.action_to_chrome_ms = 0
+  counters.action_to_chrome_max_ms = 0
+  counters.action_to_chrome_p95_ms = 0
+  counters.action_to_chrome_pending_count = 0
+  counters.action_to_chrome_expired_count = 0
+  counters.action_to_chrome_move_count = 0
+  counters.action_to_chrome_move_max_ms = 0
+  counters.action_to_chrome_move_p95_ms = 0
+  counters.action_to_chrome_resize_count = 0
+  counters.action_to_chrome_resize_max_ms = 0
+  counters.action_to_chrome_resize_p95_ms = 0
+  counters.action_to_chrome_activation_count = 0
+  counters.action_to_chrome_activation_max_ms = 0
+  counters.action_to_chrome_activation_p95_ms = 0
+  counters.action_to_chrome_window_state_count = 0
+  counters.action_to_chrome_window_state_max_ms = 0
+  counters.action_to_chrome_window_state_p95_ms = 0
+  counters.action_to_chrome_workspace_count = 0
+  counters.action_to_chrome_workspace_max_ms = 0
+  counters.action_to_chrome_workspace_p95_ms = 0
+  stateToChromeSamples.length = 0
+  actionToChromeSamples.length = 0
+  actionToChromeBucketSamples.move.length = 0
+  actionToChromeBucketSamples.resize.length = 0
+  actionToChromeBucketSamples.activation.length = 0
+  actionToChromeBucketSamples.windowState.length = 0
+  actionToChromeBucketSamples.workspace.length = 0
+  chromeStateAgeSamples.length = 0
+  pendingShellActions.length = 0
   resetShellRuntimeRafCounters()
 }
 
@@ -391,6 +685,21 @@ export function shellRuntimePerfSnapshot(): ShellRuntimePerfSnapshot {
     imperative_chrome_detail_apply_max_ms: roundMs(counters.imperative_chrome_detail_apply_max_ms),
     imperative_chrome_apply_ms: roundMs(counters.imperative_chrome_apply_ms),
     imperative_chrome_apply_max_ms: roundMs(counters.imperative_chrome_apply_max_ms),
+    imperative_chrome_state_age_ms: roundMs(counters.imperative_chrome_state_age_ms),
+    imperative_chrome_state_age_max_ms: roundMs(counters.imperative_chrome_state_age_max_ms),
+    imperative_chrome_state_age_p95_ms: roundMs(counters.imperative_chrome_state_age_p95_ms),
+    action_to_chrome_max_ms: roundMs(counters.action_to_chrome_max_ms),
+    action_to_chrome_p95_ms: roundMs(counters.action_to_chrome_p95_ms),
+    action_to_chrome_move_max_ms: roundMs(counters.action_to_chrome_move_max_ms),
+    action_to_chrome_move_p95_ms: roundMs(counters.action_to_chrome_move_p95_ms),
+    action_to_chrome_resize_max_ms: roundMs(counters.action_to_chrome_resize_max_ms),
+    action_to_chrome_resize_p95_ms: roundMs(counters.action_to_chrome_resize_p95_ms),
+    action_to_chrome_activation_max_ms: roundMs(counters.action_to_chrome_activation_max_ms),
+    action_to_chrome_activation_p95_ms: roundMs(counters.action_to_chrome_activation_p95_ms),
+    action_to_chrome_window_state_max_ms: roundMs(counters.action_to_chrome_window_state_max_ms),
+    action_to_chrome_window_state_p95_ms: roundMs(counters.action_to_chrome_window_state_p95_ms),
+    action_to_chrome_workspace_max_ms: roundMs(counters.action_to_chrome_workspace_max_ms),
+    action_to_chrome_workspace_p95_ms: roundMs(counters.action_to_chrome_workspace_p95_ms),
     shell_ui_windows_flush_ms: roundMs(counters.shell_ui_windows_flush_ms),
     shell_ui_windows_flush_max_ms: roundMs(counters.shell_ui_windows_flush_max_ms),
     shared_state_sync_ms: roundMs(counters.shared_state_sync_ms),

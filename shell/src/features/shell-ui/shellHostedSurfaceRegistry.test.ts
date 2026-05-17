@@ -185,7 +185,7 @@ describe('shellHostedSurfaceRegistry', () => {
     expect(measure).toHaveBeenCalledTimes(1)
   })
 
-  it('remeasures and rewrites when the compositor snapshot epoch changes', async () => {
+  it('rewrites cached shell-ui windows without remeasuring when the compositor snapshot epoch changes', async () => {
     const send = vi.fn()
     vi.stubGlobal('window', {
       __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE: 2,
@@ -213,6 +213,12 @@ describe('shellHostedSurfaceRegistry', () => {
     mod.flushShellUiWindowsSyncNow()
 
     expect(send).toHaveBeenCalledTimes(2)
+    expect(measure).toHaveBeenCalledTimes(1)
+
+    ;(window as Window & { __DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION?: number }).__DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION = 4
+    mod.flushShellUiWindowsSyncNow()
+
+    expect(send).toHaveBeenCalledTimes(3)
     expect(measure).toHaveBeenCalledTimes(2)
   })
 })

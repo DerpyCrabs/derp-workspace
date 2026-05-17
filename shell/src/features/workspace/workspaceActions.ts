@@ -80,6 +80,7 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
       !sendWorkspaceMutation({
         type: 'split_window_to_own_group',
         windowId: windowId,
+        startDrag: true,
       })
     ) {
       return false

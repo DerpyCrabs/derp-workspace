@@ -73,6 +73,10 @@ export function sharedShellStateStampKey(): string {
   return `${sharedSnapshotEpoch()}:${sharedOutputLayoutRevision()}`
 }
 
+export function sharedShellLayoutStampKey(): string {
+  return `${sharedOutputLayoutRevision()}`
+}
+
 function setSharedPrefix(view: DataView): void {
   view.setBigUint64(0, BigInt(sharedSnapshotEpoch()), true)
   view.setBigUint64(8, BigInt(sharedOutputLayoutRevision()), true)

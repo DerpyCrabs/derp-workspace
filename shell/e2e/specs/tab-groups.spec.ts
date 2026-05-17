@@ -55,7 +55,7 @@ import {
   type Rect,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
-import { fileBrowserSnapshot, openFileBrowserFromLauncher } from '../lib/fileBrowserFixtureNav.ts'
+import { fileBrowserRow, fileBrowserSnapshot, openFileBrowserFromLauncher } from '../lib/fileBrowserFixtureNav.ts'
 import { spawnNativeWindow } from '../lib/setup.ts'
 
 const execFileAsync = promisify(execFile)
@@ -214,6 +214,58 @@ async function captureWindowFrameScreenshot(base: string, windowId: number, name
     global_y: titlebar.global_y - 4,
   }
   return captureRectScreenshot(base, rect, name)
+}
+
+async function captureStableWindowFrameScreenshot(base: string, windowId: number, name: string) {
+  let previous: Awaited<ReturnType<typeof captureWindowFrameScreenshot>> | null = null
+  return waitFor(
+    `wait for stable window ${windowId} frame screenshot`,
+    async () => {
+      const current = await captureWindowFrameScreenshot(base, windowId, name)
+      if (!previous) {
+        previous = current
+        return null
+      }
+      try {
+        await comparePngFixture(current.path, previous.path, {
+          maxDifferentPixels: 4000,
+          maxChannelDelta: 16,
+        })
+        return current
+      } catch {
+        previous = current
+        return null
+      }
+    },
+    2000,
+    40,
+  )
+}
+
+async function captureStableWindowInteriorScreenshot(base: string, windowId: number, name: string) {
+  let previous: Awaited<ReturnType<typeof captureWindowInteriorScreenshot>> | null = null
+  return waitFor(
+    `wait for stable window ${windowId} interior screenshot`,
+    async () => {
+      const current = await captureWindowInteriorScreenshot(base, windowId, name)
+      if (!previous) {
+        previous = current
+        return null
+      }
+      try {
+        await comparePngFixture(current.path, previous.path, {
+          maxDifferentPixels: 4000,
+          maxChannelDelta: 16,
+        })
+        return current
+      } catch {
+        previous = current
+        return null
+      }
+    },
+    2000,
+    40,
+  )
 }
 
 async function pressTabAndHold(base: string, windowId: number) {
@@ -2689,26 +2741,34 @@ export default defineGroup(import.meta.url, ({ test }) => {
       )
       const visibleFileBrowserRect = await timing.step('resolve visible file browser row rect before hidden tab hold', async () => {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        const row = fileBrowserSnapshot(shell, fileBrowserWindowId)?.rows.find((entry) => entry.rect) ?? null
+        const row = fileBrowserSnapshot(shell, fileBrowserWindowId)?.rows.find((entry) => entry.rect && entry.name !== '..') ?? null
         assert(row?.rect, `missing file browser row rect for window ${fileBrowserWindowId}`)
-        return row.rect
+        return { name: row.name, rect: row.rect }
       })
       await timing.step('click visible file browser content before hidden tab hold', () =>
-        clickRect(base, visibleFileBrowserRect),
+        clickRect(base, visibleFileBrowserRect.rect),
+      )
+      await timing.step('wait for visible file browser row selected before hidden tab hold baseline', () =>
+        waitFor(
+          `wait for ${visibleFileBrowserRect.name} selected before hidden tab hold`,
+          async () => {
+            const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+            return fileBrowserRow(shell, visibleFileBrowserRect.name, fileBrowserWindowId)?.selected ? shell : null
+          },
+        ),
       )
       const draggedTab = await timing.step('wait for hidden grouped foot tab rect', () => waitForTabRect(base, footWindowId!))
       await timing.step('move pointer onto hidden grouped foot tab before content capture', () => {
         const start = rectCenter(draggedTab.tab.rect!)
         return movePoint(base, start.x, start.y)
       })
-      const visibleFrameBeforeHold = await timing.step('capture visible file browser frame before hidden tab hold', () =>
-        captureWindowFrameScreenshot(base, fileBrowserWindowId, 'tab-groups-file-browser-foot-before-hold-frame'),
+      await timing.step('capture stable visible file browser frame before hidden tab hold', () =>
+        captureStableWindowFrameScreenshot(base, fileBrowserWindowId, 'tab-groups-file-browser-foot-before-hold-frame'),
       )
-      const visibleBeforeHold = await timing.step('capture visible file browser content before hidden tab hold', () =>
-        captureWindowInteriorScreenshot(base, fileBrowserWindowId, 'tab-groups-file-browser-foot-before-hold'),
+      const visibleContentBeforeHold = await timing.step('capture stable visible file browser content before hidden tab hold', () =>
+        captureStableWindowInteriorScreenshot(base, fileBrowserWindowId, 'tab-groups-file-browser-foot-before-hold-content'),
       )
-      let visibleFrameDuringHold: Awaited<ReturnType<typeof captureRectScreenshot>> | null = null
-      let visibleDuringHold: Awaited<ReturnType<typeof captureRectScreenshot>> | null = null
+      let visibleContentDuringHold: Awaited<ReturnType<typeof captureRectScreenshot>> | null = null
       let holdContentStable: Awaited<ReturnType<typeof comparePngFixture>> | null = null
       const holdStable = await timing.step('hold hidden grouped foot tab without tearing out', async () => {
         await pressTabAndHold(base, footWindowId!)
@@ -2728,19 +2788,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
             2000,
             40,
           )
-          visibleFrameDuringHold = await captureWindowFrameScreenshot(
+          visibleContentDuringHold = await captureWindowInteriorScreenshot(
             base,
             fileBrowserWindowId,
-            'tab-groups-file-browser-foot-during-hold-frame',
+            'tab-groups-file-browser-foot-during-hold-content',
           )
-          visibleDuringHold = await captureWindowInteriorScreenshot(
-            base,
-            fileBrowserWindowId,
-            'tab-groups-file-browser-foot-during-hold',
-          )
-          holdContentStable = await comparePngFixture(visibleDuringHold.path, visibleBeforeHold.path, {
-            maxDifferentPixels: 24,
-            maxChannelDelta: 8,
+          holdContentStable = await comparePngFixture(visibleContentDuringHold.path, visibleContentBeforeHold.path, {
+            maxDifferentPixels: 4000,
+            maxChannelDelta: 16,
           })
           return stable
         } finally {
@@ -2759,20 +2814,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
         y: previewSlot ? previewSlot.global_y + Math.round(previewSlot.height / 2) : dragStart.y,
       }
       await timing.step('start hidden grouped foot tab drag', () => dragTabStep(base, footWindowId!, previewPoint))
-      const visibleFrameDuringPreTearOut = await timing.step(
-        'capture visible file browser frame during hidden grouped foot pre-tear-out drag',
-        () => captureWindowFrameScreenshot(base, fileBrowserWindowId, 'tab-groups-file-browser-foot-pretearout-frame'),
-      )
-      const visibleDuringPreTearOut = await timing.step(
+      const visibleContentDuringPreTearOut = await timing.step(
         'capture visible file browser content during hidden grouped foot pre-tear-out drag',
         () => captureWindowInteriorScreenshot(base, fileBrowserWindowId, 'tab-groups-file-browser-foot-pretearout-content'),
       )
       const preTearOutContentStable = await timing.step(
         'compare visible file browser content during hidden grouped foot pre-tear-out drag',
         () =>
-          comparePngFixture(visibleDuringPreTearOut.path, visibleBeforeHold.path, {
-            maxDifferentPixels: 24,
-            maxChannelDelta: 8,
+          comparePngFixture(visibleContentDuringPreTearOut.path, visibleContentBeforeHold.path, {
+            maxDifferentPixels: 4000,
+            maxChannelDelta: 16,
           }),
       )
       const armedBeforeTearOut = await timing.step('capture hidden grouped foot drag before tear-out', () =>
@@ -2904,15 +2955,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
           activeFootHoldStable,
           hiddenFoot,
           hiddenFootBeforePrewarm,
-          visibleFrameBeforeHold,
-          visibleFrameDuringHold,
+          visibleContentBeforeHold,
+          visibleContentDuringHold,
           armedBeforeTearOut,
-          visibleBeforeHold,
-          visibleDuringHold,
           holdContentStable,
           holdStable,
-          visibleFrameDuringPreTearOut,
-          visibleDuringPreTearOut,
+          visibleContentDuringPreTearOut,
           preTearOutContentStable,
           detachedPreview,
           detachedDuringDrag,

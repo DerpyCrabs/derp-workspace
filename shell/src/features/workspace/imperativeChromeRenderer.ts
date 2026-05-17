@@ -177,17 +177,15 @@ type ImperativeChromeRendererOptions = {
   closeGroupWindow: (windowId: number) => void
   closeWindow: (windowId: number) => void
   shellContextOpenTabMenu: (windowId: number, clientX: number, clientY: number) => void
-  nativeDragPreview: () => {
-    window_id: number
-    generation: number
-    image_path: string
-    src: string
-    loaded: boolean
-    image: HTMLImageElement | null
-  } | null
   shellHostedContentRoot: (windowId: number) => HTMLElement | null
   shellWireSend: (
-    op: 'set_geometry' | 'taskbar_activate' | 'minimize' | 'shell_ui_grab_begin' | 'shell_ui_grab_end',
+    op:
+      | 'set_geometry'
+      | 'taskbar_activate'
+      | 'minimize'
+      | 'shell_ui_grab_begin'
+      | 'shell_ui_grab_end'
+      | 'native_drag_preview_ready',
     arg?: number | string,
     arg2?: number | string,
     arg3?: number,
@@ -220,6 +218,27 @@ type SplitGestureState = {
   startGlobalX: number
   startGlobalY: number
   originGroupRect: SplitGroupRect
+}
+
+type NativeDragPreviewState = {
+  window_id: number
+  generation: number
+  image_path: string
+} | null
+
+type LoadedNativeDragPreview = {
+  window_id: number
+  generation: number
+  image_path: string
+  src: string
+  loaded: boolean
+  image: HTMLImageElement | null
+} | null
+
+function nativeDragPreviewUrl(imagePath: string, generation: number) {
+  const base = shellHttpBase()
+  if (!base) return ''
+  return `${base}/native_drag_preview?p=${encodeURIComponent(imagePath)}&g=${generation}`
 }
 
 type TabDragState = {
@@ -732,6 +751,11 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
   let activeWindowDragTarget: TabMergeTarget | null = null
   let lastWindowDragPointerClient: { x: number; y: number } | null = null
   let lastWindowDragWindowId: number | null = null
+  let lastDetailApplyAt = 0
+  let hasPendingStateApply = false
+  let nativeDragPreviewState: NativeDragPreviewState = null
+  let nativeDragPreviewAsset: LoadedNativeDragPreview = null
+  let nativeDragPreviewLoadToken = 0
   const tabStripLayouts = new Map<string, WorkspaceTabStripLayout>()
   const [gestureRev, setGestureRev] = createSignal(0)
   let splitGesture: SplitGestureState | null = null
@@ -802,6 +826,50 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     if (changed) markShellUiWindowDirty(window.window_id)
   }
 
+  function setNativeDragPreview(next: NativeDragPreviewState) {
+    const current = nativeDragPreviewState
+    if (
+      current?.window_id === next?.window_id &&
+      current?.generation === next?.generation &&
+      current?.image_path === next?.image_path
+    ) {
+      return
+    }
+    nativeDragPreviewState = next
+    nativeDragPreviewLoadToken += 1
+    const token = nativeDragPreviewLoadToken
+    if (!next) {
+      nativeDragPreviewAsset = null
+      schedule()
+      return
+    }
+    const src = nativeDragPreviewUrl(next.image_path, next.generation)
+    nativeDragPreviewAsset = {
+      ...next,
+      src,
+      loaded: false,
+      image: null,
+    }
+    schedule()
+    if (!src) return
+    const image = new Image()
+    const markLoaded = () => {
+      if (token !== nativeDragPreviewLoadToken) return
+      if (nativeDragPreviewState?.window_id !== next.window_id || nativeDragPreviewState.generation !== next.generation) return
+      nativeDragPreviewAsset = {
+        ...next,
+        src,
+        loaded: true,
+        image,
+      }
+      options.shellWireSend('native_drag_preview_ready', next.window_id, next.generation)
+      schedule()
+    }
+    image.onload = markLoaded
+    image.src = src
+    if (image.complete && image.naturalWidth > 0) markLoaded()
+  }
+
   createEffect(() => {
     options.desktopApps()
     options.layoutCanvasOrigin()
@@ -824,11 +892,6 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     updateActiveWindowDragTarget()
     adoptDetachedTabDragIfReady()
     scheduleSurface()
-  })
-
-  createEffect(() => {
-    options.nativeDragPreview()
-    schedule()
   })
 
   const buildGroups = () => {
@@ -1543,7 +1606,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       removeAttr(node.contentHost, 'data-shell-hosted-content-mount', node.last)
     }
     setHidden(node.contentHost, !shellHosted || !!splitLayout, node.last)
-    const preview = options.nativeDragPreview()
+    const preview = nativeDragPreviewAsset
     const previewImageReady = preview?.image !== null && preview?.image.complete === true && preview.image.naturalWidth > 0 && preview.image.naturalHeight > 0
     const previewVisible =
       preview?.loaded === true &&
@@ -1889,6 +1952,9 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
   const apply = () => {
     const start = performance.now()
     const writesStart = imperativeChromeDomWriteCount
+    const stateDriven = hasPendingStateApply
+    const stateAgeMs = stateDriven && lastDetailApplyAt > 0 ? start - lastDetailApplyAt : undefined
+    hasPendingStateApply = false
     const root = options.getRoot()
     if (!root) {
       const expectedWindows = windows.size
@@ -1909,7 +1975,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
         performance.now() - start,
         0,
         imperativeChromeDomWriteCount - writesStart,
-        { expectedWindows, renderedWindows: 0, removedNodes, rootMissing: true },
+        { expectedWindows, renderedWindows: 0, removedNodes, rootMissing: true, stateDriven, stateAgeMs },
       )
       flushShellUiWindowsSyncNow()
       return
@@ -1924,6 +1990,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     renderCsdDropStrips(root, groups)
     let expectedWindows = 0
     let renderedWindows = 0
+    let visualWindows = 0
     let createdNodes = 0
     const renderBase = (base: DerpWindow, group: WorkspaceGroupModel<DerpWindow> | null, splitLayout: SplitLayoutRects | null) => {
       if (!shouldRender(base, group, splitLayout)) return
@@ -1932,6 +1999,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
         interaction?.resize_window_id === base.window_id ? interaction.resize_rect :
           interaction?.move_window_id === base.window_id || interaction?.move_proxy_window_id === base.window_id ? interaction.move_rect :
             null
+      if (liveVisual) visualWindows += 1
       const window = liveVisual
         ? windowFromRow({
             ...base,
@@ -2016,13 +2084,16 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       performance.now() - start,
       nodes.size + csdDropStrips.size + 7 + (surfaceNodes?.overlayLines.size ?? 0),
       imperativeChromeDomWriteCount - writesStart,
-      { createdNodes, removedNodes, expectedWindows, renderedWindows },
+      { createdNodes, removedNodes, expectedWindows, renderedWindows, stateDriven, visualWindows, stateAgeMs },
     )
   }
 
   const applySurface = () => {
     const start = performance.now()
     const writesStart = imperativeChromeDomWriteCount
+    const stateDriven = hasPendingStateApply
+    const stateAgeMs = stateDriven && lastDetailApplyAt > 0 ? start - lastDetailApplyAt : undefined
+    hasPendingStateApply = false
     const root = options.getRoot()
     if (!root) {
       clearSurfaceNodes()
@@ -2030,7 +2101,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
         performance.now() - start,
         0,
         imperativeChromeDomWriteCount - writesStart,
-        { surfaceRootMissing: true },
+        { surfaceRootMissing: true, surfaceOnly: true, stateDriven, stateAgeMs },
       )
       return
     }
@@ -2042,10 +2113,15 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       performance.now() - start,
       nodes.size + csdDropStrips.size + 7 + (surfaceNodes?.overlayLines.size ?? 0),
       imperativeChromeDomWriteCount - writesStart,
+      { surfaceOnly: true, stateDriven, stateAgeMs },
     )
   }
 
   const applyDetails = (details: readonly DerpShellDetail[]) => {
+    if (details.length > 0) {
+      lastDetailApplyAt = performance.now()
+      hasPendingStateApply = true
+    }
     let changed = false
     for (const detail of details) {
       if (detail.type === 'window_list') {
@@ -2122,6 +2198,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       }
     }
     if (changed) apply()
+    else hasPendingStateApply = false
   }
 
   const pointerWindowId = (target: EventTarget | null) => {
@@ -2385,6 +2462,9 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     document.removeEventListener('pointerup', onWindowDragPointerUp, true)
     clearTabDragListeners()
     endTabDragPointerGrab()
+    nativeDragPreviewState = null
+    nativeDragPreviewAsset = null
+    nativeDragPreviewLoadToken += 1
     for (const [id, node] of nodes) {
       clearChromePlacement(node, id)
       node.frame.remove()
@@ -2414,6 +2494,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     applySplitGroupGeometry: applySplitGroupGeometryById,
     cancelSplitGroupGesture: endSplitGesture,
     finishWindowDragDrop,
+    setNativeDragPreview,
     clearSuppressTabClickWindowId: () => {},
   }
 }

@@ -732,6 +732,14 @@ export interface PerfShellSyncSnapshot {
   shared_state_ui_window_writes: number
   shared_state_ui_window_bytes: number
   shared_state_ui_window_rows: number
+  ui_window_staged_count: number
+  ui_window_staged_rows: number
+  ui_window_promoted_count: number
+  ui_window_promoted_rows: number
+  ui_window_promoted_changed_count: number
+  ui_window_promotion_wait_frames: number
+  ui_window_promotion_wait_max_frames: number
+  ui_window_pending_dropped_count: number
   shared_state_exclusion_writes: number
   shared_state_exclusion_bytes: number
   shared_state_exclusion_rects: number
@@ -782,6 +790,15 @@ export interface PerfShellRuntimeSnapshot {
   imperative_chrome_removed_nodes: number
   imperative_chrome_expected_windows: number
   imperative_chrome_rendered_windows: number
+  imperative_chrome_full_apply_count: number
+  imperative_chrome_surface_apply_count: number
+  imperative_chrome_state_driven_apply_count: number
+  imperative_chrome_local_apply_count: number
+  imperative_chrome_visual_apply_count: number
+  imperative_chrome_visual_windows: number
+  imperative_chrome_state_age_ms: number
+  imperative_chrome_state_age_max_ms: number
+  imperative_chrome_state_age_p95_ms: number
   imperative_chrome_render_gap_count: number
   imperative_chrome_render_gap_max_windows: number
   imperative_chrome_root_missing_count: number
@@ -796,6 +813,31 @@ export interface PerfShellRuntimeSnapshot {
   shared_state_sync_count: number
   shared_state_sync_ms: number
   shared_state_sync_max_ms: number
+  state_to_chrome_count: number
+  state_to_chrome_ms: number
+  state_to_chrome_max_ms: number
+  state_to_chrome_p95_ms: number
+  action_to_chrome_count: number
+  action_to_chrome_ms: number
+  action_to_chrome_max_ms: number
+  action_to_chrome_p95_ms: number
+  action_to_chrome_pending_count: number
+  action_to_chrome_expired_count: number
+  action_to_chrome_move_count: number
+  action_to_chrome_move_max_ms: number
+  action_to_chrome_move_p95_ms: number
+  action_to_chrome_resize_count: number
+  action_to_chrome_resize_max_ms: number
+  action_to_chrome_resize_p95_ms: number
+  action_to_chrome_activation_count: number
+  action_to_chrome_activation_max_ms: number
+  action_to_chrome_activation_p95_ms: number
+  action_to_chrome_window_state_count: number
+  action_to_chrome_window_state_max_ms: number
+  action_to_chrome_window_state_p95_ms: number
+  action_to_chrome_workspace_count: number
+  action_to_chrome_workspace_max_ms: number
+  action_to_chrome_workspace_p95_ms: number
   raf_sample_count: number
   raf_sample_ms: number
   raf_max_delta_ms: number
@@ -829,6 +871,7 @@ export interface PerfShellBridgeSnapshot {
   action_renderer_to_browser_count: number
   action_renderer_to_browser_us: number
   action_renderer_to_browser_max_us: number
+  action_renderer_to_browser_max_op: string
   action_browser_to_compositor_count: number
   action_browser_to_compositor_us: number
   action_browser_to_compositor_max_us: number
@@ -841,6 +884,30 @@ export interface PerfShellBridgeSnapshot {
   state_renderer_apply_count: number
   state_renderer_apply_us: number
   state_renderer_apply_max_us: number
+  action_to_state_count: number
+  action_to_state_us: number
+  action_to_state_max_us: number
+  action_to_state_started_count: number
+  action_to_state_pending_count: number
+  action_to_state_expired_count: number
+  action_to_state_move_count: number
+  action_to_state_move_us: number
+  action_to_state_move_max_us: number
+  action_to_state_resize_count: number
+  action_to_state_resize_us: number
+  action_to_state_resize_max_us: number
+  action_to_state_activation_count: number
+  action_to_state_activation_us: number
+  action_to_state_activation_max_us: number
+  action_to_state_window_state_count: number
+  action_to_state_window_state_us: number
+  action_to_state_window_state_max_us: number
+  action_to_state_workspace_count: number
+  action_to_state_workspace_us: number
+  action_to_state_workspace_max_us: number
+  action_to_state_native_preview_count: number
+  action_to_state_native_preview_us: number
+  action_to_state_native_preview_max_us: number
 }
 
 export interface PerfCounterSnapshot {
@@ -1741,6 +1808,29 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
             after.shell_runtime.imperative_chrome_removed_nodes - before.shell_runtime.imperative_chrome_removed_nodes,
           imperative_chrome_expected_windows: after.shell_runtime.imperative_chrome_expected_windows,
           imperative_chrome_rendered_windows: after.shell_runtime.imperative_chrome_rendered_windows,
+          imperative_chrome_full_apply_count:
+            after.shell_runtime.imperative_chrome_full_apply_count -
+            before.shell_runtime.imperative_chrome_full_apply_count,
+          imperative_chrome_surface_apply_count:
+            after.shell_runtime.imperative_chrome_surface_apply_count -
+            before.shell_runtime.imperative_chrome_surface_apply_count,
+          imperative_chrome_state_driven_apply_count:
+            after.shell_runtime.imperative_chrome_state_driven_apply_count -
+            before.shell_runtime.imperative_chrome_state_driven_apply_count,
+          imperative_chrome_local_apply_count:
+            after.shell_runtime.imperative_chrome_local_apply_count -
+            before.shell_runtime.imperative_chrome_local_apply_count,
+          imperative_chrome_visual_apply_count:
+            after.shell_runtime.imperative_chrome_visual_apply_count -
+            before.shell_runtime.imperative_chrome_visual_apply_count,
+          imperative_chrome_visual_windows:
+            after.shell_runtime.imperative_chrome_visual_windows -
+            before.shell_runtime.imperative_chrome_visual_windows,
+          imperative_chrome_state_age_ms:
+            after.shell_runtime.imperative_chrome_state_age_ms -
+            before.shell_runtime.imperative_chrome_state_age_ms,
+          imperative_chrome_state_age_max_ms: after.shell_runtime.imperative_chrome_state_age_max_ms,
+          imperative_chrome_state_age_p95_ms: after.shell_runtime.imperative_chrome_state_age_p95_ms,
           imperative_chrome_render_gap_count:
             after.shell_runtime.imperative_chrome_render_gap_count -
             before.shell_runtime.imperative_chrome_render_gap_count,
@@ -1769,6 +1859,42 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
           shared_state_sync_ms:
             after.shell_runtime.shared_state_sync_ms - before.shell_runtime.shared_state_sync_ms,
           shared_state_sync_max_ms: after.shell_runtime.shared_state_sync_max_ms,
+          state_to_chrome_count:
+            after.shell_runtime.state_to_chrome_count - before.shell_runtime.state_to_chrome_count,
+          state_to_chrome_ms: after.shell_runtime.state_to_chrome_ms - before.shell_runtime.state_to_chrome_ms,
+          state_to_chrome_max_ms: after.shell_runtime.state_to_chrome_max_ms,
+          state_to_chrome_p95_ms: after.shell_runtime.state_to_chrome_p95_ms,
+          action_to_chrome_count:
+            after.shell_runtime.action_to_chrome_count - before.shell_runtime.action_to_chrome_count,
+          action_to_chrome_ms: after.shell_runtime.action_to_chrome_ms - before.shell_runtime.action_to_chrome_ms,
+          action_to_chrome_max_ms: after.shell_runtime.action_to_chrome_max_ms,
+          action_to_chrome_p95_ms: after.shell_runtime.action_to_chrome_p95_ms,
+          action_to_chrome_pending_count: after.shell_runtime.action_to_chrome_pending_count,
+          action_to_chrome_expired_count:
+            after.shell_runtime.action_to_chrome_expired_count - before.shell_runtime.action_to_chrome_expired_count,
+          action_to_chrome_move_count:
+            after.shell_runtime.action_to_chrome_move_count - before.shell_runtime.action_to_chrome_move_count,
+          action_to_chrome_move_max_ms: after.shell_runtime.action_to_chrome_move_max_ms,
+          action_to_chrome_move_p95_ms: after.shell_runtime.action_to_chrome_move_p95_ms,
+          action_to_chrome_resize_count:
+            after.shell_runtime.action_to_chrome_resize_count - before.shell_runtime.action_to_chrome_resize_count,
+          action_to_chrome_resize_max_ms: after.shell_runtime.action_to_chrome_resize_max_ms,
+          action_to_chrome_resize_p95_ms: after.shell_runtime.action_to_chrome_resize_p95_ms,
+          action_to_chrome_activation_count:
+            after.shell_runtime.action_to_chrome_activation_count -
+            before.shell_runtime.action_to_chrome_activation_count,
+          action_to_chrome_activation_max_ms: after.shell_runtime.action_to_chrome_activation_max_ms,
+          action_to_chrome_activation_p95_ms: after.shell_runtime.action_to_chrome_activation_p95_ms,
+          action_to_chrome_window_state_count:
+            after.shell_runtime.action_to_chrome_window_state_count -
+            before.shell_runtime.action_to_chrome_window_state_count,
+          action_to_chrome_window_state_max_ms: after.shell_runtime.action_to_chrome_window_state_max_ms,
+          action_to_chrome_window_state_p95_ms: after.shell_runtime.action_to_chrome_window_state_p95_ms,
+          action_to_chrome_workspace_count:
+            after.shell_runtime.action_to_chrome_workspace_count -
+            before.shell_runtime.action_to_chrome_workspace_count,
+          action_to_chrome_workspace_max_ms: after.shell_runtime.action_to_chrome_workspace_max_ms,
+          action_to_chrome_workspace_p95_ms: after.shell_runtime.action_to_chrome_workspace_p95_ms,
           raf_sample_count: after.shell_runtime.raf_sample_count - before.shell_runtime.raf_sample_count,
           raf_sample_ms: after.shell_runtime.raf_sample_ms - before.shell_runtime.raf_sample_ms,
           raf_max_delta_ms: after.shell_runtime.raf_max_delta_ms,
@@ -1824,6 +1950,24 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
         after.shell_sync.shared_state_ui_window_bytes - before.shell_sync.shared_state_ui_window_bytes,
       shared_state_ui_window_rows:
         after.shell_sync.shared_state_ui_window_rows - before.shell_sync.shared_state_ui_window_rows,
+      ui_window_staged_count:
+        after.shell_sync.ui_window_staged_count - before.shell_sync.ui_window_staged_count,
+      ui_window_staged_rows:
+        after.shell_sync.ui_window_staged_rows - before.shell_sync.ui_window_staged_rows,
+      ui_window_promoted_count:
+        after.shell_sync.ui_window_promoted_count - before.shell_sync.ui_window_promoted_count,
+      ui_window_promoted_rows:
+        after.shell_sync.ui_window_promoted_rows - before.shell_sync.ui_window_promoted_rows,
+      ui_window_promoted_changed_count:
+        after.shell_sync.ui_window_promoted_changed_count - before.shell_sync.ui_window_promoted_changed_count,
+      ui_window_promotion_wait_frames:
+        after.shell_sync.ui_window_promotion_wait_frames - before.shell_sync.ui_window_promotion_wait_frames,
+      ui_window_promotion_wait_max_frames:
+        after.shell_sync.ui_window_promoted_count > before.shell_sync.ui_window_promoted_count
+          ? after.shell_sync.ui_window_promotion_wait_max_frames
+          : 0,
+      ui_window_pending_dropped_count:
+        after.shell_sync.ui_window_pending_dropped_count - before.shell_sync.ui_window_pending_dropped_count,
       shared_state_exclusion_writes:
         after.shell_sync.shared_state_exclusion_writes - before.shell_sync.shared_state_exclusion_writes,
       shared_state_exclusion_bytes:
@@ -1861,6 +2005,10 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
         after.shell_bridge.action_renderer_to_browser_count > before.shell_bridge.action_renderer_to_browser_count
           ? after.shell_bridge.action_renderer_to_browser_max_us
           : 0,
+      action_renderer_to_browser_max_op:
+        after.shell_bridge.action_renderer_to_browser_count > before.shell_bridge.action_renderer_to_browser_count
+          ? after.shell_bridge.action_renderer_to_browser_max_op
+          : '',
       action_browser_to_compositor_count:
         after.shell_bridge.action_browser_to_compositor_count - before.shell_bridge.action_browser_to_compositor_count,
       action_browser_to_compositor_us:
@@ -1892,6 +2040,66 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
       state_renderer_apply_max_us:
         after.shell_bridge.state_renderer_apply_count > before.shell_bridge.state_renderer_apply_count
           ? after.shell_bridge.state_renderer_apply_max_us
+          : 0,
+      action_to_state_count: after.shell_bridge.action_to_state_count - before.shell_bridge.action_to_state_count,
+      action_to_state_us: after.shell_bridge.action_to_state_us - before.shell_bridge.action_to_state_us,
+      action_to_state_max_us:
+        after.shell_bridge.action_to_state_count > before.shell_bridge.action_to_state_count
+          ? after.shell_bridge.action_to_state_max_us
+          : 0,
+      action_to_state_started_count:
+        after.shell_bridge.action_to_state_started_count - before.shell_bridge.action_to_state_started_count,
+      action_to_state_pending_count: after.shell_bridge.action_to_state_pending_count,
+      action_to_state_expired_count:
+        after.shell_bridge.action_to_state_expired_count - before.shell_bridge.action_to_state_expired_count,
+      action_to_state_move_count:
+        after.shell_bridge.action_to_state_move_count - before.shell_bridge.action_to_state_move_count,
+      action_to_state_move_us:
+        after.shell_bridge.action_to_state_move_us - before.shell_bridge.action_to_state_move_us,
+      action_to_state_move_max_us:
+        after.shell_bridge.action_to_state_move_count > before.shell_bridge.action_to_state_move_count
+          ? after.shell_bridge.action_to_state_move_max_us
+          : 0,
+      action_to_state_resize_count:
+        after.shell_bridge.action_to_state_resize_count - before.shell_bridge.action_to_state_resize_count,
+      action_to_state_resize_us:
+        after.shell_bridge.action_to_state_resize_us - before.shell_bridge.action_to_state_resize_us,
+      action_to_state_resize_max_us:
+        after.shell_bridge.action_to_state_resize_count > before.shell_bridge.action_to_state_resize_count
+          ? after.shell_bridge.action_to_state_resize_max_us
+          : 0,
+      action_to_state_activation_count:
+        after.shell_bridge.action_to_state_activation_count - before.shell_bridge.action_to_state_activation_count,
+      action_to_state_activation_us:
+        after.shell_bridge.action_to_state_activation_us - before.shell_bridge.action_to_state_activation_us,
+      action_to_state_activation_max_us:
+        after.shell_bridge.action_to_state_activation_count > before.shell_bridge.action_to_state_activation_count
+          ? after.shell_bridge.action_to_state_activation_max_us
+          : 0,
+      action_to_state_window_state_count:
+        after.shell_bridge.action_to_state_window_state_count - before.shell_bridge.action_to_state_window_state_count,
+      action_to_state_window_state_us:
+        after.shell_bridge.action_to_state_window_state_us - before.shell_bridge.action_to_state_window_state_us,
+      action_to_state_window_state_max_us:
+        after.shell_bridge.action_to_state_window_state_count > before.shell_bridge.action_to_state_window_state_count
+          ? after.shell_bridge.action_to_state_window_state_max_us
+          : 0,
+      action_to_state_workspace_count:
+        after.shell_bridge.action_to_state_workspace_count - before.shell_bridge.action_to_state_workspace_count,
+      action_to_state_workspace_us:
+        after.shell_bridge.action_to_state_workspace_us - before.shell_bridge.action_to_state_workspace_us,
+      action_to_state_workspace_max_us:
+        after.shell_bridge.action_to_state_workspace_count > before.shell_bridge.action_to_state_workspace_count
+          ? after.shell_bridge.action_to_state_workspace_max_us
+          : 0,
+      action_to_state_native_preview_count:
+        after.shell_bridge.action_to_state_native_preview_count - before.shell_bridge.action_to_state_native_preview_count,
+      action_to_state_native_preview_us:
+        after.shell_bridge.action_to_state_native_preview_us - before.shell_bridge.action_to_state_native_preview_us,
+      action_to_state_native_preview_max_us:
+        after.shell_bridge.action_to_state_native_preview_count >
+        before.shell_bridge.action_to_state_native_preview_count
+          ? after.shell_bridge.action_to_state_native_preview_max_us
           : 0,
     },
     ...(shellRuntime ? { shell_runtime: shellRuntime } : {}),

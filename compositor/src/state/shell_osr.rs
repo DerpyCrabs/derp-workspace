@@ -18,6 +18,7 @@ pub(crate) struct ShellOsrState {
     pub(crate) shell_dmabuf_generation: u32,
     pub(crate) shell_dmabuf_overlay_id: Id,
     pub(crate) shell_dmabuf_commit: CommitCounter,
+    pub(crate) shell_frame_sequence: u64,
     pub(crate) shell_dmabuf_dirty_buffer: Vec<Rectangle<i32, Buffer>>,
     pub(crate) shell_dmabuf_dirty_force_full: bool,
     pub(crate) shell_dmabuf_next_force_full: bool,
@@ -474,7 +475,9 @@ impl ShellOsrState {
             let changed =
                 !self.shell_ui_windows.is_empty() || self.pending_shell_ui_windows.is_some();
             self.shell_ui_windows.clear();
-            self.pending_shell_ui_windows = None;
+            if self.pending_shell_ui_windows.take().is_some() {
+                crate::cef::begin_frame_diag::note_shell_ui_windows_pending_dropped();
+            }
             self.shell_ui_windows_generation = generation;
             return Some(ShellUiWindowsApply {
                 focus_lost: false,
@@ -526,8 +529,10 @@ impl ShellOsrState {
             .pending_shell_ui_windows
             .as_ref()
             .is_none_or(|pending| pending.generation != generation || pending.windows != out);
+        crate::cef::begin_frame_diag::note_shell_ui_windows_staged(out.len());
         self.pending_shell_ui_windows = Some(PendingShellUiWindows {
             generation,
+            staged_shell_frame_sequence: self.shell_frame_sequence,
             windows: out,
         });
         Some(ShellUiWindowsApply {
@@ -546,8 +551,16 @@ impl ShellOsrState {
         let pending = self.pending_shell_ui_windows.take()?;
         let changed = pending.windows != self.shell_ui_windows
             || pending.generation != self.shell_ui_windows_generation;
+        let wait_frames = self
+            .shell_frame_sequence
+            .saturating_sub(pending.staged_shell_frame_sequence);
         self.shell_ui_windows = pending.windows;
         self.shell_ui_windows_generation = pending.generation;
+        crate::cef::begin_frame_diag::note_shell_ui_windows_promoted(
+            self.shell_ui_windows.len(),
+            changed,
+            wait_frames,
+        );
         let focus_lost = self.shell_focused_ui_window_id.is_some_and(|fid| {
             !self.shell_ui_windows.iter().any(|w| w.id == fid) && !focused_is_shell_hosted
         });
@@ -999,6 +1012,7 @@ impl ShellOsrState {
             return Err("dmabuf build");
         };
         self.shell_dmabuf_commit.increment();
+        self.shell_frame_sequence = self.shell_frame_sequence.wrapping_add(1);
         self.shell_dmabuf = Some(dmabuf);
         self.shell_software_frame = None;
         self.shell_frame_is_dmabuf = true;
@@ -1104,6 +1118,7 @@ impl ShellOsrState {
         let (force_full, force_env, pending_force_full, bbox_full, dirty_supplied_len) =
             self.prepare_frame_damage(width, height, dirty_buffer);
         self.shell_dmabuf_commit.increment();
+        self.shell_frame_sequence = self.shell_frame_sequence.wrapping_add(1);
         self.shell_dmabuf = None;
         self.shell_software_frame = Some(pixels);
         self.shell_frame_is_dmabuf = false;
@@ -1156,9 +1171,12 @@ impl ShellOsrState {
         self.shell_dmabuf_generation = 0;
         self.shell_dmabuf_overlay_id = Id::new();
         self.shell_dmabuf_commit = CommitCounter::default();
+        self.shell_frame_sequence = 0;
         self.shell_dmabuf_dirty_buffer.clear();
         self.shell_dmabuf_dirty_force_full = true;
         self.shell_dmabuf_next_force_full = false;
-        self.pending_shell_ui_windows = None;
+        if self.pending_shell_ui_windows.take().is_some() {
+            crate::cef::begin_frame_diag::note_shell_ui_windows_pending_dropped();
+        }
     }
 }

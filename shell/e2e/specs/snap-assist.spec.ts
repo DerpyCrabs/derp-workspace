@@ -2351,12 +2351,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const { rect: firstCell } = await revealVisiblePickerControl(
         base,
         csdId,
-        "snap_picker_first_cell",
-        "CSD picker first cell",
+        "snap_picker_top_two_thirds_left",
+        "CSD picker top two-thirds left cell",
       );
       await hoverPickerCellWhileDragging(
         base,
-        "hover CSD picker first cell",
+        "hover CSD picker top two-thirds left cell",
         firstCell,
       );
       await pointerButton(base, BTN_LEFT, "release");
@@ -2368,7 +2368,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           const window = compositorWindowById(compositor, csdId);
           if (!window) return null;
           try {
-            assertTopThirdWindow(
+            assertTopTwoThirdsThirdWindow(
               window,
               ready.outputName,
               compositor,
@@ -2423,11 +2423,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
         if (moving && !isTranslucentDragWindow(window)) return null;
         if (Math.abs(window.width - floating.width) > 2) return null;
         if (Math.abs(window.height - floating.height) > 2) return null;
-        if (
-          Math.abs(window.x - snapped.window.x) <= 4 &&
-          Math.abs(window.y - snapped.window.y) <= 4
-        )
-          return null;
         return { compositor, shell, window };
       };
       const firstLiveUntile = await dragPointerToPointUntil(

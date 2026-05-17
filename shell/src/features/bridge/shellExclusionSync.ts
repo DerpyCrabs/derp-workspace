@@ -2,7 +2,7 @@ import { createEffect, onCleanup, type Accessor } from 'solid-js'
 import type { ExclusionHudZone } from '@/host/types'
 import { mergeExclusionRects } from '@/lib/exclusionRects'
 import { clientRectToGlobalLogical } from '@/lib/shellCoords'
-import { sharedShellStateStampKey, writeShellExclusionState } from './sharedShellState'
+import { sharedShellLayoutStampKey, sharedShellStateStampKey, writeShellExclusionState } from './sharedShellState'
 import {
   createShellMeasureFrame,
   currentShellMeasureFrame,
@@ -187,6 +187,7 @@ export function registerShellExclusionElement(
 
 export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   let lastExclusionStamp: string | null = null
+  let lastExclusionLayoutStamp: string | null = null
   let lastExclusionBase: ShellExclusionRect[] | null = null
   let lastExclusionTrayStrip: ShellExclusionRect | null = null
   let lastExclusionOverlayOpen = false
@@ -195,14 +196,16 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   function syncExclusionZonesNow() {
     void options.exclusionReactiveDeps()
     const stamp = sharedShellStateStampKey()
-    if (stamp !== lastExclusionStamp) {
+    const layoutStamp = sharedShellLayoutStampKey()
+    if (layoutStamp !== lastExclusionLayoutStamp) {
       for (const token of exclusionRegistry.keys()) dirtyExclusionTokens.add(token)
     }
     if (
       !pendingExclusionStateWrite &&
       !exclusionStructureDirty &&
       dirtyExclusionTokens.size === 0 &&
-      lastExclusionBase !== null
+      lastExclusionBase !== null &&
+      stamp === lastExclusionStamp
     )
       return
     const main = options.mainEl()
@@ -235,6 +238,7 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
       !pendingExclusionStateWrite &&
       lastExclusionBase !== null &&
       lastExclusionFloating !== null &&
+      stamp === lastExclusionStamp &&
       overlayOpen === lastExclusionOverlayOpen &&
       sameTrayStrip(snapshot.tray_strip, lastExclusionTrayStrip) &&
       sameExclusionRectArray(mergedBase, lastExclusionBase) &&
@@ -242,15 +246,18 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
     ) {
       pendingExclusionStateWrite = false
       lastExclusionStamp = stamp
+      lastExclusionLayoutStamp = layoutStamp
       return
     }
     if (!writeShellExclusionState(mergedBase, snapshot.tray_strip, overlayOpen, floatingForPayload)) {
       pendingExclusionStateWrite = true
       lastExclusionStamp = stamp
+      lastExclusionLayoutStamp = layoutStamp
       return
     }
     pendingExclusionStateWrite = false
     lastExclusionStamp = stamp
+    lastExclusionLayoutStamp = layoutStamp
     lastExclusionBase = cloneExclusionRectArray(mergedBase)
     lastExclusionTrayStrip = snapshot.tray_strip ? { ...snapshot.tray_strip } : null
     lastExclusionOverlayOpen = overlayOpen

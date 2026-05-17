@@ -104,6 +104,19 @@ function summarizePerf(perf: PerfCounterSnapshot) {
     shell_imperative_chrome_removed_nodes: raf?.imperative_chrome_removed_nodes ?? 0,
     shell_imperative_chrome_expected_windows: raf?.imperative_chrome_expected_windows ?? 0,
     shell_imperative_chrome_rendered_windows: raf?.imperative_chrome_rendered_windows ?? 0,
+    shell_imperative_chrome_full_apply_count: raf?.imperative_chrome_full_apply_count ?? 0,
+    shell_imperative_chrome_surface_apply_count: raf?.imperative_chrome_surface_apply_count ?? 0,
+    shell_imperative_chrome_state_driven_apply_count: raf?.imperative_chrome_state_driven_apply_count ?? 0,
+    shell_imperative_chrome_local_apply_count: raf?.imperative_chrome_local_apply_count ?? 0,
+    shell_imperative_chrome_visual_apply_count: raf?.imperative_chrome_visual_apply_count ?? 0,
+    shell_imperative_chrome_visual_windows: raf?.imperative_chrome_visual_windows ?? 0,
+    shell_imperative_chrome_state_age_ms: raf?.imperative_chrome_state_age_ms ?? 0,
+    shell_imperative_chrome_state_age_avg_ms:
+      raf && raf.imperative_chrome_state_driven_apply_count > 0
+        ? Math.round((raf.imperative_chrome_state_age_ms / raf.imperative_chrome_state_driven_apply_count) * 1000) / 1000
+        : 0,
+    shell_imperative_chrome_state_age_max_ms: raf?.imperative_chrome_state_age_max_ms ?? 0,
+    shell_imperative_chrome_state_age_p95_ms: raf?.imperative_chrome_state_age_p95_ms ?? 0,
     shell_imperative_chrome_render_gap_count: raf?.imperative_chrome_render_gap_count ?? 0,
     shell_imperative_chrome_render_gap_max_windows: raf?.imperative_chrome_render_gap_max_windows ?? 0,
     shell_imperative_chrome_root_missing_count: raf?.imperative_chrome_root_missing_count ?? 0,
@@ -119,6 +132,12 @@ function summarizePerf(perf: PerfCounterSnapshot) {
     shell_ui_windows_changed_count: raf?.shell_ui_windows_changed_count ?? 0,
     shell_ui_windows_stamp_refresh_count: raf?.shell_ui_windows_stamp_refresh_count ?? 0,
     shell_ui_windows_rows: raf?.shell_ui_windows_rows ?? 0,
+    compositor_ui_window_staged_count: perf.shell_sync.ui_window_staged_count,
+    compositor_ui_window_promoted_count: perf.shell_sync.ui_window_promoted_count,
+    compositor_ui_window_promoted_changed_count: perf.shell_sync.ui_window_promoted_changed_count,
+    compositor_ui_window_promotion_wait_frames: perf.shell_sync.ui_window_promotion_wait_frames,
+    compositor_ui_window_promotion_wait_max_frames: perf.shell_sync.ui_window_promotion_wait_max_frames,
+    compositor_ui_window_pending_dropped_count: perf.shell_sync.ui_window_pending_dropped_count,
     shared_state_sync_count: raf?.shared_state_sync_count ?? 0,
     shared_state_sync_ms: raf?.shared_state_sync_ms ?? 0,
     shared_state_sync_avg_ms:
@@ -128,6 +147,39 @@ function summarizePerf(perf: PerfCounterSnapshot) {
     shared_state_sync_max_ms: raf?.shared_state_sync_max_ms ?? 0,
     dom_measure_count: raf?.dom_measure_count ?? 0,
     dom_measure_ms: raf?.dom_measure_ms ?? 0,
+    state_to_chrome_count: raf?.state_to_chrome_count ?? 0,
+    state_to_chrome_ms: raf?.state_to_chrome_ms ?? 0,
+    state_to_chrome_avg_ms:
+      raf && raf.state_to_chrome_count > 0
+        ? Math.round((raf.state_to_chrome_ms / raf.state_to_chrome_count) * 1000) / 1000
+        : 0,
+    state_to_chrome_max_ms: raf?.state_to_chrome_max_ms ?? 0,
+    state_to_chrome_p95_ms: raf?.state_to_chrome_p95_ms ?? 0,
+    action_to_chrome_count: raf?.action_to_chrome_count ?? 0,
+    action_to_chrome_ms: raf?.action_to_chrome_ms ?? 0,
+    action_to_chrome_avg_ms:
+      raf && raf.action_to_chrome_count > 0
+        ? Math.round((raf.action_to_chrome_ms / raf.action_to_chrome_count) * 1000) / 1000
+        : 0,
+    action_to_chrome_max_ms: raf?.action_to_chrome_max_ms ?? 0,
+    action_to_chrome_p95_ms: raf?.action_to_chrome_p95_ms ?? 0,
+    action_to_chrome_pending_count: raf?.action_to_chrome_pending_count ?? 0,
+    action_to_chrome_expired_count: raf?.action_to_chrome_expired_count ?? 0,
+    action_to_chrome_move_count: raf?.action_to_chrome_move_count ?? 0,
+    action_to_chrome_move_max_ms: raf?.action_to_chrome_move_max_ms ?? 0,
+    action_to_chrome_move_p95_ms: raf?.action_to_chrome_move_p95_ms ?? 0,
+    action_to_chrome_resize_count: raf?.action_to_chrome_resize_count ?? 0,
+    action_to_chrome_resize_max_ms: raf?.action_to_chrome_resize_max_ms ?? 0,
+    action_to_chrome_resize_p95_ms: raf?.action_to_chrome_resize_p95_ms ?? 0,
+    action_to_chrome_activation_count: raf?.action_to_chrome_activation_count ?? 0,
+    action_to_chrome_activation_max_ms: raf?.action_to_chrome_activation_max_ms ?? 0,
+    action_to_chrome_activation_p95_ms: raf?.action_to_chrome_activation_p95_ms ?? 0,
+    action_to_chrome_window_state_count: raf?.action_to_chrome_window_state_count ?? 0,
+    action_to_chrome_window_state_max_ms: raf?.action_to_chrome_window_state_max_ms ?? 0,
+    action_to_chrome_window_state_p95_ms: raf?.action_to_chrome_window_state_p95_ms ?? 0,
+    action_to_chrome_workspace_count: raf?.action_to_chrome_workspace_count ?? 0,
+    action_to_chrome_workspace_max_ms: raf?.action_to_chrome_workspace_max_ms ?? 0,
+    action_to_chrome_workspace_p95_ms: raf?.action_to_chrome_workspace_p95_ms ?? 0,
     schedule_to_render_max_us: perf.latency.schedule_to_render_max_us,
     dirty_rect_max_coverage_per_mille: perf.dirty_rects.max_coverage_per_mille,
     action_renderer_to_browser_count: perf.shell_bridge.action_renderer_to_browser_count,
@@ -136,6 +188,7 @@ function summarizePerf(perf: PerfCounterSnapshot) {
       perf.shell_bridge.action_renderer_to_browser_count,
     ),
     action_renderer_to_browser_max_us: perf.shell_bridge.action_renderer_to_browser_max_us,
+    action_renderer_to_browser_max_op: perf.shell_bridge.action_renderer_to_browser_max_op,
     action_browser_to_compositor_count: perf.shell_bridge.action_browser_to_compositor_count,
     action_browser_to_compositor_avg_us: avg(
       perf.shell_bridge.action_browser_to_compositor_us,
@@ -160,6 +213,48 @@ function summarizePerf(perf: PerfCounterSnapshot) {
       perf.shell_bridge.state_renderer_apply_count,
     ),
     state_renderer_apply_max_us: perf.shell_bridge.state_renderer_apply_max_us,
+    action_to_state_count: perf.shell_bridge.action_to_state_count,
+    action_to_state_avg_us: avg(perf.shell_bridge.action_to_state_us, perf.shell_bridge.action_to_state_count),
+    action_to_state_max_us: perf.shell_bridge.action_to_state_max_us,
+    action_to_state_started_count: perf.shell_bridge.action_to_state_started_count,
+    action_to_state_pending_count: perf.shell_bridge.action_to_state_pending_count,
+    action_to_state_expired_count: perf.shell_bridge.action_to_state_expired_count,
+    action_to_state_move_count: perf.shell_bridge.action_to_state_move_count,
+    action_to_state_move_avg_us: avg(
+      perf.shell_bridge.action_to_state_move_us,
+      perf.shell_bridge.action_to_state_move_count,
+    ),
+    action_to_state_move_max_us: perf.shell_bridge.action_to_state_move_max_us,
+    action_to_state_resize_count: perf.shell_bridge.action_to_state_resize_count,
+    action_to_state_resize_avg_us: avg(
+      perf.shell_bridge.action_to_state_resize_us,
+      perf.shell_bridge.action_to_state_resize_count,
+    ),
+    action_to_state_resize_max_us: perf.shell_bridge.action_to_state_resize_max_us,
+    action_to_state_activation_count: perf.shell_bridge.action_to_state_activation_count,
+    action_to_state_activation_avg_us: avg(
+      perf.shell_bridge.action_to_state_activation_us,
+      perf.shell_bridge.action_to_state_activation_count,
+    ),
+    action_to_state_activation_max_us: perf.shell_bridge.action_to_state_activation_max_us,
+    action_to_state_window_state_count: perf.shell_bridge.action_to_state_window_state_count,
+    action_to_state_window_state_avg_us: avg(
+      perf.shell_bridge.action_to_state_window_state_us,
+      perf.shell_bridge.action_to_state_window_state_count,
+    ),
+    action_to_state_window_state_max_us: perf.shell_bridge.action_to_state_window_state_max_us,
+    action_to_state_workspace_count: perf.shell_bridge.action_to_state_workspace_count,
+    action_to_state_workspace_avg_us: avg(
+      perf.shell_bridge.action_to_state_workspace_us,
+      perf.shell_bridge.action_to_state_workspace_count,
+    ),
+    action_to_state_workspace_max_us: perf.shell_bridge.action_to_state_workspace_max_us,
+    action_to_state_native_preview_count: perf.shell_bridge.action_to_state_native_preview_count,
+    action_to_state_native_preview_avg_us: avg(
+      perf.shell_bridge.action_to_state_native_preview_us,
+      perf.shell_bridge.action_to_state_native_preview_count,
+    ),
+    action_to_state_native_preview_max_us: perf.shell_bridge.action_to_state_native_preview_max_us,
   }
 }
 
@@ -192,6 +287,14 @@ function assertHotChromeBudget(
     summary.shell_imperative_chrome_render_gap_count === 0,
     `${label} imperative chrome had ${summary.shell_imperative_chrome_render_gap_count} render gaps, max missing ${summary.shell_imperative_chrome_render_gap_max_windows}`,
   )
+  assert(
+    summary.shell_imperative_chrome_full_apply_count > 0,
+    `${label} did not record full imperative chrome applies`,
+  )
+  assert(
+    summary.shell_imperative_chrome_state_age_p95_ms <= 4,
+    `${label} state-driven chrome apply p95 age too high: ${summary.shell_imperative_chrome_state_age_p95_ms}ms`,
+  )
   if (options.snapshotTotals !== false) {
     assert(
       summary.shell_snapshot_apply_max_ms <= 14,
@@ -205,6 +308,33 @@ function assertHotChromeBudget(
   assert(
     summary.shell_batch_coalesce_dropped <= 2,
     `${label} dropped too many coalesced batch details: ${summary.shell_batch_coalesce_dropped}`,
+  )
+  assert(summary.state_to_chrome_count > 0, `${label} did not record state-to-chrome samples`)
+  assert(
+    summary.state_to_chrome_p95_ms <= 10,
+    `${label} state-to-chrome p95 too high: ${summary.state_to_chrome_p95_ms}ms`,
+  )
+  assert(
+    summary.state_to_chrome_max_ms <= 18,
+    `${label} state-to-chrome max too high: ${summary.state_to_chrome_max_ms}ms`,
+  )
+  assert(
+    summary.action_to_chrome_expired_count === 0,
+    `${label} action-to-chrome samples expired: ${summary.action_to_chrome_expired_count}`,
+  )
+  if (summary.action_renderer_to_browser_count > 0) {
+    assert(
+      summary.action_renderer_to_browser_max_us <= 25000,
+      `${label} renderer-to-browser shell action max too high: ${summary.action_renderer_to_browser_max_us}us op=${summary.action_renderer_to_browser_max_op}`,
+    )
+  }
+  assert(
+    summary.action_to_state_pending_count === 0,
+    `${label} browser/compositor action-to-state samples still pending: ${summary.action_to_state_pending_count}`,
+  )
+  assert(
+    summary.action_to_state_expired_count === 0,
+    `${label} browser/compositor action-to-state samples expired: ${summary.action_to_state_expired_count}`,
   )
 }
 
@@ -408,6 +538,20 @@ export default defineGroup(import.meta.url, ({ test }) => {
       `expected imperative chrome applies during shell-hosted loaded drag, got ${sample.summary.shell_imperative_chrome_apply_count}`,
     )
     assert(sample.summary.shell_ui_windows_flush_count > 0, 'expected shell-hosted drag to flush shell-ui placement state')
+    assert(sample.summary.compositor_ui_window_staged_count > 0, 'expected compositor to stage shell-ui placement state')
+    assert(sample.summary.compositor_ui_window_promoted_count > 0, 'expected compositor to promote shell-ui placement state')
+    assert(
+      sample.summary.compositor_ui_window_pending_dropped_count === 0,
+      `shell-hosted drag dropped pending shell-ui placements: ${sample.summary.compositor_ui_window_pending_dropped_count}`,
+    )
+    assert(
+      sample.summary.compositor_ui_window_promotion_wait_max_frames <= 2,
+      `shell-hosted drag shell-ui promotion waited too many frames: ${sample.summary.compositor_ui_window_promotion_wait_max_frames}`,
+    )
+    assert(
+      sample.summary.action_to_state_move_count > 0,
+      `expected shell-hosted drag to record browser/compositor move correlation, got ${sample.summary.action_to_state_move_count}`,
+    )
     assert(sample.summary.shared_state_sync_max_ms <= 4, `shell-hosted shared state sync too high: ${sample.summary.shared_state_sync_max_ms}ms`)
     assertHotChromeBudget('loaded shell-hosted drag', sample.summary, { snapshotTotals: false })
   })

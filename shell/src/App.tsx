@@ -36,10 +36,6 @@ import { renderShellHostedWindowContent } from "@/features/shell-ui/shellHostedW
 import type { ShellCompositorWireSend } from "@/features/shell-ui/shellWireSendType";
 import { createShellSurfaceRuntime } from "@/features/shell-ui/shellSurfaceRuntime";
 import { createShellWindowGestureRuntime } from "@/features/shell-ui/shellWindowGestureRuntime";
-import {
-  createNativeDragPreviewRuntime,
-  type NativeDragPreview,
-} from "@/features/shell-ui/nativeDragPreviewRuntime";
 import { createShellUiWindowSyncRuntime } from "@/features/shell-ui/shellUiWindowSyncRuntime";
 import {
   CustomLayoutOverlay,
@@ -265,8 +261,22 @@ function App() {
         fullscreen: boolean;
       } | null;
     } | null>(null);
-  const [nativeDragPreview, setNativeDragPreview] =
-    createSignal<NativeDragPreview | null>(null);
+  type NativeDragPreviewState = {
+    window_id: number;
+    generation: number;
+    image_path: string;
+  } | null;
+  let nativeDragPreview: NativeDragPreviewState = null;
+  let applyNativeDragPreviewToChrome:
+    | ((value: NativeDragPreviewState) => void)
+    | null = null;
+  function setNativeDragPreview(value: NativeDragPreviewState) {
+    nativeDragPreview = value;
+    applyNativeDragPreviewToChrome?.(value);
+  }
+  function getNativeDragPreview() {
+    return nativeDragPreview;
+  }
   const [notificationsState, setNotificationsState] =
     createSignal<ShellNotificationsState | null>(emptyNotificationsState());
   const [pointerClient, setPointerClient] = createSignal<{
@@ -331,10 +341,6 @@ function App() {
       window.clearInterval(interval);
     });
   });
-  const nativeDragPreviewAsset = createNativeDragPreviewRuntime(
-    nativeDragPreview,
-    shellWireSend,
-  );
   const shellAudio = useShellAudioState();
   const shellBattery = useShellBatteryState();
   createEffect(() => {
@@ -1730,10 +1736,11 @@ function App() {
     closeGroupWindow,
     closeWindow,
     shellContextOpenTabMenu: shellContextMenus.openTabMenu,
-    nativeDragPreview: nativeDragPreviewAsset,
     shellHostedContentRoot: getShellHostedContentRoot,
     shellWireSend,
   });
+  applyNativeDragPreviewToChrome = imperativeChromeRenderer.setNativeDragPreview;
+  applyNativeDragPreviewToChrome(nativeDragPreview);
 
   const shellHostedContentRoots = new Map<number, HTMLDivElement>();
 
@@ -2135,7 +2142,7 @@ function App() {
         setCompositorInteractionState,
         setNativeDragPreview,
         setNotificationsState,
-        getNativeDragPreview: nativeDragPreview,
+        getNativeDragPreview,
         markHasSeenCompositorWindowSync:
           sessionPersistenceRuntime.markHasSeenCompositorWindowSync,
         clearWindowSyncRecoveryPending: () => {

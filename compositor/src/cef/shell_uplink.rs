@@ -96,6 +96,59 @@ fn shared_state_row_count(kind: u32, payload: &[u8]) -> u64 {
         .saturating_add(floating) as u64
 }
 
+fn shell_action_window_id(op: &str, args: &ListValue) -> Option<u32> {
+    match op {
+        "resize_delta" | "workspace_mutation" | "window_intent" => None,
+        _ => {
+            let id = args.int(1);
+            if id > 0 {
+                Some(id as u32)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn is_shell_action_latency_op(op: &str) -> bool {
+    matches!(
+        op,
+        "close"
+            | "quit"
+            | "spawn"
+            | "command_palette_activate"
+            | "move_begin"
+            | "move_end"
+            | "native_drag_preview_begin"
+            | "native_drag_preview_cancel"
+            | "native_drag_preview_ready"
+            | "resize_begin"
+            | "resize_delta"
+            | "resize_end"
+            | "resize_shell_grab_begin"
+            | "resize_shell_grab_end"
+            | "taskbar_activate"
+            | "activate_window"
+            | "shell_ui_grab_begin"
+            | "shell_ui_grab_end"
+            | "minimize"
+            | "set_fullscreen"
+            | "set_maximized"
+            | "set_geometry"
+            | "presentation_fullscreen"
+            | "set_output_layout"
+            | "window_intent"
+            | "set_shell_primary"
+            | "set_ui_scale"
+            | "set_output_vrr"
+            | "set_taskbar_auto_hide"
+            | "set_taskbar_side"
+            | "set_tile_preview"
+            | "set_chrome_metrics"
+            | "workspace_mutation"
+    )
+}
+
 fn set_global_optional_string(
     global: &mut V8Value,
     attrs: sys::cef_v8_propertyattribute_t,
@@ -303,9 +356,16 @@ fn handle_uplink_list(
     args: &ListValue,
 ) {
     let op = cef_string_userfree_to_string(&args.string(0));
-    if op != "bridge_perf" {
+    if is_shell_action_latency_op(op.as_str()) {
         crate::cef::begin_frame_diag::note_shell_action_renderer_to_browser(
+            op.as_str(),
             args.double(PERF_SENT_AT_ARG).max(0.0) as u64,
+        );
+    }
+    if op != "bridge_perf" {
+        crate::cef::begin_frame_diag::note_shell_action_browser_received(
+            op.as_str(),
+            shell_action_window_id(op.as_str(), args),
         );
     }
     match op.as_str() {

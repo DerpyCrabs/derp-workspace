@@ -116,7 +116,7 @@ describe('createShellExclusionSync', () => {
     dispose()
   })
 
-  it('remeasures but does not rewrite unchanged exclusions when the compositor snapshot epoch changes', async () => {
+  it('rewrites cached exclusions without remeasuring when the compositor snapshot epoch changes', async () => {
     const send = vi.fn().mockReturnValue(true)
     vi.stubGlobal('window', {
       __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE: 2,
@@ -152,7 +152,13 @@ describe('createShellExclusionSync', () => {
     ;(window as Window & { __DERP_LAST_COMPOSITOR_STATE_EPOCH?: number }).__DERP_LAST_COMPOSITOR_STATE_EPOCH = 4
     runtime!.syncExclusionZonesNow()
 
-    expect(send).toHaveBeenCalledTimes(setupSendCalls)
+    expect(send).toHaveBeenCalledTimes(setupSendCalls + 1)
+    expect(measure).toHaveBeenCalledTimes(setupMeasureCalls)
+
+    ;(window as Window & { __DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION?: number }).__DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION = 5
+    runtime!.syncExclusionZonesNow()
+
+    expect(send).toHaveBeenCalledTimes(setupSendCalls + 2)
     expect(measure).toHaveBeenCalledTimes(setupMeasureCalls + 1)
 
     registration.unregister()

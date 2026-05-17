@@ -377,20 +377,27 @@ impl ShellToCefLink {
             };
             if let Some(snapshot) = snapshot {
                 for snapshot_msg in snapshot {
+                    let queued_at = Instant::now();
+                    crate::cef::begin_frame_diag::note_shell_state_queued_for_action(
+                        &snapshot_msg,
+                        queued_at,
+                    );
                     guard.snapshot.push(PendingCompositorMessage {
                         snapshot_epoch: 0,
                         msg: snapshot_msg,
-                        queued_at: Instant::now(),
+                        queued_at,
                     });
                 }
             }
             if let Some(snapshot_epoch) = snapshot_epoch {
                 guard.snapshot_epoch = guard.snapshot_epoch.max(snapshot_epoch);
             }
+            let queued_at = Instant::now();
+            crate::cef::begin_frame_diag::note_shell_state_queued_for_action(&msg, queued_at);
             let pending = PendingCompositorMessage {
                 snapshot_epoch: msg_epoch.unwrap_or_default(),
                 msg,
-                queued_at: Instant::now(),
+                queued_at,
             };
             if pending_message_is_urgent_input(&pending.msg) {
                 guard.urgent.push_urgent_input(pending);

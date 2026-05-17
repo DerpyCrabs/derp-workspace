@@ -19,6 +19,7 @@ import {
   noteShellSnapshotRead,
   noteShellSnapshotApply,
   noteShellSnapshotDecode,
+  noteShellStateToChromeApply,
   noteShellVisualFollowup,
   noteShellWindowApply,
 } from '@/features/bridge/shellPerfCounters'
@@ -449,10 +450,11 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     }
     noteShellVisualFollowup(performance.now() - start)
   }
-  const applyImperativeChromeDetails = (details: readonly DerpShellDetail[]) => {
+  const applyImperativeChromeDetails = (details: readonly DerpShellDetail[], stateStartedAt = performance.now()) => {
     const start = performance.now()
     options.applyImperativeChromeDetails?.(details)
     noteShellImperativeChromeDetailApply(performance.now() - start, details.length)
+    if (details.length > 0) noteShellStateToChromeApply(stateStartedAt, details)
   }
   const detailSnapshotEpoch = (detail: DerpShellDetail) => {
     return runtimeDetailSnapshotEpoch(detail)
@@ -776,9 +778,9 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     return false
   }
 
-  const applyCompositorSnapshot = (details: readonly DerpShellDetail[], domainFlags: number) => {
+  const applyCompositorSnapshot = (details: readonly DerpShellDetail[], domainFlags: number, stateStartedAt = performance.now()) => {
     const coalescedDetails = coalesceCompositorDetails(details)
-    applyImperativeChromeDetails(coalescedDetails)
+    applyImperativeChromeDetails(coalescedDetails, stateStartedAt)
     const skipOutputGeometry = coalescedDetails.some((detail) => detail.type === 'output_layout')
     let sawWindowList = false
     let sawWindowOrder = false
@@ -1022,6 +1024,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const applyCompositorBatch = (details: readonly DerpShellDetail[]) => {
     if (details.length === 0) return
     const applyStart = performance.now()
+    const stateStartedAt = applyStart
     const coalescedDetails = coalesceCompositorDetails(details)
     const hasSnapshotState = coalescedDetails.some(detailIsSnapshotState)
     let synced: false | { domainFlags: number; detailsLength: number } = false
@@ -1029,7 +1032,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     const directChromeDetails = synced
       ? coalescedDetails.filter((detail) => !detailIsSnapshotState(detail))
       : coalescedDetails
-    applyImperativeChromeDetails(directChromeDetails)
+    applyImperativeChromeDetails(directChromeDetails, stateStartedAt)
     batch(() => {
       if (hasSnapshotState) {
         if (!synced) scheduleCompositorVisualFollowup(coalescedDetails.filter(detailIsSnapshotState))
@@ -1077,6 +1080,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     const decoded = decodeCompositorSnapshot(raw)
     noteShellSnapshotDecode(performance.now() - decodeStart, raw.byteLength)
     if (!decoded) return false
+    const stateStartedAt = performance.now()
     const snapshotDetails = decoded.details
     lastSnapshotDomainFlags = decoded.domainFlags
     bridgeDebug({
@@ -1116,7 +1120,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     ;(window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS =
       lastSnapshotDomainFlags
     const applyStart = performance.now()
-    applyCompositorSnapshot(snapshotDetails, lastSnapshotDomainFlags)
+    applyCompositorSnapshot(snapshotDetails, lastSnapshotDomainFlags, stateStartedAt)
     noteShellSnapshotApply(performance.now() - applyStart, snapshotDetails.length)
     if (shellLatencySampleId !== 0) {
       markShellLatencySample(shellLatencySampleId, { appliedAt: performance.now() })

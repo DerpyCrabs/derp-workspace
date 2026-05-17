@@ -2,6 +2,7 @@ import type {
   ShellCompositorWireOp,
   ShellCompositorWireSend,
 } from "@/features/shell-ui/shellWireSendType";
+import { beginShellActionToChrome } from "@/features/bridge/shellPerfCounters";
 
 export function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
   const now =
@@ -49,6 +50,7 @@ export const shellWireSend: ShellCompositorWireSend = function shellWireSend(
     }
     return false;
   }
+  beginShellActionToChrome(op, arg, arg2, arg3, arg4, arg5, arg6);
   if (op === "resize_delta" && arg2 !== undefined) {
     fn(op, arg as number, arg2);
   } else if (op === "resize_begin" && arg2 !== undefined) {

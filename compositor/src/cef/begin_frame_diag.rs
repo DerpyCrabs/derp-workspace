@@ -30,6 +30,14 @@ static SHELL_SNAPSHOT_ENCODE_MESSAGES: AtomicU64 = AtomicU64::new(0);
 static SHELL_SHARED_STATE_UI_WINDOW_WRITES: AtomicU64 = AtomicU64::new(0);
 static SHELL_SHARED_STATE_UI_WINDOW_BYTES: AtomicU64 = AtomicU64::new(0);
 static SHELL_SHARED_STATE_UI_WINDOW_ROWS: AtomicU64 = AtomicU64::new(0);
+static SHELL_UI_WINDOWS_STAGED_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_UI_WINDOWS_STAGED_ROWS: AtomicU64 = AtomicU64::new(0);
+static SHELL_UI_WINDOWS_PROMOTED_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_UI_WINDOWS_PROMOTED_ROWS: AtomicU64 = AtomicU64::new(0);
+static SHELL_UI_WINDOWS_PROMOTED_CHANGED_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_UI_WINDOWS_PROMOTION_WAIT_FRAMES: AtomicU64 = AtomicU64::new(0);
+static SHELL_UI_WINDOWS_PROMOTION_WAIT_MAX_FRAMES: AtomicU64 = AtomicU64::new(0);
+static SHELL_UI_WINDOWS_PENDING_DROPPED_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_SHARED_STATE_EXCLUSION_WRITES: AtomicU64 = AtomicU64::new(0);
 static SHELL_SHARED_STATE_EXCLUSION_BYTES: AtomicU64 = AtomicU64::new(0);
 static SHELL_SHARED_STATE_EXCLUSION_RECTS: AtomicU64 = AtomicU64::new(0);
@@ -51,6 +59,7 @@ static SHELL_DIRTY_RECT_EMPTY: AtomicU64 = AtomicU64::new(0);
 static SHELL_ACTION_RENDERER_TO_BROWSER_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_ACTION_RENDERER_TO_BROWSER_US: AtomicU64 = AtomicU64::new(0);
 static SHELL_ACTION_RENDERER_TO_BROWSER_MAX_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_RENDERER_TO_BROWSER_MAX_OP: Mutex<Option<String>> = Mutex::new(None);
 static SHELL_ACTION_BROWSER_TO_COMPOSITOR_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_ACTION_BROWSER_TO_COMPOSITOR_US: AtomicU64 = AtomicU64::new(0);
 static SHELL_ACTION_BROWSER_TO_COMPOSITOR_MAX_US: AtomicU64 = AtomicU64::new(0);
@@ -63,7 +72,47 @@ static SHELL_STATE_BROWSER_TO_RENDERER_MAX_US: AtomicU64 = AtomicU64::new(0);
 static SHELL_STATE_RENDERER_APPLY_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_STATE_RENDERER_APPLY_US: AtomicU64 = AtomicU64::new(0);
 static SHELL_STATE_RENDERER_APPLY_MAX_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_MAX_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_STARTED_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_EXPIRED_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_MOVE_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_MOVE_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_MOVE_MAX_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_RESIZE_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_RESIZE_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_RESIZE_MAX_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_ACTIVATION_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_ACTIVATION_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_ACTIVATION_MAX_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_WINDOW_STATE_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_WINDOW_STATE_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_WINDOW_STATE_MAX_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_WORKSPACE_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_WORKSPACE_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_WORKSPACE_MAX_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_MAX_US: AtomicU64 = AtomicU64::new(0);
 static LATENCY: Mutex<LatencyTrace> = Mutex::new(LatencyTrace::new());
+static ACTION_STATE_TRACES: Mutex<Vec<ActionStateTrace>> = Mutex::new(Vec::new());
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ActionStateBucket {
+    Move,
+    Resize,
+    Activation,
+    WindowState,
+    Workspace,
+    NativePreview,
+}
+
+struct ActionStateTrace {
+    bucket: ActionStateBucket,
+    window_id: Option<u32>,
+    received_at: Instant,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ShellViewInvalidateReason {
@@ -180,6 +229,14 @@ struct ShellSyncSnapshot {
     shared_state_ui_window_writes: u64,
     shared_state_ui_window_bytes: u64,
     shared_state_ui_window_rows: u64,
+    ui_window_staged_count: u64,
+    ui_window_staged_rows: u64,
+    ui_window_promoted_count: u64,
+    ui_window_promoted_rows: u64,
+    ui_window_promoted_changed_count: u64,
+    ui_window_promotion_wait_frames: u64,
+    ui_window_promotion_wait_max_frames: u64,
+    ui_window_pending_dropped_count: u64,
     shared_state_exclusion_writes: u64,
     shared_state_exclusion_bytes: u64,
     shared_state_exclusion_rects: u64,
@@ -213,6 +270,7 @@ struct ShellBridgeSnapshot {
     action_renderer_to_browser_count: u64,
     action_renderer_to_browser_us: u64,
     action_renderer_to_browser_max_us: u64,
+    action_renderer_to_browser_max_op: String,
     action_browser_to_compositor_count: u64,
     action_browser_to_compositor_us: u64,
     action_browser_to_compositor_max_us: u64,
@@ -225,6 +283,30 @@ struct ShellBridgeSnapshot {
     state_renderer_apply_count: u64,
     state_renderer_apply_us: u64,
     state_renderer_apply_max_us: u64,
+    action_to_state_count: u64,
+    action_to_state_us: u64,
+    action_to_state_max_us: u64,
+    action_to_state_started_count: u64,
+    action_to_state_pending_count: u64,
+    action_to_state_expired_count: u64,
+    action_to_state_move_count: u64,
+    action_to_state_move_us: u64,
+    action_to_state_move_max_us: u64,
+    action_to_state_resize_count: u64,
+    action_to_state_resize_us: u64,
+    action_to_state_resize_max_us: u64,
+    action_to_state_activation_count: u64,
+    action_to_state_activation_us: u64,
+    action_to_state_activation_max_us: u64,
+    action_to_state_window_state_count: u64,
+    action_to_state_window_state_us: u64,
+    action_to_state_window_state_max_us: u64,
+    action_to_state_workspace_count: u64,
+    action_to_state_workspace_us: u64,
+    action_to_state_workspace_max_us: u64,
+    action_to_state_native_preview_count: u64,
+    action_to_state_native_preview_us: u64,
+    action_to_state_native_preview_max_us: u64,
 }
 
 pub(crate) fn note_shell_view_invalidate(reason: ShellViewInvalidateReason) {
@@ -311,6 +393,25 @@ pub(crate) fn note_shell_shared_state_write(kind: u32, payload_len: usize, row_c
     }
 }
 
+pub(crate) fn note_shell_ui_windows_staged(row_count: usize) {
+    SHELL_UI_WINDOWS_STAGED_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_UI_WINDOWS_STAGED_ROWS.fetch_add(row_count as u64, Ordering::Relaxed);
+}
+
+pub(crate) fn note_shell_ui_windows_promoted(row_count: usize, changed: bool, wait_frames: u64) {
+    SHELL_UI_WINDOWS_PROMOTED_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_UI_WINDOWS_PROMOTED_ROWS.fetch_add(row_count as u64, Ordering::Relaxed);
+    SHELL_UI_WINDOWS_PROMOTION_WAIT_FRAMES.fetch_add(wait_frames, Ordering::Relaxed);
+    SHELL_UI_WINDOWS_PROMOTION_WAIT_MAX_FRAMES.fetch_max(wait_frames, Ordering::Relaxed);
+    if changed {
+        SHELL_UI_WINDOWS_PROMOTED_CHANGED_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn note_shell_ui_windows_pending_dropped() {
+    SHELL_UI_WINDOWS_PENDING_DROPPED_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
 pub(crate) fn note_cef_accelerated_paint(
     width: u32,
     height: u32,
@@ -376,14 +477,19 @@ pub(crate) fn unix_micros_now() -> u64 {
         .unwrap_or_default()
 }
 
-pub(crate) fn note_shell_action_renderer_to_browser(sent_at_us: u64) {
+pub(crate) fn note_shell_action_renderer_to_browser(op: &str, sent_at_us: u64) {
     if sent_at_us == 0 {
         return;
     }
     let elapsed = unix_micros_now().saturating_sub(sent_at_us);
     SHELL_ACTION_RENDERER_TO_BROWSER_COUNT.fetch_add(1, Ordering::Relaxed);
     SHELL_ACTION_RENDERER_TO_BROWSER_US.fetch_add(elapsed, Ordering::Relaxed);
-    SHELL_ACTION_RENDERER_TO_BROWSER_MAX_US.fetch_max(elapsed, Ordering::Relaxed);
+    let previous = SHELL_ACTION_RENDERER_TO_BROWSER_MAX_US.fetch_max(elapsed, Ordering::Relaxed);
+    if elapsed > previous {
+        if let Ok(mut max_op) = SHELL_ACTION_RENDERER_TO_BROWSER_MAX_OP.lock() {
+            *max_op = Some(op.to_string());
+        }
+    }
 }
 
 pub(crate) fn note_shell_action_browser_to_compositor(duration: Duration) {
@@ -416,7 +522,197 @@ pub(crate) fn note_shell_state_renderer_apply(duration: Duration) {
     SHELL_STATE_RENDERER_APPLY_MAX_US.fetch_max(us, Ordering::Relaxed);
 }
 
+fn action_state_bucket(op: &str) -> Option<ActionStateBucket> {
+    match op {
+        "move_begin" => Some(ActionStateBucket::Move),
+        "resize_begin" | "resize_delta" => Some(ActionStateBucket::Resize),
+        "activate_window" | "taskbar_activate" => Some(ActionStateBucket::Activation),
+        "minimize" | "set_maximized" | "set_geometry" => Some(ActionStateBucket::WindowState),
+        "window_intent" | "workspace_mutation" => Some(ActionStateBucket::Workspace),
+        "native_drag_preview_begin"
+        | "native_drag_preview_ready"
+        | "native_drag_preview_cancel" => Some(ActionStateBucket::NativePreview),
+        _ => None,
+    }
+}
+
+pub(crate) fn note_shell_action_browser_received(op: &str, window_id: Option<u32>) {
+    let Some(bucket) = action_state_bucket(op) else {
+        return;
+    };
+    let now = Instant::now();
+    let Ok(mut traces) = ACTION_STATE_TRACES.lock() else {
+        return;
+    };
+    let before = traces.len();
+    traces.retain(|trace| now.duration_since(trace.received_at) <= Duration::from_secs(2));
+    let expired = before.saturating_sub(traces.len());
+    if expired > 0 {
+        SHELL_ACTION_TO_STATE_EXPIRED_COUNT.fetch_add(expired as u64, Ordering::Relaxed);
+    }
+    traces.push(ActionStateTrace {
+        bucket,
+        window_id,
+        received_at: now,
+    });
+    SHELL_ACTION_TO_STATE_STARTED_COUNT.fetch_add(1, Ordering::Relaxed);
+    if traces.len() > 128 {
+        let dropped = traces.len() - 128;
+        traces.drain(0..dropped);
+        SHELL_ACTION_TO_STATE_EXPIRED_COUNT.fetch_add(dropped as u64, Ordering::Relaxed);
+    }
+}
+
+fn message_matches_action_state(
+    msg: &shell_wire::DecodedCompositorToShellMessage,
+    bucket: ActionStateBucket,
+    window_id: Option<u32>,
+) -> bool {
+    match (bucket, msg) {
+        (
+            ActionStateBucket::Move,
+            shell_wire::DecodedCompositorToShellMessage::InteractionState {
+                move_window_id, ..
+            },
+        ) => window_id.is_none_or(|id| *move_window_id == id),
+        (
+            ActionStateBucket::Move,
+            shell_wire::DecodedCompositorToShellMessage::WindowGeometry { window_id: wid, .. },
+        ) => window_id.is_none_or(|id| *wid == id),
+        (
+            ActionStateBucket::Resize,
+            shell_wire::DecodedCompositorToShellMessage::InteractionState {
+                resize_window_id, ..
+            },
+        ) => window_id.is_none_or(|id| *resize_window_id == id),
+        (
+            ActionStateBucket::Resize,
+            shell_wire::DecodedCompositorToShellMessage::WindowGeometry { window_id: wid, .. },
+        ) => window_id.is_none_or(|id| *wid == id),
+        (
+            ActionStateBucket::Activation,
+            shell_wire::DecodedCompositorToShellMessage::FocusChanged { window_id: wid, .. },
+        ) => window_id.is_none_or(|id| *wid == Some(id)),
+        (
+            ActionStateBucket::WindowState,
+            shell_wire::DecodedCompositorToShellMessage::WindowState { window_id: wid, .. },
+        )
+        | (
+            ActionStateBucket::WindowState,
+            shell_wire::DecodedCompositorToShellMessage::WindowGeometry { window_id: wid, .. },
+        ) => window_id.is_none_or(|id| *wid == id),
+        (
+            ActionStateBucket::Workspace,
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. },
+        )
+        | (
+            ActionStateBucket::Workspace,
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. },
+        )
+        | (
+            ActionStateBucket::Workspace,
+            shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. },
+        )
+        | (
+            ActionStateBucket::Workspace,
+            shell_wire::DecodedCompositorToShellMessage::WindowList { .. },
+        )
+        | (
+            ActionStateBucket::Workspace,
+            shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. },
+        )
+        | (
+            ActionStateBucket::Workspace,
+            shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. },
+        ) => true,
+        (
+            ActionStateBucket::NativePreview,
+            shell_wire::DecodedCompositorToShellMessage::NativeDragPreview {
+                window_id: wid, ..
+            },
+        ) => window_id.is_none_or(|id| *wid == id),
+        _ => false,
+    }
+}
+
+fn record_action_to_state_bucket(bucket: ActionStateBucket, us: u64) {
+    match bucket {
+        ActionStateBucket::Move => {
+            SHELL_ACTION_TO_STATE_MOVE_COUNT.fetch_add(1, Ordering::Relaxed);
+            SHELL_ACTION_TO_STATE_MOVE_US.fetch_add(us, Ordering::Relaxed);
+            SHELL_ACTION_TO_STATE_MOVE_MAX_US.fetch_max(us, Ordering::Relaxed);
+        }
+        ActionStateBucket::Resize => {
+            SHELL_ACTION_TO_STATE_RESIZE_COUNT.fetch_add(1, Ordering::Relaxed);
+            SHELL_ACTION_TO_STATE_RESIZE_US.fetch_add(us, Ordering::Relaxed);
+            SHELL_ACTION_TO_STATE_RESIZE_MAX_US.fetch_max(us, Ordering::Relaxed);
+        }
+        ActionStateBucket::Activation => {
+            SHELL_ACTION_TO_STATE_ACTIVATION_COUNT.fetch_add(1, Ordering::Relaxed);
+            SHELL_ACTION_TO_STATE_ACTIVATION_US.fetch_add(us, Ordering::Relaxed);
+            SHELL_ACTION_TO_STATE_ACTIVATION_MAX_US.fetch_max(us, Ordering::Relaxed);
+        }
+        ActionStateBucket::WindowState => {
+            SHELL_ACTION_TO_STATE_WINDOW_STATE_COUNT.fetch_add(1, Ordering::Relaxed);
+            SHELL_ACTION_TO_STATE_WINDOW_STATE_US.fetch_add(us, Ordering::Relaxed);
+            SHELL_ACTION_TO_STATE_WINDOW_STATE_MAX_US.fetch_max(us, Ordering::Relaxed);
+        }
+        ActionStateBucket::Workspace => {
+            SHELL_ACTION_TO_STATE_WORKSPACE_COUNT.fetch_add(1, Ordering::Relaxed);
+            SHELL_ACTION_TO_STATE_WORKSPACE_US.fetch_add(us, Ordering::Relaxed);
+            SHELL_ACTION_TO_STATE_WORKSPACE_MAX_US.fetch_max(us, Ordering::Relaxed);
+        }
+        ActionStateBucket::NativePreview => {
+            SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_COUNT.fetch_add(1, Ordering::Relaxed);
+            SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_US.fetch_add(us, Ordering::Relaxed);
+            SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_MAX_US.fetch_max(us, Ordering::Relaxed);
+        }
+    }
+}
+
+pub(crate) fn note_shell_state_queued_for_action(
+    msg: &shell_wire::DecodedCompositorToShellMessage,
+    queued_at: Instant,
+) {
+    let Ok(mut traces) = ACTION_STATE_TRACES.lock() else {
+        return;
+    };
+    if traces.is_empty() {
+        return;
+    }
+    let before = traces.len();
+    traces.retain(|trace| queued_at.duration_since(trace.received_at) <= Duration::from_secs(2));
+    let expired = before.saturating_sub(traces.len());
+    if expired > 0 {
+        SHELL_ACTION_TO_STATE_EXPIRED_COUNT.fetch_add(expired as u64, Ordering::Relaxed);
+    }
+    let Some(index) = traces
+        .iter()
+        .position(|trace| message_matches_action_state(msg, trace.bucket, trace.window_id))
+    else {
+        return;
+    };
+    let trace = traces.remove(index);
+    let us = queued_at
+        .saturating_duration_since(trace.received_at)
+        .as_micros()
+        .min(u128::from(u64::MAX)) as u64;
+    SHELL_ACTION_TO_STATE_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_US.fetch_add(us, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_MAX_US.fetch_max(us, Ordering::Relaxed);
+    record_action_to_state_bucket(trace.bucket, us);
+}
+
 pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
+    let action_to_state_pending_count = ACTION_STATE_TRACES
+        .lock()
+        .map(|traces| traces.len() as u64)
+        .unwrap_or_default();
+    let action_renderer_to_browser_max_op = SHELL_ACTION_RENDERER_TO_BROWSER_MAX_OP
+        .lock()
+        .ok()
+        .and_then(|op| op.clone())
+        .unwrap_or_default();
     PerfCounterSnapshot {
         begin_frame: BeginFrameSnapshot {
             compositor_schedules: COMPOSITOR_SCHEDULE.load(Ordering::Relaxed),
@@ -453,6 +749,18 @@ pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
             shared_state_ui_window_bytes: SHELL_SHARED_STATE_UI_WINDOW_BYTES
                 .load(Ordering::Relaxed),
             shared_state_ui_window_rows: SHELL_SHARED_STATE_UI_WINDOW_ROWS.load(Ordering::Relaxed),
+            ui_window_staged_count: SHELL_UI_WINDOWS_STAGED_COUNT.load(Ordering::Relaxed),
+            ui_window_staged_rows: SHELL_UI_WINDOWS_STAGED_ROWS.load(Ordering::Relaxed),
+            ui_window_promoted_count: SHELL_UI_WINDOWS_PROMOTED_COUNT.load(Ordering::Relaxed),
+            ui_window_promoted_rows: SHELL_UI_WINDOWS_PROMOTED_ROWS.load(Ordering::Relaxed),
+            ui_window_promoted_changed_count: SHELL_UI_WINDOWS_PROMOTED_CHANGED_COUNT
+                .load(Ordering::Relaxed),
+            ui_window_promotion_wait_frames: SHELL_UI_WINDOWS_PROMOTION_WAIT_FRAMES
+                .load(Ordering::Relaxed),
+            ui_window_promotion_wait_max_frames: SHELL_UI_WINDOWS_PROMOTION_WAIT_MAX_FRAMES
+                .load(Ordering::Relaxed),
+            ui_window_pending_dropped_count: SHELL_UI_WINDOWS_PENDING_DROPPED_COUNT
+                .load(Ordering::Relaxed),
             shared_state_exclusion_writes: SHELL_SHARED_STATE_EXCLUSION_WRITES
                 .load(Ordering::Relaxed),
             shared_state_exclusion_bytes: SHELL_SHARED_STATE_EXCLUSION_BYTES
@@ -487,6 +795,7 @@ pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
                 .load(Ordering::Relaxed),
             action_renderer_to_browser_max_us: SHELL_ACTION_RENDERER_TO_BROWSER_MAX_US
                 .load(Ordering::Relaxed),
+            action_renderer_to_browser_max_op,
             action_browser_to_compositor_count: SHELL_ACTION_BROWSER_TO_COMPOSITOR_COUNT
                 .load(Ordering::Relaxed),
             action_browser_to_compositor_us: SHELL_ACTION_BROWSER_TO_COMPOSITOR_US
@@ -507,6 +816,46 @@ pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
             state_renderer_apply_count: SHELL_STATE_RENDERER_APPLY_COUNT.load(Ordering::Relaxed),
             state_renderer_apply_us: SHELL_STATE_RENDERER_APPLY_US.load(Ordering::Relaxed),
             state_renderer_apply_max_us: SHELL_STATE_RENDERER_APPLY_MAX_US.load(Ordering::Relaxed),
+            action_to_state_count: SHELL_ACTION_TO_STATE_COUNT.load(Ordering::Relaxed),
+            action_to_state_us: SHELL_ACTION_TO_STATE_US.load(Ordering::Relaxed),
+            action_to_state_max_us: SHELL_ACTION_TO_STATE_MAX_US.load(Ordering::Relaxed),
+            action_to_state_started_count: SHELL_ACTION_TO_STATE_STARTED_COUNT
+                .load(Ordering::Relaxed),
+            action_to_state_pending_count,
+            action_to_state_expired_count: SHELL_ACTION_TO_STATE_EXPIRED_COUNT
+                .load(Ordering::Relaxed),
+            action_to_state_move_count: SHELL_ACTION_TO_STATE_MOVE_COUNT.load(Ordering::Relaxed),
+            action_to_state_move_us: SHELL_ACTION_TO_STATE_MOVE_US.load(Ordering::Relaxed),
+            action_to_state_move_max_us: SHELL_ACTION_TO_STATE_MOVE_MAX_US.load(Ordering::Relaxed),
+            action_to_state_resize_count: SHELL_ACTION_TO_STATE_RESIZE_COUNT
+                .load(Ordering::Relaxed),
+            action_to_state_resize_us: SHELL_ACTION_TO_STATE_RESIZE_US.load(Ordering::Relaxed),
+            action_to_state_resize_max_us: SHELL_ACTION_TO_STATE_RESIZE_MAX_US
+                .load(Ordering::Relaxed),
+            action_to_state_activation_count: SHELL_ACTION_TO_STATE_ACTIVATION_COUNT
+                .load(Ordering::Relaxed),
+            action_to_state_activation_us: SHELL_ACTION_TO_STATE_ACTIVATION_US
+                .load(Ordering::Relaxed),
+            action_to_state_activation_max_us: SHELL_ACTION_TO_STATE_ACTIVATION_MAX_US
+                .load(Ordering::Relaxed),
+            action_to_state_window_state_count: SHELL_ACTION_TO_STATE_WINDOW_STATE_COUNT
+                .load(Ordering::Relaxed),
+            action_to_state_window_state_us: SHELL_ACTION_TO_STATE_WINDOW_STATE_US
+                .load(Ordering::Relaxed),
+            action_to_state_window_state_max_us: SHELL_ACTION_TO_STATE_WINDOW_STATE_MAX_US
+                .load(Ordering::Relaxed),
+            action_to_state_workspace_count: SHELL_ACTION_TO_STATE_WORKSPACE_COUNT
+                .load(Ordering::Relaxed),
+            action_to_state_workspace_us: SHELL_ACTION_TO_STATE_WORKSPACE_US
+                .load(Ordering::Relaxed),
+            action_to_state_workspace_max_us: SHELL_ACTION_TO_STATE_WORKSPACE_MAX_US
+                .load(Ordering::Relaxed),
+            action_to_state_native_preview_count: SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_COUNT
+                .load(Ordering::Relaxed),
+            action_to_state_native_preview_us: SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_US
+                .load(Ordering::Relaxed),
+            action_to_state_native_preview_max_us: SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_MAX_US
+                .load(Ordering::Relaxed),
         },
     }
 }
@@ -545,6 +894,14 @@ pub(crate) fn reset_perf_counters() {
     SHELL_SHARED_STATE_UI_WINDOW_WRITES.store(0, Ordering::Relaxed);
     SHELL_SHARED_STATE_UI_WINDOW_BYTES.store(0, Ordering::Relaxed);
     SHELL_SHARED_STATE_UI_WINDOW_ROWS.store(0, Ordering::Relaxed);
+    SHELL_UI_WINDOWS_STAGED_COUNT.store(0, Ordering::Relaxed);
+    SHELL_UI_WINDOWS_STAGED_ROWS.store(0, Ordering::Relaxed);
+    SHELL_UI_WINDOWS_PROMOTED_COUNT.store(0, Ordering::Relaxed);
+    SHELL_UI_WINDOWS_PROMOTED_ROWS.store(0, Ordering::Relaxed);
+    SHELL_UI_WINDOWS_PROMOTED_CHANGED_COUNT.store(0, Ordering::Relaxed);
+    SHELL_UI_WINDOWS_PROMOTION_WAIT_FRAMES.store(0, Ordering::Relaxed);
+    SHELL_UI_WINDOWS_PROMOTION_WAIT_MAX_FRAMES.store(0, Ordering::Relaxed);
+    SHELL_UI_WINDOWS_PENDING_DROPPED_COUNT.store(0, Ordering::Relaxed);
     SHELL_SHARED_STATE_EXCLUSION_WRITES.store(0, Ordering::Relaxed);
     SHELL_SHARED_STATE_EXCLUSION_BYTES.store(0, Ordering::Relaxed);
     SHELL_SHARED_STATE_EXCLUSION_RECTS.store(0, Ordering::Relaxed);
@@ -566,6 +923,9 @@ pub(crate) fn reset_perf_counters() {
     SHELL_ACTION_RENDERER_TO_BROWSER_COUNT.store(0, Ordering::Relaxed);
     SHELL_ACTION_RENDERER_TO_BROWSER_US.store(0, Ordering::Relaxed);
     SHELL_ACTION_RENDERER_TO_BROWSER_MAX_US.store(0, Ordering::Relaxed);
+    if let Ok(mut max_op) = SHELL_ACTION_RENDERER_TO_BROWSER_MAX_OP.lock() {
+        *max_op = None;
+    }
     SHELL_ACTION_BROWSER_TO_COMPOSITOR_COUNT.store(0, Ordering::Relaxed);
     SHELL_ACTION_BROWSER_TO_COMPOSITOR_US.store(0, Ordering::Relaxed);
     SHELL_ACTION_BROWSER_TO_COMPOSITOR_MAX_US.store(0, Ordering::Relaxed);
@@ -578,6 +938,32 @@ pub(crate) fn reset_perf_counters() {
     SHELL_STATE_RENDERER_APPLY_COUNT.store(0, Ordering::Relaxed);
     SHELL_STATE_RENDERER_APPLY_US.store(0, Ordering::Relaxed);
     SHELL_STATE_RENDERER_APPLY_MAX_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_COUNT.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_MAX_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_STARTED_COUNT.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_EXPIRED_COUNT.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_MOVE_COUNT.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_MOVE_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_MOVE_MAX_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_RESIZE_COUNT.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_RESIZE_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_RESIZE_MAX_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_ACTIVATION_COUNT.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_ACTIVATION_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_ACTIVATION_MAX_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_WINDOW_STATE_COUNT.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_WINDOW_STATE_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_WINDOW_STATE_MAX_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_WORKSPACE_COUNT.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_WORKSPACE_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_WORKSPACE_MAX_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_COUNT.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_US.store(0, Ordering::Relaxed);
+    SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_MAX_US.store(0, Ordering::Relaxed);
+    if let Ok(mut traces) = ACTION_STATE_TRACES.lock() {
+        traces.clear();
+    }
     if let Ok(mut latency) = LATENCY.lock() {
         *latency = LatencyTrace::new();
     }

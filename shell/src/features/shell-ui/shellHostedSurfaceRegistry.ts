@@ -6,7 +6,11 @@ import {
   type ShellMeasureFrame,
 } from '@/features/bridge/shellMeasureFrame'
 import { noteShellDomMeasure, noteShellUiWindowsFlush } from '@/features/bridge/shellPerfCounters'
-import { sharedShellStateStampKey, writeShellUiWindowsState } from '@/features/bridge/sharedShellState'
+import {
+  sharedShellLayoutStampKey,
+  sharedShellStateStampKey,
+  writeShellUiWindowsState,
+} from '@/features/bridge/sharedShellState'
 export {
   SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_PORTAL_PICKER_WINDOW_ID,
@@ -48,6 +52,7 @@ let lastWindows:
   | Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }>
   | null = null
 let lastSharedStateStamp: string | null = null
+let lastSharedLayoutStamp: string | null = null
 
 function sameWindows(
   left: Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }>,
@@ -74,12 +79,12 @@ function sameWindows(
 function flush() {
   const start = performance.now()
   const stamp = sharedShellStateStampKey()
+  const layoutStamp = sharedShellLayoutStampKey()
   const stampRefresh = stamp !== lastSharedStateStamp
-  if (stamp !== lastSharedStateStamp) {
+  if (layoutStamp !== lastSharedLayoutStamp) {
     for (const token of registry.keys()) dirtyRegistryTokens.add(token)
   }
-  if (!structureDirty && dirtyRegistryTokens.size === 0 && lastWindows !== null) {
-    noteShellUiWindowsFlush(performance.now() - start, lastWindows.length, false, false, false)
+  if (!structureDirty && dirtyRegistryTokens.size === 0 && lastWindows !== null && stamp === lastSharedStateStamp) {
     return
   }
   const frame = currentShellMeasureFrame()
@@ -109,6 +114,7 @@ function flush() {
   generation = nextGeneration
   lastWindows = windows.map((window) => ({ ...window }))
   lastSharedStateStamp = stamp
+  lastSharedLayoutStamp = layoutStamp
   noteShellUiWindowsFlush(performance.now() - start, windows.length, true, changed, stampRefresh)
 }
 

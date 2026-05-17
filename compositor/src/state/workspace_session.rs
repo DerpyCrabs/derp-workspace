@@ -344,8 +344,11 @@ impl CompositorState {
                     }
                 }
             }
-            WorkspaceMutation::SplitWindowToOwnGroup { window_id } => {
-                if self.shell_ui_pointer_grab_active() {
+            WorkspaceMutation::SplitWindowToOwnGroup {
+                window_id,
+                start_drag,
+            } => {
+                if *start_drag || self.shell_ui_pointer_grab_active() {
                     detached_window_drag = Some(*window_id);
                     detached_window_drag_titlebar_h = self
                         .workspace_detached_window_shell_chrome_titlebar_h(*window_id, &next_state);

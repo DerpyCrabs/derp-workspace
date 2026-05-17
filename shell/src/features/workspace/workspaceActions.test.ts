@@ -346,6 +346,7 @@ describe('activateTaskbarGroup', () => {
       JSON.stringify({
         type: 'split_window_to_own_group',
         windowId: 2,
+        startDrag: true,
       }),
     )
     expect(activateWindowViaShell).not.toHaveBeenCalled()

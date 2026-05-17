@@ -521,6 +521,7 @@ pub(crate) struct ShellUiWindowPlacement {
 
 pub(crate) struct PendingShellUiWindows {
     pub generation: u32,
+    pub staged_shell_frame_sequence: u64,
     pub windows: Vec<ShellUiWindowPlacement>,
 }
 
@@ -956,6 +957,7 @@ impl CompositorState {
                 shell_dmabuf_generation: 0,
                 shell_dmabuf_overlay_id: Id::new(),
                 shell_dmabuf_commit: CommitCounter::default(),
+                shell_frame_sequence: 0,
                 shell_dmabuf_dirty_buffer: Vec::new(),
                 shell_dmabuf_dirty_force_full: true,
                 shell_dmabuf_next_force_full: false,

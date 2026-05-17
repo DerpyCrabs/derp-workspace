@@ -189,7 +189,7 @@ export type WorkspaceMutation =
       targetWindowId: number
       insertIndex: number
     }
-  | { type: 'split_window_to_own_group'; windowId: number }
+  | { type: 'split_window_to_own_group'; windowId: number; startDrag?: boolean }
   | { type: 'set_window_pinned'; windowId: number; pinned: boolean }
   | { type: 'enter_split'; groupId: string; leftWindowId: number; leftPaneFraction: number }
   | { type: 'exit_split'; groupId: string }

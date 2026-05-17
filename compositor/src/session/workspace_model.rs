@@ -272,6 +272,8 @@ pub enum WorkspaceMutation {
     SplitWindowToOwnGroup {
         #[serde(rename = "windowId")]
         window_id: u32,
+        #[serde(default, rename = "startDrag")]
+        start_drag: bool,
     },
     SetWindowPinned {
         #[serde(rename = "windowId")]
@@ -862,7 +864,10 @@ mod tests {
             ..WorkspaceState::default()
         };
         let next = state
-            .apply_mutation(&WorkspaceMutation::SplitWindowToOwnGroup { window_id: 1 })
+            .apply_mutation(&WorkspaceMutation::SplitWindowToOwnGroup {
+                window_id: 1,
+                start_drag: false,
+            })
             .expect("split window into own group");
         assert_eq!(
             next.groups,
@@ -1805,7 +1810,7 @@ impl WorkspaceState {
                 ensure_valid_split_state(&mut next);
                 Some(next)
             }
-            WorkspaceMutation::SplitWindowToOwnGroup { window_id } => {
+            WorkspaceMutation::SplitWindowToOwnGroup { window_id, .. } => {
                 let source_group_id = group_id_for_window(self, *window_id)?.to_string();
                 let source_group = self
                     .groups
