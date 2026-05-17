@@ -13,6 +13,7 @@ import {
   resetPerfCounters,
   shellWindowStack,
   shellWindowById,
+  tabGroupByWindow,
   NATIVE_APP_ID,
   spawnNativeWindow,
   waitFor,
@@ -127,8 +128,19 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(perf.shell_sync.snapshot_reads <= 6, `expected bounded snapshot reads after native window spawn, got ${perf.shell_sync.snapshot_reads}`)
 
-    const controls = windowControls(shell, spawned.window.window_id)
-    assert(controls?.titlebar, 'spawned native window missing shell titlebar controls')
+    const controls = await waitFor(
+      'wait for spawned native shell titlebar controls',
+      async () => {
+        const current = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const currentRow = shellWindowById(current, spawned.window.window_id)
+        const currentControls = windowControls(current, spawned.window.window_id)
+        if (!currentRow || !currentControls?.titlebar) return null
+        if (Math.abs(currentControls.titlebar.width - (currentRow.frame_width ?? 0)) > 1) return null
+        return { controls: currentControls, titlebar: currentControls.titlebar }
+      },
+      5000,
+      100,
+    )
     assert(
       Math.abs(controls.titlebar.width - (row.frame_width ?? 0)) <= 1,
       `titlebar width should come from compositor frame width (${controls.titlebar.width} vs ${row.frame_width})`,
@@ -193,7 +205,25 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(metadata.row.title.includes('presented='), 'shell snapshot did not receive native metadata change')
 
-    const minimizeControls = windowControls(metadata.shell, spawned.window.window_id)
+    let minimizeShell = metadata.shell
+    const groupBeforeMinimize = tabGroupByWindow(minimizeShell, spawned.window.window_id)
+    if (groupBeforeMinimize && groupBeforeMinimize.member_window_ids.length > 1) {
+      const tab = groupBeforeMinimize.tabs.find((entry) => entry.window_id === spawned.window.window_id)?.rect
+      assert(tab, 'spawned native window missing grouped tab before minimize')
+      const tabPoint = rectCenter(tab)
+      await dragBetweenPoints(base, tabPoint.x, tabPoint.y, tabPoint.x + 160, tabPoint.y + 120, 8)
+      minimizeShell = await waitFor(
+        'wait for spawned native own group before minimize',
+        async () => {
+          const current = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          const group = tabGroupByWindow(current, spawned.window.window_id)
+          return group?.member_window_ids.length === 1 ? current : null
+        },
+        5000,
+        100,
+      )
+    }
+    const minimizeControls = windowControls(minimizeShell, spawned.window.window_id)
     assert(minimizeControls?.minimize, 'spawned native window missing minimize control')
     await resetPerfCounters(base)
     const minimizePoint = rectCenter(minimizeControls.minimize)
@@ -211,7 +241,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
       `expected snapshot apply after minimize, got ${minimizePerf.shell_runtime?.snapshot_apply_count ?? 0}`,
     )
 
-    await activateTaskbarWindow(base, minimized.shell, spawned.window.window_id)
+    const minimizedGroup = tabGroupByWindow(minimized.shell, spawned.window.window_id)
+    const minimizedTab = minimizedGroup?.tabs.find((entry) => entry.window_id === spawned.window.window_id)?.rect ?? null
+    if (minimizedTab) {
+      const tabPoint = rectCenter(minimizedTab)
+      await clickPoint(base, tabPoint.x, tabPoint.y)
+    } else {
+      await activateTaskbarWindow(base, minimized.shell, spawned.window.window_id)
+    }
     await waitForNativeFocus(base, spawned.window.window_id)
 
     const second = await spawnNativeWindow(base, state.knownWindowIds, {
@@ -224,7 +261,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await resetPerfCounters(base)
     const focusControls = windowControls(await getJson<ShellSnapshot>(base, '/test/state/shell'), spawned.window.window_id)
     assert(focusControls?.titlebar, 'spawned native window missing focus titlebar')
-    const focusPoint = rectCenter(focusControls.titlebar)
+    const focusPoint = {
+      x: focusControls.titlebar.global_x + Math.min(32, Math.max(8, focusControls.titlebar.width / 4)),
+      y: focusControls.titlebar.global_y + focusControls.titlebar.height / 2,
+    }
     await clickPoint(base, focusPoint.x, focusPoint.y)
     const focused = await waitForNativeFocus(base, spawned.window.window_id)
     trackedStackParity(focused.shell, focused.compositor, [spawned.window.window_id, second.window.window_id])

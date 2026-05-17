@@ -177,13 +177,6 @@ type SplitLayoutRects = {
   rightWindowIds: number[]
 }
 
-type NativeDragPreviewMetrics = {
-  sourceWidth: number
-  sourceHeight: number
-  backingWidth: number
-  backingHeight: number
-}
-
 type SplitGroupGestureState = {
   pointerId: number
   groupId: string
@@ -197,8 +190,6 @@ type SplitGroupGestureState = {
 const WORKSPACE_SPLIT_DIVIDER_PX = 4
 const WORKSPACE_SPLIT_MIN_PANE_PX = 160
 const WORKSPACE_SPLIT_MIN_HEIGHT_PX = 140
-const CSD_GROUP_DROP_STRIP_PX = 34
-
 type WorkspaceChromeOptions = {
   workspaceSnapshot: Accessor<WorkspaceSnapshot>
   workspaceGroupsById: Accessor<ReadonlyMap<string, WorkspaceGroupModel>>
@@ -230,14 +221,6 @@ type WorkspaceChromeOptions = {
   compositorMoveWindowId: Accessor<number | null>
   compositorMoveProxyWindowId: Accessor<number | null>
   compositorMoveCaptureWindowId: Accessor<number | null>
-  nativeDragPreview: Accessor<{
-    window_id: number
-    generation: number
-    image_path: string
-    src: string
-    loaded: boolean
-    image: HTMLImageElement | null
-  } | null>
   focusShellUiWindow: (windowId: number) => void
   activateTaskbarWindowViaShell: (windowId: number) => void
   focusWindowViaShell: (windowId: number) => void
@@ -285,45 +268,6 @@ type WorkspaceChromeOptions = {
     arg5?: number,
     arg6?: number,
   ) => boolean
-}
-
-function NativeDragPreviewCanvas(props: {
-  image: HTMLImageElement | null
-  onMetrics: (metrics: NativeDragPreviewMetrics | null) => void
-}) {
-  let canvas: HTMLCanvasElement | undefined
-
-  const draw = () => {
-    const image = props.image
-    if (!canvas || !image || !image.complete) return
-    const sourceWidth = image.naturalWidth
-    const sourceHeight = image.naturalHeight
-    if (sourceWidth < 1 || sourceHeight < 1) return
-    const backingWidth = sourceWidth
-    const backingHeight = sourceHeight
-    if (canvas.width !== backingWidth) canvas.width = backingWidth
-    if (canvas.height !== backingHeight) canvas.height = backingHeight
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    ctx.clearRect(0, 0, backingWidth, backingHeight)
-    ctx.imageSmoothingEnabled = false
-    ctx.drawImage(image, 0, 0, backingWidth, backingHeight)
-    props.onMetrics({ sourceWidth, sourceHeight, backingWidth, backingHeight })
-  }
-
-  createEffect(() => {
-    props.onMetrics(null)
-    draw()
-  })
-
-  return (
-    <canvas
-      ref={(el) => {
-        canvas = el
-      }}
-      class="pointer-events-none block h-full w-full select-none"
-    />
-  )
 }
 
 export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
@@ -985,41 +929,6 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       const visibleIds = new Set(group()?.visibleWindowIds ?? [])
       return shellHostedMemberWindowIds().filter((windowId) => visibleIds.has(windowId))
     })
-    const nativeDragPreview = createMemo(() => {
-      const window = visibleWindow()
-      if (!window || isShellHostedWorkspaceWindow(window)) return null
-      const preview = options.nativeDragPreview()
-      return preview && preview.window_id === window.window_id ? preview : null
-    })
-    const nativeDragPreviewVisible = createMemo(() => {
-      const preview = nativeDragPreview()
-      const window = visibleWindow()
-      if (!preview || !window || !preview.loaded) return null
-      const windowId = window.window_id
-      return options.compositorMoveWindowId() === windowId ||
-        options.compositorMoveProxyWindowId() === windowId ||
-        options.compositorMoveCaptureWindowId() === windowId
-        ? preview
-        : null
-    })
-    const nativeDragPreviewKey = createMemo(() => {
-      const preview = nativeDragPreviewVisible()
-      return preview ? `${preview.window_id}:${preview.generation}:${preview.image_path}` : null
-    })
-    const [nativeDragPreviewMetrics, setNativeDragPreviewMetrics] =
-      createSignal<NativeDragPreviewMetrics | null>(null)
-    createEffect(() => {
-      nativeDragPreviewKey()
-      setNativeDragPreviewMetrics(null)
-    })
-    const nativeDragPreviewLoaded = createMemo(() => {
-      return nativeDragPreviewVisible()?.loaded ?? false
-    })
-    const nativeDragPreviewSrc = createMemo(() => {
-      const preview = nativeDragPreviewVisible()
-      if (!preview) return ''
-      return preview.src
-    })
     const keepShellContentMounted = createMemo(() => shellHostedMemberWindowIds().length > 0)
     const splitLayout = createMemo(() => {
       const currentGroup = group()
@@ -1043,7 +952,6 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       if (!window) return 1
       const shellHosted = isShellHostedWorkspaceWindow(window)
       if (shellHosted) return 0.76
-      if (nativeDragPreviewLoaded()) return 0.76
       return activeMoveProxyWindowId() === visibleWindowId() ? 0.76 : 1
     })
     const contentPointerEvents = createMemo<'auto' | 'none'>(() => {
@@ -1052,7 +960,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       const shellHosted = isShellHostedWorkspaceWindow(window)
       if (shellHosted) return 'none'
       if (window.client_side_decoration) return 'none'
-      return nativeDragPreviewVisible() ? 'none' : 'auto'
+      return 'auto'
     })
     const contentBackground = createMemo(() => {
       const window = visibleWindow()
@@ -1118,30 +1026,20 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
         !splitLayout()
     })
     const showShellFrame = createMemo(() => showFrame() && !standaloneCsdNoShellChrome())
-    const csdGroupDropStripVisible = createMemo(() => {
+    const imperativeChromeHandlesFrame = createMemo(() => {
       const currentGroup = group()
       const window = visibleWindow()
       return !!currentGroup &&
-        currentGroup.members.length <= 1 &&
-        !!window?.client_side_decoration &&
-        !splitLayout() &&
-        frameVisible() &&
-        !frameHidden() &&
-        !!frameModel()
+        !!window &&
+        !isShellHostedWorkspaceWindow(window) &&
+        !window.client_side_decoration
     })
-    const csdGroupDropStripStyle = createMemo((): JSX.CSSProperties => {
-      const model = frameModel()
-      if (!model) return {}
-      return {
-        position: 'absolute',
-        left: '0',
-        top: '0',
-        width: `${Math.max(1, model.width)}px`,
-        height: `${Math.min(CSD_GROUP_DROP_STRIP_PX, Math.max(1, model.height))}px`,
-        transform: `translate3d(${model.x}px, ${model.y}px, 0)`,
-        'z-index': 1008 + stackZ(),
-        contain: 'layout paint',
-      }
+    const imperativeChromeHandlesSplitLayout = createMemo(() => {
+      return imperativeChromeHandlesFrame() && shellHostedMemberWindowIds().length === 0
+    })
+    const solidSplitLayout = createMemo(() => {
+      const layout = splitLayout()
+      return layout && !imperativeChromeHandlesSplitLayout() ? layout : null
     })
     const rowFocused = createMemo(() => options.activeWorkspaceGroupId() === props.groupId)
     const tabStripLayoutKey = createMemo(() => {
@@ -1194,7 +1092,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     return (
       <Show when={showFrame()} fallback={null}>
         <>
-        <Show when={showShellFrame()}>
+        <Show when={showShellFrame() && !imperativeChromeHandlesFrame()}>
         <ShellWindowFrame
           win={frameModel}
           repaintKey={options.snapChromeRev}
@@ -1207,7 +1105,6 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           frameVisible={frameVisible}
           contentVisible={() =>
             visibleShellHostedMemberWindowIds().length > 0 ||
-            nativeDragPreviewVisible() !== null ||
             (!!visibleWindow()?.client_side_decoration && !standaloneCsdNoShellChrome())
           }
           hidden={() => frameHidden() || proxyHidden()}
@@ -1316,52 +1213,9 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
             }
           }}
         >
-          <Show when={!splitLayout() && visibleWindowId() !== null}>
-            <Show when={nativeDragPreviewVisible()}>
-              {(preview) => (
-                <div
-                  class="pointer-events-none relative h-full min-h-0 min-w-0 overflow-hidden"
-                  data-shell-native-drag-preview={preview().window_id}
-                  data-shell-native-drag-preview-generation={preview().generation}
-                  data-shell-native-drag-preview-loaded={
-                    nativeDragPreviewLoaded() ? 'true' : 'false'
-                  }
-                  data-shell-native-drag-preview-src={nativeDragPreviewSrc()}
-                  data-shell-native-drag-preview-src-width={
-                    nativeDragPreviewMetrics()?.sourceWidth ?? ''
-                  }
-                  data-shell-native-drag-preview-src-height={
-                    nativeDragPreviewMetrics()?.sourceHeight ?? ''
-                  }
-                  data-shell-native-drag-preview-backing-width={
-                    nativeDragPreviewMetrics()?.backingWidth ?? ''
-                  }
-                  data-shell-native-drag-preview-backing-height={
-                    nativeDragPreviewMetrics()?.backingHeight ?? ''
-                  }
-                  style={{
-                    background: 'transparent',
-                  }}
-                >
-                  <NativeDragPreviewCanvas
-                    image={preview().loaded ? preview().image : null}
-                    onMetrics={setNativeDragPreviewMetrics}
-                  />
-                </div>
-              )}
-            </Show>
-          </Show>
         </ShellWindowFrame>
         </Show>
-        <Show when={csdGroupDropStripVisible()}>
-          <div
-            data-workspace-group-drop-strip={props.groupId}
-            data-workspace-group-drop-target-window={visibleWindowId() ?? ''}
-            class="pointer-events-none absolute box-border bg-transparent"
-            style={csdGroupDropStripStyle()}
-          />
-        </Show>
-        <Show when={splitLayout()} keyed>
+        <Show when={solidSplitLayout()} keyed>
           {(layout) => (
             <>
               {renderSplitPane(layout.leftWindowId, layout.left, 'workspace-split-left-pane', {
@@ -1526,8 +1380,15 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
         : base
     })
     const focused = createMemo(() => options.focusedWindowId() === props.windowId)
+    const imperativeChromeHandlesFrame = createMemo(() => {
+      const window = windowModel()
+      return !!window &&
+        !shellHosted() &&
+        !window.client_side_decoration
+    })
     return (
       <Show when={frameModel()}>
+        <Show when={!imperativeChromeHandlesFrame()}>
         <ShellWindowFrame
           win={frameModel}
           repaintKey={options.snapChromeRev}
@@ -1575,171 +1436,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           }}
         >
         </ShellWindowFrame>
-      </Show>
-    )
-  }
-
-  function tabDropIndicatorForTarget(target: TabMergeTarget | null) {
-    if (!target) return null
-    const slot = document.querySelector(
-      `[data-tab-drop-slot="${target.groupId}:${target.insertIndex}"]`,
-    ) as HTMLElement | null
-    const strip = document.querySelector(
-      `[data-workspace-tab-strip="${target.groupId}"]`,
-    ) as HTMLElement | null
-    if (slot) {
-      const slotRect = slot.getBoundingClientRect()
-      const stripRect = strip?.getBoundingClientRect() ?? slotRect
-      return {
-        line: {
-          left: `${Math.round(slotRect.left - 2)}px`,
-          top: `${Math.round(stripRect.top + 2)}px`,
-          width: '4px',
-          height: `${Math.max(10, Math.round(stripRect.height - 4))}px`,
-        },
-        highlight: {
-          left: `${Math.round(stripRect.left)}px`,
-          top: `${Math.round(stripRect.top)}px`,
-          width: `${Math.round(stripRect.width)}px`,
-          height: `${Math.round(stripRect.height)}px`,
-        },
-        key: `${target.groupId}:${target.insertIndex}`,
-      }
-    }
-    const groupStrip = document.querySelector(
-      `[data-workspace-group-drop-strip="${target.groupId}"]`,
-    ) as HTMLElement | null
-    if (!groupStrip) return null
-    const stripRect = groupStrip.getBoundingClientRect()
-    return {
-      line: {
-        left: `${Math.round(stripRect.left + 4)}px`,
-        top: `${Math.round(stripRect.bottom - 4)}px`,
-        width: `${Math.max(8, Math.round(stripRect.width - 8))}px`,
-        height: '4px',
-      },
-      highlight: {
-        left: `${Math.round(stripRect.left)}px`,
-        top: `${Math.round(stripRect.top)}px`,
-        width: `${Math.round(stripRect.width)}px`,
-        height: `${Math.round(stripRect.height)}px`,
-      },
-      key: `${target.groupId}:strip`,
-    }
-  }
-
-  function TabDragOverlay() {
-    const drag = createMemo(() => tabDragState())
-    const dropIndicator = createMemo(() => tabDropIndicatorForTarget(activeDropTarget()))
-    return (
-      <Show when={drag()?.dragging}>
-        <div
-          data-tab-drag-capture={drag()!.windowId}
-          class="fixed inset-0 z-[2000001] cursor-grabbing"
-          onContextMenu={(event) => event.preventDefault()}
-          onPointerMove={onTabDragPointerMove}
-          onPointerUp={onTabDragPointerUp}
-          onPointerCancel={onTabDragPointerCancel}
-        >
-          <Show when={dropIndicator()} keyed>
-            {(indicator) => (
-              <>
-                <div
-                  data-tab-drop-indicator={indicator.key}
-                  class="pointer-events-none fixed rounded-sm bg-[color-mix(in_srgb,var(--shell-accent-soft)_80%,transparent)] ring-1 ring-[color-mix(in_srgb,var(--shell-accent)_58%,transparent)]"
-                  style={indicator.highlight}
-                />
-                <div
-                  data-tab-drop-indicator-line={indicator.key}
-                  class="pointer-events-none fixed rounded-full bg-(--shell-accent) shadow-[0_0_0_1px_var(--shell-accent),0_0_18px_color-mix(in_srgb,var(--shell-accent)_55%,transparent)]"
-                  style={indicator.line}
-                />
-              </>
-            )}
-          </Show>
-        </div>
-      </Show>
-    )
-  }
-
-  function WindowDragDropOverlay() {
-    const windowId = createMemo(() => activeWindowDragWindowId())
-    const dropIndicator = createMemo(() => tabDropIndicatorForTarget(activeWindowDragTarget()))
-    return (
-      <Show when={windowId() !== null}>
-        <div
-          data-window-tab-drop-capture={windowId()!}
-          class="pointer-events-none fixed inset-0 z-[2000001]"
-        >
-          <Show when={dropIndicator()} keyed>
-            {(indicator) => (
-              <>
-                <div
-                  data-tab-drop-indicator={indicator.key}
-                  class="pointer-events-none fixed rounded-sm bg-[color-mix(in_srgb,var(--shell-accent-soft)_80%,transparent)] ring-1 ring-[color-mix(in_srgb,var(--shell-accent)_58%,transparent)]"
-                  style={indicator.highlight}
-                />
-                <div
-                  data-tab-drop-indicator-line={indicator.key}
-                  class="pointer-events-none fixed rounded-full bg-(--shell-accent) shadow-[0_0_0_1px_var(--shell-accent),0_0_18px_color-mix(in_srgb,var(--shell-accent)_55%,transparent)]"
-                  style={indicator.line}
-                />
-              </>
-            )}
-          </Show>
-        </div>
-      </Show>
-    )
-  }
-
-  function ExternalTabDropOverlay() {
-    const drag = createMemo(() => options.externalTabDropDrag())
-    const dropIndicator = createMemo(() => tabDropIndicatorForTarget(drag()?.target ?? null))
-    const ghostStyle = createMemo(() => {
-      const current = drag()
-      if (!current) return {}
-      const width = 260
-      const height = 44
-      const maxLeft = Math.max(8, window.innerWidth - width - 8)
-      const maxTop = Math.max(8, window.innerHeight - height - 8)
-      return {
-        left: `${Math.min(Math.max(8, current.clientX + 14), maxLeft)}px`,
-        top: `${Math.min(Math.max(8, current.clientY + 14), maxTop)}px`,
-      }
-    })
-    return (
-      <Show when={drag()} keyed>
-        {(current) => (
-          <div class="pointer-events-none fixed inset-0 z-470121">
-            <div
-              data-file-tab-drag-preview
-              class="fixed max-w-[260px] rounded-md border bg-(--shell-surface-panel)/95 px-2.5 py-1.5 text-xs font-medium text-(--shell-text) shadow-lg ring-1"
-              classList={{
-                'border-(--shell-accent) ring-[color-mix(in_srgb,var(--shell-accent)_48%,transparent)]': current.canDrop,
-                'border-(--shell-border) opacity-85 ring-[color-mix(in_srgb,var(--shell-border)_60%,transparent)]': !current.canDrop,
-              }}
-              style={ghostStyle()}
-            >
-              <span class="block truncate">{current.label}</span>
-            </div>
-            <Show when={dropIndicator()} keyed>
-              {(indicator) => (
-                <>
-                  <div
-                    data-tab-drop-indicator={indicator.key}
-                    class="pointer-events-none fixed rounded-sm bg-[color-mix(in_srgb,var(--shell-accent-soft)_80%,transparent)] ring-1 ring-[color-mix(in_srgb,var(--shell-accent)_58%,transparent)]"
-                    style={indicator.highlight}
-                  />
-                  <div
-                    data-tab-drop-indicator-line={indicator.key}
-                    class="pointer-events-none fixed rounded-full bg-(--shell-accent) shadow-[0_0_0_1px_var(--shell-accent),0_0_18px_color-mix(in_srgb,var(--shell-accent)_55%,transparent)]"
-                    style={indicator.line}
-                  />
-                </>
-              )}
-            </Show>
-          </div>
-        )}
+        </Show>
       </Show>
     )
   }
@@ -1756,45 +1453,22 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     return options.applyWindowDrop(windowId, target)
   }
 
-  function SplitGestureOverlay() {
-    const cursorClass = createMemo(() => {
-      const gesture = splitGroupGesture()
-      if (!gesture) return 'cursor-default'
-      return gesture.kind === 'divider' ? 'cursor-col-resize' : 'cursor-grabbing'
-    })
-    return (
-      <div
-        data-workspace-split-gesture-overlay
-        class={`fixed inset-0 z-470110 touch-none ${cursorClass()}`}
-        onContextMenu={(event) => {
-          event.preventDefault()
-        }}
-        onPointerMove={onSplitGroupPointerMove}
-        onPointerUp={onSplitGroupPointerUp}
-        onPointerCancel={onSplitGroupPointerCancel}
-      />
-    )
-  }
-
   return {
     PersistentShellHostedContentHost,
     WorkspaceGroupFrame,
     ScratchpadWindowFrame,
-    TabDragOverlay,
-    WindowDragDropOverlay,
-    ExternalTabDropOverlay,
-    SplitGestureOverlay,
     applySplitGroupGeometry,
     cancelSplitGroupGesture,
     clearSuppressTabClickWindowId: () => setSuppressTabClickWindowId(null),
     finishWindowDragDrop,
     activeDragWindowId,
     activeDropTarget,
-    tabStripLayouts,
     activeWindowDragWindowId,
     activeWindowDragTarget,
     windowDragPointerClient,
     resolveWindowDragTarget,
+    startTabPointerGesture,
+    setTabStripLayout,
     scratchpadWindowIds,
     splitGroupGesture,
     tabDragState,

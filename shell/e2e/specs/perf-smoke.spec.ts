@@ -6,18 +6,19 @@ import {
   defineGroup,
   getJson,
   getPerfCounters,
+  keyAction,
   linePoints,
   movePoint,
   pointerButton,
   resetPerfCounters,
   setShellFrameSampling,
-  spawnNativeWindow,
   tapKey,
   waitForCompositorQuiet,
   writeJsonArtifact,
   type PerfCounterSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
+import { spawnNativeWindow } from '../lib/setup.ts'
 import { availableParallelism } from 'node:os'
 import { spawn, type ChildProcess } from 'node:child_process'
 
@@ -71,6 +72,9 @@ function summarizePerf(perf: PerfCounterSnapshot) {
     shell_model_update_ms: raf?.model_update_ms ?? 0,
     shell_interaction_apply_ms: raf?.interaction_apply_ms ?? 0,
     shell_window_apply_ms: raf?.window_apply_ms ?? 0,
+    shell_imperative_chrome_apply_count: raf?.imperative_chrome_apply_count ?? 0,
+    shell_imperative_chrome_apply_ms: raf?.imperative_chrome_apply_ms ?? 0,
+    shell_imperative_chrome_nodes: raf?.imperative_chrome_nodes ?? 0,
     dom_measure_count: raf?.dom_measure_count ?? 0,
     dom_measure_ms: raf?.dom_measure_ms ?? 0,
     schedule_to_render_max_us: perf.latency.schedule_to_render_max_us,
@@ -118,6 +122,88 @@ async function closeProgramsMenuIfOpen(base: string): Promise<ShellSnapshot> {
   return closed
 }
 
+async function captureDragPerf(
+  base: string,
+  state: { knownWindowIds: Set<number>; spawnedNativeWindowIds: Set<number> },
+  label: string,
+) {
+  const native = await spawnNativeWindow(base, state.knownWindowIds, {
+    title: `Derp Perf Load Drag ${label}`,
+    token: `perf-load-drag-${label}`,
+    strip: 'blue',
+  })
+  state.spawnedNativeWindowIds.add(native.window.window_id)
+  const start = {
+    x: native.window.x + native.window.width / 2,
+    y: native.window.y + 14,
+  }
+  const end = {
+    x: start.x + 360,
+    y: start.y + 96,
+  }
+  await resetPerfCounters(base)
+  await setShellFrameSampling(base, true)
+  const load = startCpuLoad(2500)
+  try {
+    await movePoint(base, start.x, start.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    for (const point of linePoints(start.x, start.y, end.x, end.y, 96)) {
+      await movePoint(base, point.x, point.y)
+    }
+    await pointerButton(base, BTN_LEFT, 'release')
+  } finally {
+    await setShellFrameSampling(base, false)
+    await load.stop()
+  }
+  const perf = await getPerfCounters(base)
+  const summary = summarizePerf(perf)
+  return { load, summary, perf }
+}
+
+async function captureSnapOverlayPerf(
+  base: string,
+  state: { knownWindowIds: Set<number>; spawnedNativeWindowIds: Set<number> },
+  label: string,
+) {
+  const native = await spawnNativeWindow(base, state.knownWindowIds, {
+    title: `Derp Perf Snap Overlay ${label}`,
+    token: `perf-snap-overlay-${label}`,
+    strip: 'blue',
+  })
+  state.spawnedNativeWindowIds.add(native.window.window_id)
+  const start = {
+    x: native.window.x + native.window.width / 2,
+    y: native.window.y + 14,
+  }
+  const end = {
+    x: start.x + 420,
+    y: start.y + 180,
+  }
+  await resetPerfCounters(base)
+  await setShellFrameSampling(base, true)
+  const load = startCpuLoad(2500)
+  let pointerDown = false
+  let superDown = false
+  try {
+    await keyAction(base, KEY.super, 'press')
+    superDown = true
+    await movePoint(base, start.x, start.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    pointerDown = true
+    for (const point of linePoints(start.x, start.y, end.x, end.y, 120)) {
+      await movePoint(base, point.x, point.y)
+    }
+  } finally {
+    if (pointerDown) await pointerButton(base, BTN_LEFT, 'release')
+    if (superDown) await keyAction(base, KEY.super, 'release')
+    await setShellFrameSampling(base, false)
+    await load.stop()
+  }
+  const perf = await getPerfCounters(base)
+  const summary = summarizePerf(perf)
+  return { load, summary, perf }
+}
+
 export default defineGroup(import.meta.url, ({ test }) => {
   test('idle compositor does not redraw at refresh cadence', async ({ base }) => {
     const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
@@ -137,43 +223,32 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('captures active drag frame pacing under CPU load', async ({ base, state }) => {
-    const native = await spawnNativeWindow(base, state.knownWindowIds, {
-      title: 'Derp Perf Load Drag',
-      token: 'perf-load-drag',
-      strip: 'blue',
-    })
-    state.spawnedNativeWindowIds.add(native.window.window_id)
-    const start = {
-      x: native.window.x + native.window.width / 2,
-      y: native.window.y + 14,
-    }
-    const end = {
-      x: start.x + 360,
-      y: start.y + 96,
-    }
-    await resetPerfCounters(base)
-    await setShellFrameSampling(base, true)
-    const load = startCpuLoad(2500)
-    try {
-      await movePoint(base, start.x, start.y)
-      await pointerButton(base, BTN_LEFT, 'press')
-      for (const point of linePoints(start.x, start.y, end.x, end.y, 96)) {
-        await movePoint(base, point.x, point.y)
-      }
-      await pointerButton(base, BTN_LEFT, 'release')
-    } finally {
-      await setShellFrameSampling(base, false)
-      await load.stop()
-    }
-    const perf = await getPerfCounters(base)
-    const summary = summarizePerf(perf)
+    const sample = await captureDragPerf(base, state, 'imperative')
+    assert(
+      sample.summary.shell_imperative_chrome_apply_count > 0,
+      `expected imperative chrome applies during loaded drag, got ${sample.summary.shell_imperative_chrome_apply_count}`,
+    )
+    assert(sample.summary.raf_sample_count >= 3, `expected RAF frame samples during loaded drag, got ${sample.summary.raf_sample_count}`)
+    assert(sample.summary.drm_render_ticks > 0, `expected compositor render ticks during loaded drag, got ${sample.summary.drm_render_ticks}`)
     await writeJsonArtifact('active-drag-load-perf.json', {
-      load_workers: load.workerCount,
-      summary,
-      perf,
+      load_workers: sample.load.workerCount,
+      summary: sample.summary,
+      perf: sample.perf,
     })
-    assert(summary.raf_sample_count >= 3, `expected RAF frame samples during loaded drag, got ${summary.raf_sample_count}`)
-    assert(summary.drm_render_ticks > 0, `expected compositor render ticks during loaded drag, got ${summary.drm_render_ticks}`)
+  })
+
+  test('captures snap overlay frame pacing under CPU load', async ({ base, state }) => {
+    const sample = await captureSnapOverlayPerf(base, state, 'imperative')
+    assert(
+      sample.summary.shell_imperative_chrome_apply_count > 0,
+      `expected imperative snap overlay applies during loaded drag, got ${sample.summary.shell_imperative_chrome_apply_count}`,
+    )
+    assert(sample.summary.raf_sample_count >= 3, `expected RAF frame samples during loaded snap overlay drag, got ${sample.summary.raf_sample_count}`)
+    await writeJsonArtifact('snap-overlay-load-perf.json', {
+      load_workers: sample.load.workerCount,
+      summary: sample.summary,
+      perf: sample.perf,
+    })
   })
 
   test('captures shell action latency under CPU load', async ({ base }) => {

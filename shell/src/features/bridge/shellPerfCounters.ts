@@ -22,6 +22,9 @@ export type ShellRuntimePerfSnapshot = {
   batch_apply_details: number
   dom_measure_count: number
   dom_measure_ms: number
+  imperative_chrome_apply_count: number
+  imperative_chrome_apply_ms: number
+  imperative_chrome_nodes: number
   raf_sample_count: number
   raf_sample_ms: number
   raf_max_delta_ms: number
@@ -54,6 +57,9 @@ const counters: ShellRuntimePerfSnapshot = {
   batch_apply_details: 0,
   dom_measure_count: 0,
   dom_measure_ms: 0,
+  imperative_chrome_apply_count: 0,
+  imperative_chrome_apply_ms: 0,
+  imperative_chrome_nodes: 0,
   raf_sample_count: 0,
   raf_sample_ms: 0,
   raf_max_delta_ms: 0,
@@ -155,6 +161,12 @@ export function noteShellDomMeasure(count = 1, ms = 0) {
   counters.dom_measure_ms += Math.max(0, ms)
 }
 
+export function noteShellImperativeChromeApply(ms: number, nodes: number) {
+  counters.imperative_chrome_apply_count += 1
+  counters.imperative_chrome_apply_ms += Math.max(0, ms)
+  counters.imperative_chrome_nodes = Math.max(0, Math.trunc(nodes))
+}
+
 export function resetShellRuntimePerfCounters() {
   counters.batch_decode_count = 0
   counters.batch_decode_ms = 0
@@ -179,6 +191,9 @@ export function resetShellRuntimePerfCounters() {
   counters.batch_apply_details = 0
   counters.dom_measure_count = 0
   counters.dom_measure_ms = 0
+  counters.imperative_chrome_apply_count = 0
+  counters.imperative_chrome_apply_ms = 0
+  counters.imperative_chrome_nodes = 0
   resetShellRuntimeRafCounters()
 }
 
@@ -194,6 +209,7 @@ export function shellRuntimePerfSnapshot(): ShellRuntimePerfSnapshot {
     window_apply_ms: roundMs(counters.window_apply_ms),
     batch_apply_ms: roundMs(counters.batch_apply_ms),
     dom_measure_ms: roundMs(counters.dom_measure_ms),
+    imperative_chrome_apply_ms: roundMs(counters.imperative_chrome_apply_ms),
     raf_sample_ms: roundMs(counters.raf_sample_ms),
     raf_max_delta_ms: roundMs(counters.raf_max_delta_ms),
   }

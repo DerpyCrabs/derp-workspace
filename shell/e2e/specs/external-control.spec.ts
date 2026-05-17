@@ -85,6 +85,32 @@ function assertShellChromeReflectsCompositor(
   )
 }
 
+async function waitForShellChromeReflectsCompositor(
+  base: string,
+  windowId: number,
+  label: string,
+) {
+  return waitFor(
+    `${label}: wait for shell chrome compositor parity`,
+    async () => {
+      const snapshots = await getSnapshots(base)
+      try {
+        assertShellChromeReflectsCompositor(
+          snapshots.compositor,
+          snapshots.shell,
+          windowId,
+          label,
+        )
+      } catch {
+        return null
+      }
+      return snapshots
+    },
+    5000,
+    50,
+  )
+}
+
 class JsonLineReader {
   private buffer = ''
   private queued: string[] = []
@@ -254,13 +280,13 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(movedWindow, 'missing native window after move')
     assert(movedWindow.x === target.x, `expected moved x ${target.x}, got ${movedWindow.x}`)
     assert(movedWindow.y === target.y, `expected moved y ${target.y}, got ${movedWindow.y}`)
-    assertShellChromeReflectsCompositor(moved.compositor, moved.shell, nativeId, 'external move')
+    await waitForShellChromeReflectsCompositor(base, nativeId, 'external move')
 
     await derpctl(['window', 'maximize', String(nativeId), '--enabled', 'true'])
     await syncTest(base)
     const maximized = await getSnapshots(base)
     assert(compositorWindowById(maximized.compositor, nativeId)?.maximized === true, 'maximize did not apply')
-    assertShellChromeReflectsCompositor(maximized.compositor, maximized.shell, nativeId, 'external maximize')
+    await waitForShellChromeReflectsCompositor(base, nativeId, 'external maximize')
     await derpctl(['window', 'maximize', String(nativeId), '--enabled', 'false'])
 
     await derpctl(['window', 'minimize', String(nativeId)])
@@ -268,7 +294,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const minimized = await getSnapshots(base)
     assert(compositorWindowById(minimized.compositor, nativeId)?.minimized === true, 'minimize did not apply')
     assert(compositorWindowById(minimized.compositor, nativeId)?.lifecycle === 'minimized', 'native lifecycle did not minimize')
-    assertShellChromeReflectsCompositor(minimized.compositor, minimized.shell, nativeId, 'external minimize')
+    await waitForShellChromeReflectsCompositor(base, nativeId, 'external minimize')
     const hiddenTarget = {
       x: target.x + 41,
       y: target.y + 37,
@@ -289,7 +315,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       String(hiddenTarget.height),
     ])
     await derpctl(['window', 'focus', String(nativeId)])
-    const restoredHiddenMove = await waitFor(
+    await waitFor(
       'wait for minimized native geometry restore',
       async () => {
         const snapshots = await getSnapshots(base)
@@ -309,12 +335,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    assertShellChromeReflectsCompositor(
-      restoredHiddenMove.compositor,
-      restoredHiddenMove.shell,
-      nativeId,
-      'external hidden native move restore',
-    )
+    const restoredHiddenMove = await waitForShellChromeReflectsCompositor(base, nativeId, 'external hidden native move restore')
 
     await derpctl(['window', 'minimize', String(shellHostedId)])
     await syncTest(base)
@@ -344,7 +365,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       String(shellHiddenTarget.height),
     ])
     await derpctl(['window', 'focus', String(shellHostedId)])
-    const restoredShellHiddenMove = await waitFor(
+    await waitFor(
       'wait for minimized shell-hosted geometry restore',
       async () => {
         const snapshots = await getSnapshots(base)
@@ -364,9 +385,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    assertShellChromeReflectsCompositor(
-      restoredShellHiddenMove.compositor,
-      restoredShellHiddenMove.shell,
+    const restoredShellHiddenMove = await waitForShellChromeReflectsCompositor(
+      base,
       shellHostedId,
       'external hidden shell-hosted move restore',
     )

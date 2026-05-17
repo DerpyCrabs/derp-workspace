@@ -325,6 +325,7 @@ type CompositorBridgeRuntimeOptions = {
   sendClearPreTileGeometry: (windowId: number) => boolean
   fallbackMonitorKey: () => string
   requestWindowSyncRecovery: () => void
+  applyImperativeChromeDetails?: (details: readonly DerpShellDetail[]) => void
 }
 
 function traySniMenuEntriesFromDetail(detail: DerpShellDetail): {
@@ -768,6 +769,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
 
   const applyCompositorSnapshot = (details: readonly DerpShellDetail[], domainFlags: number) => {
     const coalescedDetails = coalesceCompositorDetails(details)
+    options.applyImperativeChromeDetails?.(coalescedDetails)
     const skipOutputGeometry = coalescedDetails.some((detail) => detail.type === 'output_layout')
     let sawWindowList = false
     let sawWindowOrder = false
@@ -1012,6 +1014,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (details.length === 0) return
     const applyStart = performance.now()
     const coalescedDetails = coalesceCompositorDetails(details)
+    options.applyImperativeChromeDetails?.(coalescedDetails)
     batch(() => {
       const hasSnapshotState = coalescedDetails.some(detailIsSnapshotState)
       if (hasSnapshotState) {

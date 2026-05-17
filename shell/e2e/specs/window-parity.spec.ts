@@ -180,11 +180,15 @@ async function waitForChromeSettled(base: string, windowId: number, label: strin
     async () => {
       const snapshots = await getSnapshots(base)
       const controls = windowControls(snapshots.shell, windowId)
+      const window = shellWindowById(snapshots.shell, windowId)
       if (snapshots.compositor.shell_move_window_id !== null) return null
       if (snapshots.compositor.shell_resize_window_id !== null) return null
       if (snapshots.compositor.shell_pointer_grab_window_id !== null) return null
       if (snapshots.compositor.pointer_pressed_button_count !== 0) return null
-      if (!controls || controls.dragging) return null
+      if (!window) return null
+      if (!controls?.titlebar || controls.dragging) return null
+      if (typeof window.frame_width !== 'number') return null
+      if (Math.abs(controls.titlebar.width - window.frame_width) > 1) return null
       return snapshots
     },
     5000,
@@ -402,7 +406,7 @@ async function runChromeContract(context: TestContext, parity: ParityCase) {
   const { base } = context
   const opened = await parity.open(context)
   await waitForWindowRaised(base, opened.window_id)
-  const focusedSnapshots = await getSnapshots(base)
+  const focusedSnapshots = await waitForChromeSettled(base, opened.window_id, parity.label)
   const focused = focusedSnapshots.shell
   const visible = shellWindowById(focused, opened.window_id)
   assert(visible && !visible.minimized, `${parity.label} window visible after open`)
@@ -470,19 +474,22 @@ async function runFootMaximizeWithoutForcedSync(context: TestContext) {
   state.spawnedNativeWindowIds.add(opened.window_id)
   const maximizeRect = await clickMaximizeWithoutSync(base, opened.window_id, 'foot raw')
   const maximizedScreenshot = await captureScreenshotRect(base, maximizeRect)
-  const maximizedSnapshots = await waitForShellTracksCompositor(base, opened.window_id, 'foot raw maximized')
+  await waitForShellTracksCompositor(base, opened.window_id, 'foot raw maximized')
+  const maximizedSnapshots = await waitForChromeSettled(base, opened.window_id, 'foot raw maximized')
   assertCompositorFrameContract(maximizedSnapshots.shell, opened.window_id, 'foot raw maximized')
 
   const restoreRect = await clickMaximizeWithoutSync(base, opened.window_id, 'foot raw restored')
   const restoredScreenshot = await captureScreenshotRect(base, restoreRect)
-  const restoredSnapshots = await waitForShellTracksCompositor(base, opened.window_id, 'foot raw restored')
+  await waitForShellTracksCompositor(base, opened.window_id, 'foot raw restored')
+  const restoredSnapshots = await waitForChromeSettled(base, opened.window_id, 'foot raw restored')
   assertCompositorFrameContract(restoredSnapshots.shell, opened.window_id, 'foot raw restored')
 
   const minimizeRect = await clickMinimizeWithoutSync(base, opened.window_id, 'foot raw minimized')
   await waitForWindowMinimized(base, opened.window_id)
   const restoreTaskbarRect = await restoreFromTaskbarWithoutSync(base, opened.window_id, 'foot raw taskbar restored')
   const taskbarRestoredScreenshot = await captureScreenshotRect(base, restoreTaskbarRect)
-  const taskbarRestoredSnapshots = await waitForRestoredShellTracksCompositor(base, opened.window_id, 'foot raw taskbar restored')
+  await waitForRestoredShellTracksCompositor(base, opened.window_id, 'foot raw taskbar restored')
+  const taskbarRestoredSnapshots = await waitForChromeSettled(base, opened.window_id, 'foot raw taskbar restored')
   assertCompositorFrameContract(taskbarRestoredSnapshots.shell, opened.window_id, 'foot raw taskbar restored')
 
   await writeJsonArtifact('window-parity-foot-raw-maximize-restore.json', {

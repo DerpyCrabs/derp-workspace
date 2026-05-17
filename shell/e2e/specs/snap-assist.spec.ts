@@ -4014,8 +4014,23 @@ export default defineGroup(import.meta.url, ({ test }) => {
       2000,
       125,
     );
-    const nativeControls = windowControls(nativeMoved.shell, redId);
-    assert(nativeControls?.titlebar, "missing moved native titlebar rect");
+    const nativeControls = await waitFor(
+      "wait for moved native titlebar geometry before picker drag",
+      async () => {
+        const { compositor, shell } = await getSnapshots(base);
+        const window = compositorWindowById(compositor, redId);
+        const titlebar = windowControls(shell, redId)?.titlebar;
+        if (!window || !titlebar) return null;
+        if (Math.abs(titlebar.global_y + titlebar.height - window.y) > 1)
+          return null;
+        if (titlebar.global_x > window.x) return null;
+        if (titlebar.global_x + titlebar.width < window.x + window.width)
+          return null;
+        return { titlebar };
+      },
+      5000,
+      50,
+    );
     const nativeTitlebarCenter = rectGlobalCenter(nativeControls.titlebar);
     await movePoint(base, nativeTitlebarCenter.x, nativeTitlebarCenter.y);
     await pointerButton(base, 0x110, "press");

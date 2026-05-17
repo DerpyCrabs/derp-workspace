@@ -57,6 +57,7 @@ import {
   waitFor,
   waitForCompositorShellUiFocus,
   waitForNativeFocus,
+  waitForNativeKeyboardFocus,
   waitForShellUiFocus,
   waitForTaskbarEntry,
   waitForWindowGone,
@@ -274,17 +275,21 @@ async function captureNativeInteriorScreenshot(
   windowId: number,
   name: string,
 ) {
-  const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
-  const controls = windowControls(shell, windowId);
-  const titlebar = assertRectMinSize(
-    `window ${windowId} titlebar`,
-    controls?.titlebar ?? null,
-    80,
-    16,
+  const controls = await waitFor(
+    `wait for window ${windowId} capture chrome`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+      const current = windowControls(shell, windowId);
+      if (!current?.titlebar || !current.resize_bottom_right) return null;
+      return current;
+    },
+    5000,
+    100,
   );
+  const titlebar = assertRectMinSize(`window ${windowId} titlebar`, controls.titlebar, 80, 16);
   const bottomRight = assertRectMinSize(
     `window ${windowId} bottom right resize`,
-    controls?.resize_bottom_right ?? null,
+    controls.resize_bottom_right,
     4,
     4,
   );
@@ -1882,7 +1887,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     );
     assert(terminal, "expected foot");
-    await waitForNativeFocus(base, terminal.window_id);
     await openSettings(base, "click");
     const focused = await waitForShellUiFocus(
       base,
@@ -2602,7 +2606,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         },
       );
       nativeId = spawnedNative.window.window_id;
-      await waitForNativeFocus(base, nativeId);
+      await waitForNativeKeyboardFocus(base, nativeId);
       const nativeReady = await waitFor(
         "wait for native overlap titlebar",
         async () => {
@@ -2936,7 +2940,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     });
     const nativeId = spawned.window.window_id;
     state.spawnedNativeWindowIds.add(nativeId);
-    await waitForNativeFocus(base, nativeId);
+    await waitForNativeKeyboardFocus(base, nativeId);
 
     const nativeReady = await waitFor(
       "wait for CSD native overlap drag start",
@@ -4282,7 +4286,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       "/test/state/shell",
     );
     await activateTaskbarWindow(base, shellBeforeRedFocus, redId);
-    await waitForNativeFocus(base, redId);
+    await waitForNativeKeyboardFocus(base, redId);
 
     const shellBeforeSettingsFocus = await getJson<ShellSnapshot>(
       base,
@@ -4383,7 +4387,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       "/test/state/shell",
     );
     await activateTaskbarWindow(base, shellBeforeGreenFocus, greenId);
-    await waitForNativeFocus(base, greenId);
+    await waitForNativeKeyboardFocus(base, greenId);
     const shellBeforeRefocus = await getJson<ShellSnapshot>(
       base,
       "/test/state/shell",

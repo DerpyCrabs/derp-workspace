@@ -1097,7 +1097,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
                 2000,
                 125,
               ),
-            budget: { sharedStateExclusionWrites: 16 },
+            budget: { sharedStateExclusionWrites: 16, fullWindowListReplies: 6 },
           },
         ),
       )
@@ -3217,13 +3217,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
         x: Math.min(dragStart.x + 48, draggedTab.tab.rect!.global_x + draggedTab.tab.rect!.width - 6),
         y: dragStart.y,
       }
+      const tearDirection = dragStart.y < 160 ? 1 : -1
       const tearOutPoint = {
         x: Math.max(armedPoint.x + 72, draggedTab.tab.rect!.global_x + draggedTab.tab.rect!.width + 24),
-        y: draggedTab.tab.rect!.global_y - 120,
+        y: dragStart.y + tearDirection * 120,
       }
       await timing.step('start source drag', () => dragTabStep(base, jsWindowA.window.window_id, armedPoint))
       await timing.step('pull grouped tab out', async () => {
-        await movePoint(base, armedPoint.x + 36, draggedTab.tab.rect!.global_y - 72)
+        await movePoint(base, armedPoint.x + 36, dragStart.y + tearDirection * 72)
         await movePoint(base, tearOutPoint.x, tearOutPoint.y)
       })
       await timing.step('wait for source window detached', () =>

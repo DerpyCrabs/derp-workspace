@@ -273,7 +273,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
   test('clipboard copies from x11 clients into wayland clients', async ({ base, state }) => {
     const expected = `Derp X11 Clipboard ${Date.now()}`
-    const command = ['sh', '-lc', shellQuote(`printf %s ${shellQuote(expected)} | xclip -selection clipboard -loops 1 & TITLE=$(wl-paste -n 2>/dev/null | tr -d '\\r\\n'); exec xterm -T "$TITLE" -class ${shellQuote(X11_XTERM_APP_ID)}`)].join(' ')
+    const command = ['sh', '-lc', shellQuote(`TMP=$(mktemp); wl-paste --watch sh -c 'cat > "$1"; kill "$PPID"' sh "$TMP" & WATCH=$!; printf %s ${shellQuote(expected)} | xclip -selection clipboard -loops 3 & XCLIP=$!; wait "$WATCH" 2>/dev/null || true; kill "$XCLIP" 2>/dev/null || true; TITLE=$(tr -d '\\r\\n' < "$TMP"); rm -f "$TMP"; exec xterm -T "$TITLE" -class ${shellQuote(X11_XTERM_APP_ID)}`)].join(' ')
     await spawnCommand(base, command)
     const probe = await waitForSpawnedWindow(base, state.knownWindowIds, {
       title: expected,

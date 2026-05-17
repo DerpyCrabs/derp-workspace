@@ -4,12 +4,9 @@ import { ShellSurfaceLayers } from '@/host/ShellSurfaceLayers'
 import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/shellUiWindows'
 import type { TaskbarPin, TaskbarSniItem, TaskbarWindowRow } from '@/features/taskbar/Taskbar'
 import type { DerpWindow } from '@/host/appWindowState'
-import type { AssistOverlayState, LayoutScreen, SnapAssistStripState } from '@/host/types'
+import type { LayoutScreen } from '@/host/types'
 
 type ShellSurfaceRuntimeOptions = {
-  assistOverlay: Accessor<AssistOverlayState | null>
-  getMainRef: () => HTMLElement | undefined
-  outputGeom: Accessor<{ w: number; h: number } | null>
   workspaceSecondary: Accessor<LayoutScreen[]>
   screenCssRect: (screen: LayoutScreen) => LayoutScreen
   debugHudFrameVisible: Accessor<boolean>
@@ -34,9 +31,6 @@ type ShellSurfaceRuntimeOptions = {
   trayReservedPx: Accessor<number>
   sniTrayItems: Accessor<TaskbarSniItem[]>
   trayIconSlotPx: Accessor<number>
-  snapStrip: Accessor<SnapAssistStripState | null>
-  snapStripScreen: Accessor<LayoutScreen | null>
-  snapStripExclusionActive: Accessor<boolean>
   windows: Accessor<ReadonlyMap<number, DerpWindow>>
   closeGroupWindow: (windowId: number) => void
   activateTaskbarGroup: (windowId: number) => void
@@ -89,9 +83,6 @@ export function createShellSurfaceRuntime(options: ShellSurfaceRuntimeOptions) {
   function ShellSurfaceLayer() {
     return (
       <ShellSurfaceLayers
-        assistOverlay={options.assistOverlay}
-        mainEl={options.getMainRef}
-        outputGeom={options.outputGeom}
         workspaceSecondary={options.workspaceSecondary}
         screenCssRect={options.screenCssRect}
         debugHudFrameVisible={options.debugHudFrameVisible}
@@ -127,9 +118,6 @@ export function createShellSurfaceRuntime(options: ShellSurfaceRuntimeOptions) {
           options.shellWireSend('sni_tray_activate', id)
         }}
         onSniTrayContextMenu={openSniTrayContextMenu}
-        snapStrip={options.snapStrip}
-        snapStripScreen={options.snapStripScreen}
-        snapStripExclusionActive={options.snapStripExclusionActive}
       />
     )
   }

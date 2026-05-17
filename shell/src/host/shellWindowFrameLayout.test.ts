@@ -69,6 +69,29 @@ describe('shellWindowFrameLayout', () => {
     expect(layout.showBorderChrome).toBe(false)
   })
 
+  it('keeps visual side borders when compositor frame only reserves titlebar height', () => {
+    const layout = shellWindowFrameLayout({
+      x: 1280,
+      y: 26,
+      width: 960,
+      height: 1218,
+      client_x: 1280,
+      client_y: 26,
+      client_width: 960,
+      client_height: 1218,
+      frame_x: 1280,
+      frame_y: 0,
+      frame_width: 960,
+      frame_height: 1244,
+      maximized: false,
+      fullscreen: false,
+    })
+    expect(layout.th).toBe(CHROME_TITLEBAR_PX)
+    expect(layout.contentLeft).toBe(0)
+    expect(layout.inset).toBe(CHROME_BORDER_PX)
+    expect(layout.showBorderChrome).toBe(true)
+  })
+
   it('uses compositor-authored frameless native rects without shell chrome', () => {
     const layout = shellWindowFrameLayout({
       x: 120,

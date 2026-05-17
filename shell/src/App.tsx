@@ -123,6 +123,7 @@ import {
   createWorkspaceChrome,
   type WorkspaceExternalTabDropDrag,
 } from "@/features/workspace/workspaceChrome";
+import { createImperativeChromeRenderer } from "@/features/workspace/imperativeChromeRenderer";
 import { createWorkspaceLayoutBridge } from "@/features/workspace/workspaceLayoutBridge";
 import { isImageFilePath } from "@/apps/image-viewer/imageViewerCore";
 import { isPdfFilePath } from "@/apps/pdf-viewer/pdfViewerCore";
@@ -450,6 +451,7 @@ function App() {
     launch: NativeLaunchMetadata;
   }[] = [];
   let mainRef: HTMLElement | undefined;
+  let chromeRootRef: HTMLElement | undefined;
   let shellUiWindowsInvalidateQueued = false;
 
   createEffect(() => {
@@ -1698,6 +1700,53 @@ function App() {
     clearNativeDragPreview: () => setNativeDragPreview(null),
   });
 
+  let workspaceChromeBridge: ReturnType<typeof createWorkspaceChrome> | null = null;
+
+  const imperativeChromeRenderer = createImperativeChromeRenderer({
+    getRoot: () => chromeRootRef,
+    getMainRef: () => mainRef,
+    desktopApps: desktopApps.items,
+    layoutCanvasOrigin,
+    outputGeom,
+    assistOverlay: shellWindowGestureRuntime.assistOverlay,
+    screenCssRect: (screen) =>
+      layoutScreenCssRect(screen, layoutCanvasOrigin()),
+    snapStrip: shellWindowGestureRuntime.snapStripState,
+    snapStripScreen: () =>
+      shellWindowGestureRuntime.dragSnapAssistContext()?.screen ?? null,
+    snapStripExclusionActive: () =>
+      shellWindowGestureRuntime.dragWindowMoved() &&
+      shellWindowGestureRuntime.getShellWindowDragId() !== null,
+    focusWindowViaShell,
+    beginShellWindowMove: shellWindowGestureRuntime.beginShellWindowMove,
+    beginShellWindowResize: shellWindowGestureRuntime.beginShellWindowResize,
+    toggleShellMaximizeForWindow:
+      shellWindowGestureRuntime.toggleShellMaximizeForWindow,
+    activeDragWindowId: () => workspaceChromeBridge?.activeDragWindowId() ?? null,
+    activeDropTarget: () => workspaceChromeBridge?.activeDropTarget() ?? null,
+    tabDragState: () => workspaceChromeBridge?.tabDragState() ?? null,
+    activeWindowDragWindowId: () => workspaceChromeBridge?.activeWindowDragWindowId() ?? null,
+    activeWindowDragTarget: () => workspaceChromeBridge?.activeWindowDragTarget() ?? null,
+    externalTabDropDrag: fileTabDropDrag,
+    splitGroupGesture: () => workspaceChromeBridge?.splitGroupGesture() ?? null,
+    startTabPointerGesture: (windowId, pointerId, clientX, clientY, button) => {
+      workspaceChromeBridge?.startTabPointerGesture(windowId, pointerId, clientX, clientY, button);
+    },
+    setTabStripLayout: (groupId, layout) => {
+      workspaceChromeBridge?.setTabStripLayout(groupId, layout);
+    },
+    selectGroupWindow,
+    setSplitGroupFraction,
+    openSnapAssistPicker: (windowId, anchorRect) =>
+      shellWindowGestureRuntime.openSnapAssistPicker(windowId, "button", anchorRect),
+    shellPointerGlobalLogical,
+    closeGroupWindow,
+    closeWindow,
+    shellContextOpenTabMenu: shellContextMenus.openTabMenu,
+    nativeDragPreview: nativeDragPreviewAsset,
+    shellWireSend,
+  });
+
   const windowInteractionCapture = createMemo(() => {
     const state = compositorInteractionState();
     const localDragWindowId = shellWindowGestureRuntime.dragWindowId();
@@ -1748,7 +1797,6 @@ function App() {
       compositorInteractionState()?.move_proxy_window_id ?? null,
     compositorMoveCaptureWindowId: () =>
       compositorInteractionState()?.move_capture_window_id ?? null,
-    nativeDragPreview: nativeDragPreviewAsset,
     focusShellUiWindow,
     activateTaskbarWindowViaShell,
     focusWindowViaShell,
@@ -1775,11 +1823,9 @@ function App() {
     externalTabDropDrag: fileTabDropDrag,
     shellWireSend,
   });
+  workspaceChromeBridge = workspaceChrome;
 
   const shellSurfaceRuntime = createShellSurfaceRuntime({
-    assistOverlay: shellWindowGestureRuntime.assistOverlay,
-    getMainRef: () => mainRef,
-    outputGeom,
     workspaceSecondary: () => workspacePartition().secondary,
     screenCssRect: (screen) =>
       layoutScreenCssRect(screen, layoutCanvasOrigin()),
@@ -1807,12 +1853,6 @@ function App() {
     trayReservedPx,
     sniTrayItems,
     trayIconSlotPx,
-    snapStrip: shellWindowGestureRuntime.snapStripState,
-    snapStripScreen: () =>
-      shellWindowGestureRuntime.dragSnapAssistContext()?.screen ?? null,
-    snapStripExclusionActive: () =>
-      shellWindowGestureRuntime.dragWindowMoved() &&
-      shellWindowGestureRuntime.getShellWindowDragId() !== null,
     windows,
     closeGroupWindow,
     activateTaskbarGroup,
@@ -2162,6 +2202,7 @@ function App() {
           workspaceLayoutBridge.sendClearPreTileGeometry,
         fallbackMonitorKey: workspaceLayoutBridge.fallbackMonitorKey,
         requestWindowSyncRecovery,
+        applyImperativeChromeDetails: imperativeChromeRenderer.applyDetails,
       },
       setViewportCss,
       applyShellWindowMove: shellWindowGestureRuntime.applyShellWindowMove,
@@ -2194,6 +2235,7 @@ function App() {
     onCleanup(() => {
       disposeNotificationsApi();
       disposeAppRuntimeBootstrap();
+      imperativeChromeRenderer.dispose();
     });
   });
 
@@ -2298,15 +2340,17 @@ function App() {
             )}
           </For>
 
+          <div
+            id="shell-chrome-root"
+            class="pointer-events-none absolute inset-0"
+            ref={(el) => {
+              chromeRootRef = el;
+              imperativeChromeRenderer.attach();
+              imperativeChromeRenderer.schedule();
+            }}
+          />
+
           <workspaceChrome.PersistentShellHostedContentHost />
-
-          <workspaceChrome.TabDragOverlay />
-          <workspaceChrome.WindowDragDropOverlay />
-          <workspaceChrome.ExternalTabDropOverlay />
-
-          <Show when={workspaceChrome.splitGroupGesture()}>
-            <workspaceChrome.SplitGestureOverlay />
-          </Show>
 
           <Show when={windowInteractionCapture()} keyed>
             {(capture) => (

@@ -90,10 +90,10 @@ export function shellWindowFrameLayout(w: ShellWindowFrameLayoutModel): ShellWin
       frameW === clientW &&
       frameH === clientH
     const th = noShellChrome ? 0 : CHROME_TITLEBAR_PX
-    const inset = contentLeft
+    const showBorderChrome = !noTilingChrome && th > 0
+    const inset = showBorderChrome ? Math.max(contentLeft, bd) : contentLeft
     const insetTop = Math.max(0, contentTop - th)
     const outerW = frameW
-    const showBorderChrome = !noTilingChrome && (outerW > w.width || (w.frame_height ?? w.height) > w.height + th)
     return {
       th,
       bd,

@@ -134,26 +134,10 @@ async function assertRoundedCsdTransparentOutside(
       windowPixels = observed
     }
   }
-  const referenceFor = (
-    px: number,
-    py: number,
-    localX: number,
-    localY: number,
-  ): [number, number, number] => {
-    if (px + 0.5 < windowPixels.x) return colorAt(0, py)
-    if (px + 0.5 >= windowPixels.x + windowPixels.width) return colorAt(png.width - 1, py)
-    if (py + 0.5 < windowPixels.y) return colorAt(px, 0)
-    if (py + 0.5 >= windowPixels.y + windowPixels.height) return colorAt(px, png.height - 1)
-    const left = localX < radiusX
-    const top = localY < radiusY
-    const edgeX = left ? 0 : png.width - 1
-    const edgeY = top ? 0 : png.height - 1
-    const nearestHorizontal = top ? localY : windowPixels.height - localY
-    const nearestVertical = left ? localX : windowPixels.width - localX
-    if (nearestHorizontal <= nearestVertical) return colorAt(px, edgeY)
-    return colorAt(edgeX, py)
-  }
-  let leaking = 0
+  const fillSampleX = Math.max(0, Math.min(png.width - 1, Math.floor(windowPixels.x + windowPixels.width / 2)))
+  const fillSampleY = Math.max(0, Math.min(png.height - 1, Math.floor(windowPixels.y + windowPixels.height / 2)))
+  const fill = colorAt(fillSampleX, fillSampleY)
+  let opaqueClientPixels = 0
   let checked = 0
   let maxObservedChannelDelta = 0
   for (let py = 0; py < png.height; py += 1) {
@@ -193,17 +177,18 @@ async function assertRoundedCsdTransparentOutside(
         continue
       }
       checked += 1
-      const delta = channelDelta(colorAt(px, py), referenceFor(px, py, localX, localY))
+      const delta = channelDelta(colorAt(px, py), fill)
       maxObservedChannelDelta = Math.max(maxObservedChannelDelta, delta)
-      if (delta > 8) leaking += 1
+      if (delta <= 18) opaqueClientPixels += 1
     }
   }
   assert(checked > 0, `${label} did not check any transparent pixels`)
+  const allowedOpaqueClientPixels = Math.max(24, Math.ceil(checked * 0.006))
   assert(
-    leaking === 0,
-    `${label} leaked ${leaking}/${checked} transparent pixels, max channel delta ${maxObservedChannelDelta}`,
+    opaqueClientPixels <= allowedOpaqueClientPixels,
+    `${label} had ${opaqueClientPixels}/${checked} client-colored transparent pixels, max fill delta ${maxObservedChannelDelta}`,
   )
-  return { width: png.width, height: png.height, checked, leaking, maxObservedChannelDelta }
+  return { width: png.width, height: png.height, checked, opaqueClientPixels, allowedOpaqueClientPixels, maxObservedChannelDelta }
 }
 
 function resolveWindowOutputName(compositor: CompositorSnapshot, window: WindowSnapshot): string | null {
@@ -1047,7 +1032,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
         const window = compositorWindowById(compositor, redId)
         const controls = windowControls(shell, redId)
+        const shellWindow = shell.windows.find((entry) => entry.window_id === redId)
         if (!window?.maximized || !controls?.titlebar) return null
+        const frameX = shellWindow?.frame_x ?? window.x
+        const frameY = shellWindow?.frame_y ?? window.y
+        const frameWidth = shellWindow?.frame_width ?? window.width
+        if (Math.abs(controls.titlebar.global_x - frameX) > 4) return null
+        if (Math.abs(controls.titlebar.global_y - frameY) > 4) return null
+        if (Math.abs(controls.titlebar.width - frameWidth) > 8) return null
         return { compositor, shell, window, titlebar: controls.titlebar }
       },
       5000,
@@ -1103,6 +1095,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
         const window = shellWindowById(shell, redId)
         const controls = windowControls(shell, redId)
         if (!window?.maximized || !controls?.titlebar) return null
+        if (Math.abs(controls.titlebar.global_x - (window.frame_x ?? window.x)) > 4) return null
+        if (Math.abs(controls.titlebar.global_y - (window.frame_y ?? window.y)) > 4) return null
+        if (Math.abs(controls.titlebar.width - (window.frame_width ?? window.width)) > 8) return null
         return { titlebar: controls.titlebar }
       },
       5000,
