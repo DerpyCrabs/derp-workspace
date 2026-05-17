@@ -753,7 +753,9 @@ export interface PerfShellRuntimeSnapshot {
   dom_measure_ms: number
   imperative_chrome_apply_count: number
   imperative_chrome_apply_ms: number
+  imperative_chrome_apply_max_ms: number
   imperative_chrome_nodes: number
+  imperative_chrome_dom_writes: number
   raf_sample_count: number
   raf_sample_ms: number
   raf_max_delta_ms: number
@@ -1665,7 +1667,10 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
             after.shell_runtime.imperative_chrome_apply_count - before.shell_runtime.imperative_chrome_apply_count,
           imperative_chrome_apply_ms:
             after.shell_runtime.imperative_chrome_apply_ms - before.shell_runtime.imperative_chrome_apply_ms,
+          imperative_chrome_apply_max_ms: after.shell_runtime.imperative_chrome_apply_max_ms,
           imperative_chrome_nodes: after.shell_runtime.imperative_chrome_nodes,
+          imperative_chrome_dom_writes:
+            after.shell_runtime.imperative_chrome_dom_writes - before.shell_runtime.imperative_chrome_dom_writes,
           raf_sample_count: after.shell_runtime.raf_sample_count - before.shell_runtime.raf_sample_count,
           raf_sample_ms: after.shell_runtime.raf_sample_ms - before.shell_runtime.raf_sample_ms,
           raf_max_delta_ms: after.shell_runtime.raf_max_delta_ms,

@@ -74,7 +74,13 @@ function summarizePerf(perf: PerfCounterSnapshot) {
     shell_window_apply_ms: raf?.window_apply_ms ?? 0,
     shell_imperative_chrome_apply_count: raf?.imperative_chrome_apply_count ?? 0,
     shell_imperative_chrome_apply_ms: raf?.imperative_chrome_apply_ms ?? 0,
+    shell_imperative_chrome_apply_avg_ms:
+      raf && raf.imperative_chrome_apply_count > 0
+        ? Math.round((raf.imperative_chrome_apply_ms / raf.imperative_chrome_apply_count) * 1000) / 1000
+        : 0,
+    shell_imperative_chrome_apply_max_ms: raf?.imperative_chrome_apply_max_ms ?? 0,
     shell_imperative_chrome_nodes: raf?.imperative_chrome_nodes ?? 0,
+    shell_imperative_chrome_dom_writes: raf?.imperative_chrome_dom_writes ?? 0,
     dom_measure_count: raf?.dom_measure_count ?? 0,
     dom_measure_ms: raf?.dom_measure_ms ?? 0,
     schedule_to_render_max_us: perf.latency.schedule_to_render_max_us,

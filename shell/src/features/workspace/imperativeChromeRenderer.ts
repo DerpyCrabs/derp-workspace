@@ -1,4 +1,4 @@
-import { createEffect } from 'solid-js'
+import { createEffect, createSignal } from 'solid-js'
 import type { DerpShellDetail, DerpWindow } from '@/host/appWindowState'
 import { windowIsShellHosted } from '@/host/appWindowState'
 import { shellWindowFrameLayout } from '@/host/shellWindowFrameLayout'
@@ -23,9 +23,18 @@ import {
   workspaceIsWindowTiled,
 } from './workspaceSnapshot'
 import { buildWorkspaceGroups, resolveWindowDesktopIcon, type WorkspaceGroupModel } from './workspaceSelectors'
-import type { WorkspaceTabStripLayout, WorkspaceTabStripRect } from './WorkspaceTabStrip'
 import type { DesktopAppMatchCandidate } from '@/features/desktop/desktopApplicationsState'
 import { noteShellImperativeChromeApply } from '@/features/bridge/shellPerfCounters'
+import {
+  clampTabInsertIndex,
+  findMergeTarget,
+  isTabPinned,
+  rightStripIndexToGroupInsertIndex,
+  splitLeftWindowId,
+  type TabMergeTarget,
+} from './tabGroupOps'
+
+let imperativeChromeDomWriteCount = 0
 
 type InteractionVisual = {
   x: number
@@ -53,6 +62,7 @@ type ChromeNode = {
   right: HTMLDivElement
   bottom: HTMLDivElement
   content: HTMLDivElement
+  contentHost: HTMLDivElement
   previewCanvas: HTMLCanvasElement
   titlebar: HTMLDivElement
   title: HTMLDivElement
@@ -69,6 +79,8 @@ type ChromeNode = {
   resizeBottomRight: HTMLDivElement
   splitLeftPane: HTMLDivElement
   splitRightPane: HTMLDivElement
+  splitLeftContentHost: HTMLDivElement
+  splitRightContentHost: HTMLDivElement
   splitDivider: HTMLDivElement
   tabs: Map<number, HTMLDivElement>
   dropSlots: Map<string, HTMLDivElement>
@@ -96,11 +108,31 @@ type CsdDropStripNode = {
 }
 
 type ExternalTabDropDrag = {
-  target: { groupId: string; insertIndex: number } | null
+  target: TabMergeTarget | null
   clientX: number
   clientY: number
   label: string
   canDrop: boolean
+}
+
+export type WorkspaceExternalTabDropDrag = ExternalTabDropDrag
+
+type DropVisualTarget = { groupId: string; insertIndex: number } | null
+
+type WorkspaceTabStripRect = {
+  left: number
+  top: number
+  right: number
+  bottom: number
+  width: number
+  height: number
+}
+
+type WorkspaceTabStripLayout = {
+  groupId: string
+  strip: WorkspaceTabStripRect
+  slots: Array<{ insertIndex: number; rect: WorkspaceTabStripRect }>
+  tabs: Array<{ windowId: number; splitLeft: boolean; rect: WorkspaceTabStripRect }>
 }
 
 type ImperativeChromeRendererOptions = {
@@ -116,21 +148,30 @@ type ImperativeChromeRendererOptions = {
   snapStripExclusionActive: () => boolean
   focusWindowViaShell: (windowId: number) => void
   beginShellWindowMove: (windowId: number, clientX: number, clientY: number, options?: { snapAssist?: boolean }) => void
+  adoptShellWindowMove: (
+    windowId: number,
+    clientX: number,
+    clientY: number,
+    moved?: boolean,
+    options?: { snapAssist?: boolean; superHeld?: boolean },
+  ) => boolean
   beginShellWindowResize: (windowId: number, edges: number, clientX: number, clientY: number) => void
   toggleShellMaximizeForWindow: (windowId: number) => void
-  activeDragWindowId: () => number | null
-  activeDropTarget: () => { groupId: string; insertIndex: number } | null
-  tabDragState: () => { windowId: number; dragging: boolean } | null
-  activeWindowDragWindowId: () => number | null
-  activeWindowDragTarget: () => { groupId: string; insertIndex: number } | null
   externalTabDropDrag: () => ExternalTabDropDrag | null
-  splitGroupGesture: () => { kind: 'divider' | 'move' | 'resize' } | null
-  startTabPointerGesture: (windowId: number, pointerId: number, clientX: number, clientY: number, button: number) => void
-  setTabStripLayout: (groupId: string, layout: WorkspaceTabStripLayout | null) => void
   selectGroupWindow: (windowId: number) => boolean
   setSplitGroupFraction: (groupId: string, fraction: number) => void
+  applyTabDrop: (windowId: number, target: TabMergeTarget) => boolean
+  applyWindowDrop: (windowId: number, target: TabMergeTarget) => boolean
+  detachGroupWindow: (windowId: number, clientX: number, clientY: number) => boolean
   openSnapAssistPicker: (windowId: number, anchorRect: DOMRect) => void
   shellPointerGlobalLogical: (clientX: number, clientY: number) => { x: number; y: number } | null
+  pointerClient: () => { x: number; y: number } | null
+  compositorPointerClient: () => { x: number; y: number } | null
+  shellWindowDragId: () => number | null
+  shellWindowDragMoved: () => boolean
+  compositorMoveWindowId: () => number | null
+  compositorMoveProxyWindowId: () => number | null
+  shellContextHideMenu: () => void
   closeGroupWindow: (windowId: number) => void
   closeWindow: (windowId: number) => void
   shellContextOpenTabMenu: (windowId: number, clientX: number, clientY: number) => void
@@ -176,6 +217,19 @@ type SplitGestureState = {
   startGlobalX: number
   startGlobalY: number
   originGroupRect: SplitGroupRect
+}
+
+type TabDragState = {
+  pointerId: number
+  windowId: number
+  sourceGroupId: string
+  startClientX: number
+  startClientY: number
+  currentClientX: number
+  currentClientY: number
+  dragging: boolean
+  detached: boolean
+  target: TabMergeTarget | null
 }
 
 const WORKSPACE_SPLIT_DIVIDER_PX = 4
@@ -314,6 +368,7 @@ function setAttr(el: HTMLElement, key: string, value: string, last: Record<strin
   const mapKey = `attr:${key}`
   if (last[mapKey] === value && el.getAttribute(key) === value) return
   last[mapKey] = value
+  imperativeChromeDomWriteCount += 1
   el.setAttribute(key, value)
 }
 
@@ -321,6 +376,7 @@ function setStyle(el: HTMLElement, key: string, value: string, last: Record<stri
   const mapKey = `style:${key}:${el.dataset.shellImperativeChromePart ?? ''}`
   if (last[mapKey] === value && el.style.getPropertyValue(key) === value) return
   last[mapKey] = value
+  imperativeChromeDomWriteCount += 1
   el.style.setProperty(key, value)
 }
 
@@ -328,6 +384,7 @@ function setText(el: HTMLElement, value: string, last: Record<string, string | n
   const mapKey = `text:${el.dataset.shellImperativeChromePart ?? el.getAttribute('data-workspace-tab') ?? el.getAttribute('data-workspace-tab-close') ?? ''}`
   if (last[mapKey] === value) return
   last[mapKey] = value
+  imperativeChromeDomWriteCount += 1
   el.textContent = value
 }
 
@@ -335,6 +392,7 @@ function removeAttr(el: HTMLElement, key: string, last: Record<string, string | 
   const mapKey = `attr:${key}`
   if (last[mapKey] === null && !el.hasAttribute(key)) return
   last[mapKey] = null
+  imperativeChromeDomWriteCount += 1
   el.removeAttribute(key)
 }
 
@@ -342,6 +400,7 @@ function setClass(el: HTMLElement, className: string, enabled: boolean, last: Re
   const mapKey = `class:${className}:${el.dataset.shellImperativeChromePart ?? ''}`
   if (last[mapKey] === enabled) return
   last[mapKey] = enabled
+  imperativeChromeDomWriteCount += 1
   el.classList.toggle(className, enabled)
 }
 
@@ -349,6 +408,7 @@ function setHidden(el: HTMLElement, hidden: boolean, last: Record<string, string
   const mapKey = `hidden:${el.dataset.shellImperativeChromePart ?? ''}`
   if (last[mapKey] === hidden && el.hidden === hidden) return
   last[mapKey] = hidden
+  imperativeChromeDomWriteCount += 1
   el.hidden = hidden
 }
 
@@ -462,6 +522,7 @@ function createChromeNode(windowId: number): ChromeNode {
   const right = document.createElement('div')
   const bottom = document.createElement('div')
   const content = document.createElement('div')
+  const contentHost = document.createElement('div')
   const previewCanvas = document.createElement('canvas')
   const titlebar = document.createElement('div')
   const title = document.createElement('div')
@@ -478,6 +539,8 @@ function createChromeNode(windowId: number): ChromeNode {
   const resizeBottomRight = document.createElement('div')
   const splitLeftPane = document.createElement('div')
   const splitRightPane = document.createElement('div')
+  const splitLeftContentHost = document.createElement('div')
+  const splitRightContentHost = document.createElement('div')
   const splitDivider = document.createElement('div')
   const last: ChromeNode['last'] = {}
   frame.dataset.shellImperativeChromePart = 'frame'
@@ -485,6 +548,7 @@ function createChromeNode(windowId: number): ChromeNode {
   right.dataset.shellImperativeChromePart = 'right'
   bottom.dataset.shellImperativeChromePart = 'bottom'
   content.dataset.shellImperativeChromePart = 'content'
+  contentHost.dataset.shellImperativeChromePart = 'contentHost'
   previewCanvas.dataset.shellImperativeChromePart = 'previewCanvas'
   titlebar.dataset.shellImperativeChromePart = 'titlebar'
   title.dataset.shellImperativeChromePart = 'title'
@@ -497,12 +561,15 @@ function createChromeNode(windowId: number): ChromeNode {
   resizeBottomRight.dataset.shellImperativeChromePart = 'resizeBottomRight'
   splitLeftPane.dataset.shellImperativeChromePart = 'splitLeftPane'
   splitRightPane.dataset.shellImperativeChromePart = 'splitRightPane'
+  splitLeftContentHost.dataset.shellImperativeChromePart = 'splitLeftContentHost'
+  splitRightContentHost.dataset.shellImperativeChromePart = 'splitRightContentHost'
   splitDivider.dataset.shellImperativeChromePart = 'splitDivider'
   frame.className = 'pointer-events-none absolute box-border'
   left.className = 'absolute z-2 box-border bg-(--shell-chrome-bg)'
   right.className = 'absolute z-2 box-border bg-(--shell-chrome-bg)'
   bottom.className = 'absolute z-2 box-border bg-(--shell-chrome-bg)'
   content.className = 'pointer-events-auto absolute z-5 box-border min-h-0 min-w-0 overflow-hidden bg-transparent text-(--shell-text)'
+  contentHost.className = 'pointer-events-auto h-full min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text) [&>*]:h-full [&>*]:min-h-0 [&>*]:min-w-0'
   previewCanvas.className = 'pointer-events-none block h-full w-full select-none'
   titlebar.className = 'absolute right-0 left-0 top-0 box-border flex flex-col overflow-hidden py-0 select-none touch-none'
   title.className = 'flex min-h-0 min-w-0 flex-1 overflow-hidden'
@@ -517,6 +584,8 @@ function createChromeNode(windowId: number): ChromeNode {
   resizeBottomRight.className = 'pointer-events-auto touch-none z-3 box-border'
   splitLeftPane.className = 'pointer-events-none absolute box-border'
   splitRightPane.className = 'pointer-events-none absolute box-border'
+  splitLeftContentHost.className = 'pointer-events-auto h-full min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text) [&>*]:h-full [&>*]:min-h-0 [&>*]:min-w-0'
+  splitRightContentHost.className = 'pointer-events-auto h-full min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text) [&>*]:h-full [&>*]:min-h-0 [&>*]:min-w-0'
   splitDivider.className = 'absolute z-6 cursor-col-resize bg-[color-mix(in_srgb,var(--shell-border)_88%,var(--shell-accent)_12%)]'
   setAttr(frame, 'data-shell-window-frame', String(windowId), last)
   setAttr(titlebar, 'data-shell-titlebar', String(windowId), last)
@@ -535,13 +604,15 @@ function createChromeNode(windowId: number): ChromeNode {
   controls.append(minimize, maximize, close)
   const row = document.createElement('div')
   row.className = 'flex min-h-0 min-w-0 flex-1 flex-row items-stretch gap-1.5 overflow-hidden py-0 pr-1.5 pl-2.5'
-  content.append(previewCanvas)
+  content.append(contentHost, previewCanvas)
+  splitLeftPane.append(splitLeftContentHost)
+  splitRightPane.append(splitRightContentHost)
   tabStrip.append(tabStripInner)
   title.append(tabStrip)
   row.append(title, controls)
   titlebar.append(row)
   frame.append(left, right, bottom, content, titlebar, resizeLeft, resizeRight, resizeBottom, resizeBottomLeft, resizeBottomRight)
-  return { frame, left, right, bottom, content, previewCanvas, titlebar, title, tabStrip, tabStripInner, controls, minimize, maximize, close, resizeLeft, resizeRight, resizeBottom, resizeBottomLeft, resizeBottomRight, splitLeftPane, splitRightPane, splitDivider, tabs: new Map(), dropSlots: new Map(), last }
+  return { frame, left, right, bottom, content, contentHost, previewCanvas, titlebar, title, tabStrip, tabStripInner, controls, minimize, maximize, close, resizeLeft, resizeRight, resizeBottom, resizeBottomLeft, resizeBottomRight, splitLeftPane, splitRightPane, splitLeftContentHost, splitRightContentHost, splitDivider, tabs: new Map(), dropSlots: new Map(), last }
 }
 
 function createSurfaceNodes(): SurfaceNodes {
@@ -600,12 +671,12 @@ function createSurfaceNodes(): SurfaceNodes {
   }
 }
 
-function rightTabIds(group: WorkspaceGroupModel): number[] {
+function rightTabIds(group: WorkspaceGroupModel<DerpWindow>): number[] {
   if (group.splitLeftWindowId === null) return group.members.map((window) => window.window_id)
   return group.members.filter((window) => window.window_id !== group.splitLeftWindowId).map((window) => window.window_id)
 }
 
-function rightStripIndexToInsertIndex(group: WorkspaceGroupModel, index: number): number {
+function rightStripIndexToInsertIndex(group: WorkspaceGroupModel<DerpWindow>, index: number): number {
   if (group.splitLeftWindowId === null) return index
   const ids = rightTabIds(group)
   if (index >= ids.length) {
@@ -646,13 +717,23 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
   const windows = new Map<number, DerpWindow>()
   const nodes = new Map<number, ChromeNode>()
   const csdDropStrips = new Map<string, CsdDropStripNode>()
-  const renderedGroupsByFrameWindowId = new Map<number, WorkspaceGroupModel>()
+  const renderedGroupsByFrameWindowId = new Map<number, WorkspaceGroupModel<DerpWindow>>()
   let surfaceNodes: SurfaceNodes | null = null
   let workspace = createEmptyWorkspaceSnapshot()
-  let previousGroups: WorkspaceGroupModel[] = []
+  let previousGroups: WorkspaceGroupModel<DerpWindow>[] = []
   let interaction: InteractionState | null = null
   let focusedWindowId: number | null = null
+  let tabDrag: TabDragState | null = null
+  let tabDragPointerGrab = false
+  let activeWindowDragTarget: TabMergeTarget | null = null
+  let lastWindowDragPointerClient: { x: number; y: number } | null = null
+  let lastWindowDragWindowId: number | null = null
+  const tabStripLayouts = new Map<string, WorkspaceTabStripLayout>()
+  const shellHostedContentMounts = new Map<number, HTMLElement>()
+  const [gestureRev, setGestureRev] = createSignal(0)
+  const [contentMountRev, setContentMountRev] = createSignal(0)
   let raf = 0
+  let fullRaf = false
   let splitGesture: SplitGestureState | null = null
   let pendingTitlebarDrag: {
     pointerId: number
@@ -665,30 +746,58 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
   const titlebarLastClickByWindow = new Map<number, { t: number; x: number; y: number }>()
 
   const schedule = () => {
+    fullRaf = true
+    scheduleRaf()
+  }
+
+  const scheduleSurface = () => {
+    scheduleRaf()
+  }
+
+  const scheduleRaf = () => {
     if (raf !== 0) return
     raf = requestAnimationFrame(() => {
+      const full = fullRaf
       raf = 0
-      apply()
+      fullRaf = false
+      if (full) apply()
+      else applySurface()
     })
+  }
+
+  function markGestureChanged() {
+    setGestureRev((value) => value + 1)
+    schedule()
+  }
+
+  function markSurfaceGestureChanged() {
+    setGestureRev((value) => value + 1)
+    scheduleSurface()
   }
 
   createEffect(() => {
     options.desktopApps()
     options.layoutCanvasOrigin()
     options.outputGeom()
+    schedule()
+  })
+
+  createEffect(() => {
     options.assistOverlay()
     options.snapStrip()
     options.snapStripScreen()
     options.snapStripExclusionActive()
-    options.activeDragWindowId()
-    options.activeDropTarget()
-    options.tabDragState()
-    options.activeWindowDragWindowId()
-    options.activeWindowDragTarget()
     options.externalTabDropDrag()
-    options.splitGroupGesture()
     options.nativeDragPreview()
-    schedule()
+    options.pointerClient()
+    options.compositorPointerClient()
+    options.shellWindowDragId()
+    options.shellWindowDragMoved()
+    options.compositorMoveWindowId()
+    options.compositorMoveProxyWindowId()
+    updateActiveWindowDragTarget()
+    adoptDetachedTabDragIfReady()
+    scheduleSurface()
   })
 
   const buildGroups = () => {
@@ -696,14 +805,72 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     return previousGroups
   }
 
-  const shouldRender = (window: DerpWindow) => {
-    if (windowIsShellHosted(window)) return false
-    if (window.client_side_decoration) return false
-    if (!window.workspace_visible || window.minimized) return false
+  const shouldRender = (window: DerpWindow, group: WorkspaceGroupModel<DerpWindow> | null, splitLayout: SplitLayoutRects | null) => {
+    if (window.client_side_decoration && (!group || (group.members.length <= 1 && !splitLayout))) return false
+    if (!windowIsShellHosted(window) && (!window.workspace_visible || window.minimized)) return false
     return true
   }
 
-  const splitLayoutForGroup = (group: WorkspaceGroupModel, overrideGroupRect?: SplitGroupRect): SplitLayoutRects | null => {
+  function updateShellHostedContentMounts(next: Map<number, HTMLElement>) {
+    if (next.size === shellHostedContentMounts.size) {
+      let same = true
+      for (const [windowId, mount] of next) {
+        if (shellHostedContentMounts.get(windowId) !== mount) {
+          same = false
+          break
+        }
+      }
+      if (same) return
+    }
+    shellHostedContentMounts.clear()
+    for (const [windowId, mount] of next) shellHostedContentMounts.set(windowId, mount)
+    setContentMountRev((value) => value + 1)
+  }
+
+  function workspaceGroupIdForWindow(windowId: number): string | null {
+    for (const group of workspace.groups) {
+      if (group.windowIds.includes(windowId)) return group.id
+    }
+    return null
+  }
+
+  function groupById(groupId: string): WorkspaceGroupModel<DerpWindow> | null {
+    return previousGroups.find((entry) => entry.id === groupId) ?? null
+  }
+
+  function pointInTabStripRect(rect: WorkspaceTabStripRect, clientX: number, clientY: number, slop = 0): boolean {
+    return (
+      clientX >= rect.left - slop &&
+      clientX <= rect.right + slop &&
+      clientY >= rect.top - slop &&
+      clientY <= rect.bottom + slop
+    )
+  }
+
+  function activeWindowDragWindowId(): number | null {
+    if (tabDrag) return null
+    const local = options.shellWindowDragId()
+    if (local !== null && options.shellWindowDragMoved()) return local
+    return options.compositorMoveWindowId()
+  }
+
+  function windowDragPointerClient(): { x: number; y: number } | null {
+    return options.pointerClient() ?? options.compositorPointerClient()
+  }
+
+  function activeDragWindowId(): number | null {
+    gestureRev()
+    if (tabDrag && (tabDrag.dragging || tabDrag.detached)) return tabDrag.windowId
+    return activeWindowDragWindowId()
+  }
+
+  function activeDropTarget(): DropVisualTarget {
+    gestureRev()
+    if (tabDrag && (tabDrag.dragging || tabDrag.detached)) return tabDrag.target
+    return activeWindowDragTarget ?? options.externalTabDropDrag()?.target ?? null
+  }
+
+  const splitLayoutForGroup = (group: WorkspaceGroupModel<DerpWindow>, overrideGroupRect?: SplitGroupRect): SplitLayoutRects | null => {
     if (!group.splitLeftWindow || group.splitPaneFraction === null) return null
     const stateGroup = workspace.groups.find((entry) => entry.id === group.id)
     if (!stateGroup) return null
@@ -759,13 +926,21 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     }
   }
 
-  const applySplitGroupGeometry = (group: WorkspaceGroupModel, layout: SplitLayoutRects) => {
+  const applySplitGroupGeometry = (group: WorkspaceGroupModel<DerpWindow>, layout: SplitLayoutRects) => {
     for (const windowId of [layout.leftWindowId, ...layout.rightWindowIds]) {
       const rect = windowId === layout.leftWindowId ? layout.left : layout.right
       options.shellWireSend('set_geometry', windowId, rect.x, rect.y, rect.width, rect.height, SHELL_LAYOUT_FLOATING)
     }
     const rightWindow = windows.get(group.visibleWindowId)
     if (rightWindow?.minimized) queueMicrotask(() => options.shellWireSend('taskbar_activate', group.visibleWindowId))
+  }
+
+  const applySplitGroupGeometryById = (groupId: string) => {
+    const group = groupById(groupId) ?? buildGroups().find((entry) => entry.id === groupId) ?? null
+    if (!group) return
+    const layout = splitLayoutForGroup(group)
+    if (!layout) return
+    applySplitGroupGeometry(group, layout)
   }
 
   const endSplitGesture = () => {
@@ -777,7 +952,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     window.removeEventListener('pointercancel', onSplitGesturePointerDone, true)
   }
 
-  const beginSplitGesture = (group: WorkspaceGroupModel, pointerId: number, kind: SplitGestureState['kind'], edges: number, clientX: number, clientY: number) => {
+  const beginSplitGesture = (group: WorkspaceGroupModel<DerpWindow>, pointerId: number, kind: SplitGestureState['kind'], edges: number, clientX: number, clientY: number) => {
     const layout = splitLayoutForGroup(group)
     const global = options.shellPointerGlobalLogical(clientX, clientY)
     if (!layout || !global) return false
@@ -845,7 +1020,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     if (splitGesture?.pointerId === event.pointerId) endSplitGesture()
   }
 
-  const publishTabStripLayout = (node: ChromeNode, group: WorkspaceGroupModel) => {
+  const publishTabStripLayout = (node: ChromeNode, group: WorkspaceGroupModel<DerpWindow>) => {
     const slots: WorkspaceTabStripLayout['slots'] = []
     for (const slot of node.tabStrip.querySelectorAll('[data-tab-drop-slot]')) {
       if (!(slot instanceof HTMLElement)) continue
@@ -867,7 +1042,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
         rect: tabStripRect(tab.getBoundingClientRect()),
       })
     }
-    options.setTabStripLayout(group.id, {
+    tabStripLayouts.set(group.id, {
       groupId: group.id,
       strip: tabStripRect(node.tabStrip.getBoundingClientRect()),
       slots,
@@ -875,7 +1050,257 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     })
   }
 
-  const renderTabs = (node: ChromeNode, group: WorkspaceGroupModel, activeDragWindowId: number | null, dropTarget: { groupId: string; insertIndex: number } | null) => {
+  function endTabDragPointerGrab() {
+    if (!tabDragPointerGrab) return
+    tabDragPointerGrab = false
+    options.shellWireSend('shell_ui_grab_end')
+  }
+
+  function beginShellUiPointerGrab(windowId: number | null | undefined) {
+    const nextWindowId = typeof windowId === 'number' && Number.isFinite(windowId) ? Math.trunc(windowId) : 0
+    if (nextWindowId <= 0) return false
+    return options.shellWireSend('shell_ui_grab_begin', nextWindowId)
+  }
+
+  function measuredTabMergeTargetFromPointer(windowId: number, clientX: number, clientY: number): TabMergeTarget | null {
+    const sourceGroupId = workspaceGroupIdForWindow(windowId)
+    for (const group of previousGroups) {
+      if (group.id === sourceGroupId) continue
+      const layout = tabStripLayouts.get(group.id)
+      if (!layout) continue
+      if (!pointInTabStripRect(layout.strip, clientX, clientY, 8)) continue
+      const stateGroup = workspace.groups.find((entry) => entry.id === group.id)
+      if (!stateGroup || stateGroup.windowIds.length === 0) continue
+      const targetWindowId = group.visibleWindowId ?? stateGroup.windowIds[0]!
+      const excludedWindowId = sourceGroupId === group.id ? windowId : undefined
+      const pinned = isTabPinned(workspace, windowId)
+      for (const slot of layout.slots) {
+        if (!pointInTabStripRect(slot.rect, clientX, clientY, 8)) continue
+        return {
+          groupId: group.id,
+          targetWindowId,
+          insertIndex: clampTabInsertIndex(workspace, group.id, slot.insertIndex, pinned, excludedWindowId),
+        }
+      }
+      const rightTabs = layout.tabs.filter((tab) => !tab.splitLeft).sort((a, b) => a.rect.left - b.rect.left)
+      for (let index = 0; index < rightTabs.length; index += 1) {
+        const tab = rightTabs[index]!
+        if (!pointInTabStripRect(tab.rect, clientX, clientY, 8)) continue
+        const targetIndex = stateGroup.windowIds.indexOf(tab.windowId)
+        if (targetIndex < 0) continue
+        const insertIndex = clientX <= tab.rect.left + tab.rect.width * 0.4 ? targetIndex : targetIndex + 1
+        return {
+          groupId: group.id,
+          targetWindowId: tab.windowId,
+          insertIndex: clampTabInsertIndex(workspace, group.id, insertIndex, pinned, excludedWindowId),
+        }
+      }
+      for (let index = 0; index < rightTabs.length; index += 1) {
+        const tab = rightTabs[index]!
+        if (clientX <= tab.rect.left + tab.rect.width * 0.4) {
+          return {
+            groupId: group.id,
+            targetWindowId,
+            insertIndex: clampTabInsertIndex(
+              workspace,
+              group.id,
+              rightStripIndexToGroupInsertIndex(workspace, group.id, index),
+              pinned,
+              excludedWindowId,
+            ),
+          }
+        }
+        if (clientX <= tab.rect.right) {
+          return {
+            groupId: group.id,
+            targetWindowId,
+            insertIndex: clampTabInsertIndex(
+              workspace,
+              group.id,
+              rightStripIndexToGroupInsertIndex(workspace, group.id, index + 1),
+              pinned,
+              excludedWindowId,
+            ),
+          }
+        }
+      }
+      return {
+        groupId: group.id,
+        targetWindowId,
+        insertIndex: clampTabInsertIndex(
+          workspace,
+          group.id,
+          rightStripIndexToGroupInsertIndex(workspace, group.id, rightTabs.length),
+          pinned,
+          excludedWindowId,
+        ),
+      }
+    }
+    return null
+  }
+
+  function findTabMergeTargetFromPointer(windowId: number, clientX: number, clientY: number, ignoreDraggedWindowFrame: boolean): TabMergeTarget | null {
+    return measuredTabMergeTargetFromPointer(windowId, clientX, clientY) ??
+      findMergeTarget(workspace, windowId, clientX, clientY, ignoreDraggedWindowFrame)
+  }
+
+  function resolveWindowDragTarget(windowId: number, clientX: number, clientY: number): TabMergeTarget | null {
+    const sourceGroupId = workspaceGroupIdForWindow(windowId)
+    if (!sourceGroupId) return null
+    const sourceGroup = groupById(sourceGroupId)
+    if (!sourceGroup || sourceGroup.splitLeftWindowId !== null) return null
+    const target =
+      measuredTabMergeTargetFromPointer(windowId, clientX, clientY) ??
+      findMergeTarget(workspace, windowId, clientX, clientY, true)
+    if (!target || target.groupId === sourceGroupId) return null
+    return target
+  }
+
+  function updateActiveWindowDragTarget() {
+    const windowId = activeWindowDragWindowId()
+    const pointer = windowDragPointerClient()
+    if (windowId === null || !pointer) {
+      if (activeWindowDragTarget !== null) {
+        activeWindowDragTarget = null
+        markSurfaceGestureChanged()
+      }
+      return
+    }
+    lastWindowDragWindowId = windowId
+    lastWindowDragPointerClient = { x: pointer.x, y: pointer.y }
+    const next = resolveWindowDragTarget(windowId, pointer.x, pointer.y)
+    if (
+      activeWindowDragTarget?.groupId !== next?.groupId ||
+      activeWindowDragTarget?.targetWindowId !== next?.targetWindowId ||
+      activeWindowDragTarget?.insertIndex !== next?.insertIndex
+    ) {
+      activeWindowDragTarget = next
+      markSurfaceGestureChanged()
+    }
+  }
+
+  function adoptDetachedTabDragIfReady() {
+    const drag = tabDrag
+    if (!drag?.detached) return
+    if (options.compositorMoveWindowId() !== drag.windowId) return
+    const currentGroupId = workspaceGroupIdForWindow(drag.windowId)
+    if (currentGroupId === null || currentGroupId === drag.sourceGroupId) return
+    if (!options.adoptShellWindowMove(drag.windowId, drag.currentClientX, drag.currentClientY, drag.dragging, { snapAssist: false })) {
+      return
+    }
+    lastWindowDragWindowId = drag.windowId
+    lastWindowDragPointerClient = { x: drag.currentClientX, y: drag.currentClientY }
+    activeWindowDragTarget = resolveWindowDragTarget(drag.windowId, drag.currentClientX, drag.currentClientY)
+    endTabDragPointerGrab()
+    clearTabDragListeners()
+    tabDrag = null
+    markGestureChanged()
+  }
+
+  function startTabPointerGesture(windowId: number, pointerId: number, clientX: number, clientY: number, button: number) {
+    if (button !== 0) return
+    const sourceGroupId = workspaceGroupIdForWindow(windowId)
+    if (!sourceGroupId) return
+    if (splitLeftWindowId(workspace, sourceGroupId) === windowId) return
+    const sourceGroup = groupById(sourceGroupId)
+    if (sourceGroup && sourceGroup.members.length <= 1) {
+      options.beginShellWindowMove(windowId, clientX, clientY, { snapAssist: false })
+      return
+    }
+    const grabWindowId = sourceGroup?.visibleWindowId ?? sourceGroup?.splitLeftWindowId ?? sourceGroup?.members[0]?.window_id ?? windowId
+    options.shellContextHideMenu()
+    if (!tabDragPointerGrab && beginShellUiPointerGrab(grabWindowId)) tabDragPointerGrab = true
+    tabDrag = {
+      pointerId,
+      windowId,
+      sourceGroupId,
+      startClientX: clientX,
+      startClientY: clientY,
+      currentClientX: clientX,
+      currentClientY: clientY,
+      dragging: false,
+      detached: false,
+      target: null,
+    }
+    window.addEventListener('pointermove', onTabDragPointerMove, true)
+    window.addEventListener('pointerup', onTabDragPointerUp, true)
+    window.addEventListener('pointercancel', onTabDragPointerCancel, true)
+    markGestureChanged()
+  }
+
+  function clearTabDragListeners() {
+    window.removeEventListener('pointermove', onTabDragPointerMove, true)
+    window.removeEventListener('pointerup', onTabDragPointerUp, true)
+    window.removeEventListener('pointercancel', onTabDragPointerCancel, true)
+  }
+
+  function finishTabPointerGesture(pointerId: number, clientX: number, clientY: number) {
+    const drag = tabDrag
+    if (!drag || drag.pointerId !== pointerId) return
+    try {
+      const dragDistance = Math.hypot(clientX - drag.startClientX, clientY - drag.startClientY)
+      const dragging = drag.dragging || dragDistance >= 40
+      const ignoreDraggedWindowFrame = drag.detached || (groupById(drag.sourceGroupId)?.members.length ?? 0) <= 1
+      const nextTarget = dragging ? findTabMergeTargetFromPointer(drag.windowId, clientX, clientY, ignoreDraggedWindowFrame) : drag.target
+      const merged = dragging && !drag.detached && nextTarget ? options.applyTabDrop(drag.windowId, nextTarget) : false
+      const clickTarget = !dragging
+        ? (document
+            .elementsFromPoint(clientX, clientY)
+            .find((element) => element instanceof HTMLElement && element.closest(`[data-workspace-tab="${drag.windowId}"]`)) ?? null)
+        : null
+      if (merged || drag.detached) {
+        tabDrag = null
+        markGestureChanged()
+        return
+      }
+      if (clickTarget) {
+        tabDrag = null
+        options.selectGroupWindow(drag.windowId)
+        markGestureChanged()
+        return
+      }
+      tabDrag = null
+      markGestureChanged()
+    } finally {
+      endTabDragPointerGrab()
+      clearTabDragListeners()
+    }
+  }
+
+  function onTabDragPointerMove(event: PointerEvent) {
+    const prev = tabDrag
+    if (!prev || prev.pointerId !== event.pointerId) return
+    const dx = event.clientX - prev.startClientX
+    const dy = event.clientY - prev.startClientY
+    const dragDistance = Math.hypot(dx, dy)
+    const dragging = prev.dragging || dragDistance >= 40
+    const ignoreDraggedWindowFrame = prev.detached || (groupById(prev.sourceGroupId)?.members.length ?? 0) <= 1
+    const target = dragging ? findTabMergeTargetFromPointer(prev.windowId, event.clientX, event.clientY, ignoreDraggedWindowFrame) : null
+    const splitLeftId = splitLeftWindowId(workspace, prev.sourceGroupId)
+    const splitRightStripDrag = splitLeftId !== null && prev.windowId !== splitLeftId
+    const verticalTear = Math.abs(dy) >= 64
+    let detached = prev.detached
+    if (dragging && !detached && ((splitRightStripDrag && verticalTear) || (!splitRightStripDrag && verticalTear))) {
+      detached = options.detachGroupWindow(prev.windowId, event.clientX, event.clientY)
+    }
+    tabDrag = { ...prev, currentClientX: event.clientX, currentClientY: event.clientY, dragging, detached, target }
+    adoptDetachedTabDragIfReady()
+    markGestureChanged()
+  }
+
+  function onTabDragPointerUp(event: PointerEvent) {
+    finishTabPointerGesture(event.pointerId, event.clientX, event.clientY)
+  }
+
+  function onTabDragPointerCancel(event: PointerEvent) {
+    if (!tabDrag || tabDrag.pointerId !== event.pointerId) return
+    tabDrag = null
+    endTabDragPointerGrab()
+    clearTabDragListeners()
+    markGestureChanged()
+  }
+
+  const renderTabs = (node: ChromeNode, group: WorkspaceGroupModel<DerpWindow>, activeDragWindowId: number | null, dropTarget: { groupId: string; insertIndex: number } | null) => {
     setAttr(node.tabStrip, 'data-workspace-tab-strip', group.id, node.last)
     const liveTabs = new Set<number>()
     const liveSlots = new Set<string>()
@@ -939,7 +1364,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
           const id = coerceWindowId(buttonEl.getAttribute('data-workspace-tab'))
           if (id === null) return
           if (buttonEl.hasAttribute('data-workspace-split-left-tab')) return
-          options.startTabPointerGesture(id, event.pointerId, event.clientX, event.clientY, event.button)
+          startTabPointerGesture(id, event.pointerId, event.clientX, event.clientY, event.button)
         })
         buttonEl.addEventListener('click', (event) => {
           event.stopPropagation()
@@ -1030,7 +1455,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     publishTabStripLayout(node, group)
   }
 
-  const renderWindow = (node: ChromeNode, window: RendererWindow, focused: boolean, dragging: boolean, hidden: boolean, group: WorkspaceGroupModel | null, splitLayout: SplitLayoutRects | null) => {
+  const renderWindow = (node: ChromeNode, window: RendererWindow, focused: boolean, dragging: boolean, hidden: boolean, group: WorkspaceGroupModel<DerpWindow> | null, splitLayout: SplitLayoutRects | null, contentMounts: Map<number, HTMLElement>) => {
     const layout = shellWindowFrameLayout(window)
     const chromeBg = focused ? 'var(--shell-window-chrome-focused)' : 'var(--shell-window-chrome-unfocused)'
     setAttr(node.frame, 'data-shell-window-hidden', hidden ? 'true' : 'false', node.last)
@@ -1072,7 +1497,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     setStyle(node.titlebar, 'pointer-events', dragging ? 'none' : 'auto', node.last)
     setClass(node.title, 'text-(--shell-text-muted)', !focused, node.last)
     setClass(node.title, 'text-(--shell-text)', focused, node.last)
-    if (group) renderTabs(node, group, options.activeDragWindowId() ?? interaction?.move_window_id ?? null, options.activeDropTarget())
+      if (group) renderTabs(node, group, activeDragWindowId() ?? interaction?.move_window_id ?? null, activeDropTarget())
     const maxTitle = window.maximized ? 'Restore' : 'Maximize'
     if (node.last.maximizeTitle !== maxTitle) {
       node.last.maximizeTitle = maxTitle
@@ -1090,6 +1515,14 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     setStyle(node.content, 'height', `${layout.contentH}px`, node.last)
     setStyle(node.content, 'background', 'transparent', node.last)
     setStyle(node.content, 'pointer-events', 'none', node.last)
+    const shellHosted = windowIsShellHosted(window)
+    if (shellHosted && !splitLayout) {
+      setAttr(node.contentHost, 'data-shell-hosted-content-mount', String(window.window_id), node.last)
+      contentMounts.set(window.window_id, node.contentHost)
+    } else {
+      removeAttr(node.contentHost, 'data-shell-hosted-content-mount', node.last)
+    }
+    setHidden(node.contentHost, !shellHosted || !!splitLayout, node.last)
     const preview = options.nativeDragPreview()
     const previewVisible =
       preview?.loaded === true &&
@@ -1097,7 +1530,8 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       (interaction?.move_window_id === window.window_id ||
         interaction?.move_proxy_window_id === window.window_id ||
         interaction?.move_capture_window_id === window.window_id)
-    setHidden(node.content, !previewVisible, node.last)
+    setHidden(node.content, !previewVisible && !shellHosted, node.last)
+    setHidden(node.previewCanvas, !previewVisible, node.last)
     if (previewVisible && preview?.image && preview.image.complete) {
       const sourceWidth = preview.image.naturalWidth
       const sourceHeight = preview.image.naturalHeight
@@ -1167,6 +1601,22 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       setAttr(node.splitDivider, 'data-testid', 'workspace-split-divider', node.last)
       setBox(node.splitLeftPane, splitLayout.left, 1005 + window.stack_z, node.last)
       setBox(node.splitRightPane, splitLayout.right, 1005 + window.stack_z, node.last)
+      const leftShellHosted = windowIsShellHosted(windows.get(splitLayout.leftWindowId) ?? window)
+      const rightShellHosted = windowIsShellHosted(windows.get(group.visibleWindowId) ?? window)
+      if (leftShellHosted) {
+        setAttr(node.splitLeftContentHost, 'data-shell-hosted-content-mount', String(splitLayout.leftWindowId), node.last)
+        contentMounts.set(splitLayout.leftWindowId, node.splitLeftContentHost)
+      } else {
+        removeAttr(node.splitLeftContentHost, 'data-shell-hosted-content-mount', node.last)
+      }
+      if (rightShellHosted) {
+        setAttr(node.splitRightContentHost, 'data-shell-hosted-content-mount', String(group.visibleWindowId), node.last)
+        contentMounts.set(group.visibleWindowId, node.splitRightContentHost)
+      } else {
+        removeAttr(node.splitRightContentHost, 'data-shell-hosted-content-mount', node.last)
+      }
+      setHidden(node.splitLeftContentHost, !leftShellHosted, node.last)
+      setHidden(node.splitRightContentHost, !rightShellHosted, node.last)
       setStyle(node.splitDivider, 'left', '0', node.last)
       setStyle(node.splitDivider, 'top', '0', node.last)
       setStyle(node.splitDivider, 'width', `${WORKSPACE_SPLIT_DIVIDER_PX}px`, node.last)
@@ -1175,6 +1625,8 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       setStyle(node.splitDivider, 'will-change', 'transform', node.last)
       setStyle(node.splitDivider, 'z-index', `${1006 + window.stack_z}`, node.last)
     } else {
+      removeAttr(node.splitLeftContentHost, 'data-shell-hosted-content-mount', node.last)
+      removeAttr(node.splitRightContentHost, 'data-shell-hosted-content-mount', node.last)
       node.splitLeftPane.remove()
       node.splitRightPane.remove()
       node.splitDivider.remove()
@@ -1322,18 +1774,17 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
   }
 
   const renderDragOverlays = (surface: SurfaceNodes) => {
-    const tabDrag = options.tabDragState()
     const externalDrag = options.externalTabDropDrag()
-    const windowDragWindowId = options.activeWindowDragWindowId()
-    const split = options.splitGroupGesture()
+    const windowDragWindowId = activeWindowDragWindowId()
+    const split = splitGesture
     const draggingTab = !!tabDrag?.dragging
     const draggingWindow = windowDragWindowId !== null
     const draggingExternal = externalDrag !== null
     const target = draggingExternal
       ? externalDrag.target
       : draggingWindow
-        ? options.activeWindowDragTarget()
-        : options.activeDropTarget()
+        ? activeWindowDragTarget
+        : activeDropTarget()
     const indicator = dropIndicatorForTarget(target)
     const showOverlay = draggingTab || draggingWindow || draggingExternal
     setStyle(surface.dragOverlay, 'display', showOverlay ? 'block' : 'none', surface.last)
@@ -1375,7 +1826,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     setStyle(surface.splitOverlay, 'cursor', split?.kind === 'divider' ? 'col-resize' : split ? 'grabbing' : 'default', surface.last)
   }
 
-  const renderCsdDropStrips = (root: HTMLElement, groups: readonly WorkspaceGroupModel[]) => {
+  const renderCsdDropStrips = (root: HTMLElement, groups: readonly WorkspaceGroupModel<DerpWindow>[]) => {
     const live = new Set<string>()
     for (const group of groups) {
       const window = group.visibleWindow
@@ -1410,12 +1861,13 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       if (live.has(groupId)) continue
       entry.node.remove()
       csdDropStrips.delete(groupId)
-      options.setTabStripLayout(groupId, null)
+      tabStripLayouts.delete(groupId)
     }
   }
 
   const apply = () => {
     const start = performance.now()
+    const writesStart = imperativeChromeDomWriteCount
     const root = options.getRoot()
     if (!root) {
       for (const node of nodes.values()) node.frame.remove()
@@ -1423,6 +1875,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       for (const entry of csdDropStrips.values()) entry.node.remove()
       csdDropStrips.clear()
       renderedGroupsByFrameWindowId.clear()
+      updateShellHostedContentMounts(new Map())
       clearSurfaceNodes()
       return
     }
@@ -1431,11 +1884,12 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     renderSnapStrip(surface)
     renderDragOverlays(surface)
     const live = new Set<number>()
+    const contentMounts = new Map<number, HTMLElement>()
     renderedGroupsByFrameWindowId.clear()
     const groups = buildGroups()
     renderCsdDropStrips(root, groups)
-    const renderBase = (base: DerpWindow, group: WorkspaceGroupModel | null, splitLayout: SplitLayoutRects | null) => {
-      if (!shouldRender(base)) return
+    const renderBase = (base: DerpWindow, group: WorkspaceGroupModel<DerpWindow> | null, splitLayout: SplitLayoutRects | null) => {
+      if (!shouldRender(base, group, splitLayout)) return
       const liveVisual =
         interaction?.resize_window_id === base.window_id ? interaction.resize_rect :
           interaction?.move_window_id === base.window_id || interaction?.move_proxy_window_id === base.window_id ? interaction.move_rect :
@@ -1465,12 +1919,16 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
         { ...window, snap_tiled: workspaceIsWindowTiled(workspace, id) },
         focusedWindowId === id,
         interaction?.move_window_id === id || interaction?.resize_window_id === id || interaction?.move_proxy_window_id === id,
-        false,
+        window.minimized || !window.workspace_visible,
         group,
         splitLayout,
+        contentMounts,
       )
       if (newlyCreated) root.append(node.frame)
-      if (newlyCreated && group) publishTabStripLayout(node, group)
+      if (splitLayout && !node.splitLeftPane.isConnected) {
+        node.frame.after(node.splitLeftPane, node.splitRightPane, node.splitDivider)
+      }
+      if (group) publishTabStripLayout(node, group)
     }
     for (const group of groups) {
       const splitLayout = splitLayoutForGroup(group)
@@ -1485,6 +1943,15 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
               maximized: false,
               fullscreen: false,
             }, true)
+          : visible.client_side_decoration && group.members.length > 1
+            ? windowModelWithClientRect(visible, {
+                x: visible.x,
+                y: visible.y,
+                width: visible.width,
+                height: visible.height,
+                maximized: visible.maximized,
+                fullscreen: visible.fullscreen,
+              }, true)
           : visible,
         group,
         splitLayout,
@@ -1497,9 +1964,36 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     for (const [id, node] of nodes) {
       if (live.has(id)) continue
       node.frame.remove()
+      node.splitLeftPane.remove()
+      node.splitRightPane.remove()
+      node.splitDivider.remove()
       nodes.delete(id)
     }
-    noteShellImperativeChromeApply(performance.now() - start, nodes.size + csdDropStrips.size + 7 + (surfaceNodes?.overlayLines.size ?? 0))
+    updateShellHostedContentMounts(contentMounts)
+    noteShellImperativeChromeApply(
+      performance.now() - start,
+      nodes.size + csdDropStrips.size + 7 + (surfaceNodes?.overlayLines.size ?? 0),
+      imperativeChromeDomWriteCount - writesStart,
+    )
+  }
+
+  const applySurface = () => {
+    const start = performance.now()
+    const writesStart = imperativeChromeDomWriteCount
+    const root = options.getRoot()
+    if (!root) {
+      clearSurfaceNodes()
+      return
+    }
+    const surface = ensureSurfaceNodes(root)
+    renderOverlay(surface)
+    renderSnapStrip(surface)
+    renderDragOverlays(surface)
+    noteShellImperativeChromeApply(
+      performance.now() - start,
+      nodes.size + csdDropStrips.size + 7 + (surfaceNodes?.overlayLines.size ?? 0),
+      imperativeChromeDomWriteCount - writesStart,
+    )
   }
 
   const applyDetails = (details: readonly DerpShellDetail[]) => {
@@ -1561,6 +2055,7 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
         }
       } else if (detail.type === 'workspace_state') {
         workspace = normalizeWorkspaceSnapshot(detail.state)
+        adoptDetachedTabDragIfReady()
         changed = true
       } else if (detail.type === 'interaction_state') {
         interaction = {
@@ -1615,9 +2110,21 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
   }
 
   const onPointerDown = (event: PointerEvent) => {
-    if (!event.isPrimary || event.button !== 0) return
+    if (!event.isPrimary) return
     const target = event.target
     const targetEl = target instanceof Element ? target : null
+    if (event.button === 2) {
+      const maximize = targetEl?.closest<HTMLElement>('[data-shell-maximize-trigger]') ?? null
+      const windowId = coerceWindowId(maximize?.getAttribute('data-shell-maximize-trigger') ?? null)
+      if (maximize && windowId !== null) {
+        event.preventDefault()
+        event.stopPropagation()
+        options.focusWindowViaShell(windowId)
+        options.openSnapAssistPicker(windowId, maximize.getBoundingClientRect())
+      }
+      return
+    }
+    if (event.button !== 0) return
     const splitDivider = targetEl?.closest<HTMLElement>('[data-workspace-split-divider]') ?? null
     if (splitDivider) {
       const groupId = splitDivider.getAttribute('data-workspace-split-divider')
@@ -1738,6 +2245,16 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
   const onContextMenu = (event: MouseEvent) => {
     const target = event.target
     if (!(target instanceof Element)) return
+    const maximize = target.closest<HTMLElement>('[data-shell-maximize-trigger]')
+    if (maximize) {
+      const windowId = coerceWindowId(maximize.getAttribute('data-shell-maximize-trigger'))
+      if (windowId === null) return
+      event.preventDefault()
+      event.stopPropagation()
+      options.focusWindowViaShell(windowId)
+      options.openSnapAssistPicker(windowId, maximize.getBoundingClientRect())
+      return
+    }
     const tab = target.closest<HTMLElement>('[data-workspace-tab]')
     if (!tab) return
     const windowId = coerceWindowId(tab.getAttribute('data-workspace-tab'))
@@ -1747,12 +2264,63 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     options.shellContextOpenTabMenu(windowId, event.clientX, event.clientY)
   }
 
+  function onTouchStart(event: TouchEvent) {
+    const target = event.target
+    const targetEl = target instanceof Element ? target : null
+    const touch = event.changedTouches[0]
+    if (!targetEl || !touch) return
+    const windowId = pointerWindowId(target)
+    if (windowId === null) return
+    if (targetEl.closest('[data-shell-titlebar-controls], [data-workspace-tab]')) {
+      options.focusWindowViaShell(windowId)
+      return
+    }
+    const resize = targetEl.closest<HTMLElement>('[data-shell-resize-left], [data-shell-resize-right], [data-shell-resize-bottom-left], [data-shell-resize-bottom-right]') ?? null
+    if (resize) {
+      event.preventDefault()
+      event.stopPropagation()
+      const edges =
+        resize.hasAttribute('data-shell-resize-bottom-left') ? SHELL_RESIZE_BOTTOM | SHELL_RESIZE_LEFT :
+          resize.hasAttribute('data-shell-resize-bottom-right') ? SHELL_RESIZE_BOTTOM | SHELL_RESIZE_RIGHT :
+            resize.hasAttribute('data-shell-resize-left') ? SHELL_RESIZE_LEFT :
+              SHELL_RESIZE_RIGHT
+      options.focusWindowViaShell(windowId)
+      options.beginShellWindowResize(windowId, edges, touch.clientX, touch.clientY)
+      return
+    }
+    if (!targetEl.closest('[data-shell-titlebar]')) return
+    event.preventDefault()
+    event.stopPropagation()
+    options.focusWindowViaShell(windowId)
+    const group = renderedGroupsByFrameWindowId.get(windowId)
+    if (group && group.splitLeftWindowId !== null && group.splitPaneFraction !== null && beginSplitGesture(group, -1, 'move', 0, touch.clientX, touch.clientY)) return
+    options.beginShellWindowMove(windowId, touch.clientX, touch.clientY)
+  }
+
+  function finishWindowDragDrop(pointerOverride?: { x: number; y: number } | null) {
+    if (tabDrag) return false
+    const windowId = activeWindowDragWindowId() ?? lastWindowDragWindowId
+    const pointer = pointerOverride ?? windowDragPointerClient() ?? lastWindowDragPointerClient
+    lastWindowDragPointerClient = null
+    lastWindowDragWindowId = null
+    if (windowId == null || !pointer) return false
+    const target = resolveWindowDragTarget(windowId, pointer.x, pointer.y)
+    if (!target) return false
+    return options.applyWindowDrop(windowId, target)
+  }
+
+  function onWindowDragPointerUp(event: PointerEvent) {
+    finishWindowDragDrop({ x: event.clientX, y: event.clientY })
+  }
+
   const attach = () => {
     const root = options.getRoot()
     if (!root) return
     root.addEventListener('pointerdown', onPointerDown, true)
     root.addEventListener('dblclick', onDblClick, true)
     root.addEventListener('contextmenu', onContextMenu, true)
+    root.addEventListener('touchstart', onTouchStart, true)
+    document.addEventListener('pointerup', onWindowDragPointerUp, true)
   }
 
   const dispose = () => {
@@ -1764,13 +2332,41 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       root.removeEventListener('pointerdown', onPointerDown, true)
       root.removeEventListener('dblclick', onDblClick, true)
       root.removeEventListener('contextmenu', onContextMenu, true)
+      root.removeEventListener('touchstart', onTouchStart, true)
     }
+    document.removeEventListener('pointerup', onWindowDragPointerUp, true)
+    clearTabDragListeners()
+    endTabDragPointerGrab()
     for (const node of nodes.values()) node.frame.remove()
     nodes.clear()
     for (const entry of csdDropStrips.values()) entry.node.remove()
     csdDropStrips.clear()
+    updateShellHostedContentMounts(new Map())
     clearSurfaceNodes()
   }
 
-  return { applyDetails, attach, dispose, schedule }
+  const flush = () => {
+    if (raf !== 0) {
+      cancelAnimationFrame(raf)
+      raf = 0
+    }
+    fullRaf = false
+    apply()
+  }
+
+  return {
+    applyDetails,
+    attach,
+    dispose,
+    flush,
+    schedule,
+    activeDragWindowId,
+    activeDropTarget,
+    applySplitGroupGeometry: applySplitGroupGeometryById,
+    cancelSplitGroupGesture: endSplitGesture,
+    finishWindowDragDrop,
+    clearSuppressTabClickWindowId: () => {},
+    shellHostedContentMountRevision: contentMountRev,
+    shellHostedContentMount: (windowId: number) => shellHostedContentMounts.get(windowId) ?? null,
+  }
 }

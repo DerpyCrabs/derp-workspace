@@ -236,7 +236,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
       );
       await closeWleirdWindow(base, windowId, probe.pid);
       windowId = null;
-      const afterOutput = await readText(probe.outputPath);
+      const afterOutput = await waitForFileValue(
+        "wait for wleird surface output report update",
+        probe.outputPath,
+        async () => {
+          const text = await readText(probe.outputPath);
+          return text && text !== initial ? text : null;
+        },
+        5000,
+      );
       assert(
         afterOutput?.includes('Surface "toplevel":'),
         "wleird-surface-outputs did not report toplevel output state",

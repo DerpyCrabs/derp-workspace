@@ -146,7 +146,7 @@ type ShellWindowGestureRuntimeOptions = {
   outputGeom: Accessor<{ w: number; h: number } | null>;
   layoutCanvasOrigin: Accessor<{ x: number; y: number } | null>;
   screenDraftRows: Accessor<LayoutScreen[]>;
-  windowById: (windowId: number) => Accessor<DerpWindow | undefined>;
+  readCompositorWindow: (windowId: number) => DerpWindow | undefined;
   reserveTaskbarForMon: (mon: LayoutScreen) => boolean;
   occupiedSnapZonesOnMonitor: (
     mon: LayoutScreen,
@@ -237,7 +237,7 @@ export function createShellWindowGestureRuntime(
   let shellMoveDeltaLogSeq = 0;
   let shellWindowResize: ShellResizeSession | null = null;
   let shellResizeDeltaLogSeq = 0;
-  const readWindow = (windowId: number) => options.windowById(windowId)();
+  const readWindow = (windowId: number) => options.readCompositorWindow(windowId);
 
   function workCanvasEqual(
     a: { x: number; y: number; w: number; h: number },

@@ -39,7 +39,8 @@ import { setNotificationsEnabledViaShell, type ShellNotificationsState } from '@
 import { getThemeSettings, setTheme, type ThemeMode, type ThemePalette } from '@/features/theme/themeStore'
 import { setMonitorLayout } from '@/features/tiling/tilingConfig'
 import type { LayoutType } from '@/features/tiling/layouts'
-import { windowIsShellHosted, type DerpWindow } from './appWindowState'
+import { windowIsShellHosted } from './appWindowState'
+import type { ShellUiWindowView } from '@/features/shell-ui/shellUiWindowView'
 import { screensListForLayout } from './appLayout'
 import type { LayoutScreen } from './types'
 
@@ -79,7 +80,7 @@ type CreateShellContextMenusArgs = {
   postSessionPower: (action: string) => Promise<void>
   canSessionControl: () => boolean
   exitSession: () => void
-  windows: Accessor<readonly DerpWindow[]>
+  windows: Accessor<readonly ShellUiWindowView[]>
   windowSwitcherSelectedWindowId: Accessor<number | null>
   focusedWindowId: Accessor<number | null>
   notificationsState: Accessor<ShellNotificationsState | null>
@@ -177,7 +178,7 @@ const MONITOR_LAYOUTS: { value: LayoutType; label: string; keywords: string[] }[
   { value: 'custom-auto', label: 'Custom auto layout', keywords: ['tiling', 'custom'] },
 ]
 
-function commandWindowLabel(window: DerpWindow): string {
+function commandWindowLabel(window: ShellUiWindowView): string {
   return (
     window.title.trim() ||
     window.app_id.trim() ||

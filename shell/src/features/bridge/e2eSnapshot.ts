@@ -1098,6 +1098,11 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
         '[data-settings-hotkey-enabled-option="no"]',
         args.origin,
       ),
+      settings_hotkey_cycle_action_trigger: queryRect(
+        cache,
+        '[data-settings-hotkey-action="cycle-keyboard-layout"]',
+        args.origin,
+      ),
       settings_hotkey_action_trigger: queryLargestHitRect(cache, '[data-settings-hotkey-action]', args.origin),
       settings_hotkey_action_scratchpad_option: queryRect(
         cache,

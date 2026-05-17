@@ -195,8 +195,14 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
     if (!groupId) return false
     const group = options.groupForWindow(windowId)
     const split = getWorkspaceGroupSplit(options.workspaceSnapshot(), groupId)
-    const leftWindow = group?.splitLeftWindow ?? null
-    const rightWindow = group?.visibleWindow ?? null
+    const leftWindow =
+      group?.splitLeftWindowId == null
+        ? null
+        : options.allWindowsMap().get(group.splitLeftWindowId) ?? null
+    const rightWindow =
+      group?.visibleWindowId == null
+        ? null
+        : options.allWindowsMap().get(group.visibleWindowId) ?? null
     const restoreRect =
       split?.leftWindowId === windowId && leftWindow && rightWindow
         ? {

@@ -12,6 +12,7 @@ import {
   type WorkspaceSnapshot,
 } from '@/features/workspace/workspaceSnapshot'
 import type { ExternalCommandPaletteState } from '@/features/command-palette/commandPalette'
+import { shellUiWindowView, type ShellUiWindowView } from '@/features/shell-ui/shellUiWindowView'
 
 export type CompositorFollowup = {
   flushWindows?: boolean
@@ -105,7 +106,7 @@ function sameNumberArray(left: readonly number[], right: readonly number[]): boo
   return true
 }
 
-function sameWindowArray(left: readonly DerpWindow[], right: readonly DerpWindow[]): boolean {
+function sameWindowArray<T>(left: readonly T[], right: readonly T[]): boolean {
   if (left.length !== right.length) return false
   for (let index = 0; index < left.length; index += 1) {
     if (left[index] !== right[index]) return false
@@ -173,6 +174,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   const modelOwner = getOwner()
   const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
   const windowAccessors = new Map<number, Accessor<DerpWindow | undefined>>()
+  const shellUiWindowAccessors = new Map<number, Accessor<ShellUiWindowView | undefined>>()
   const [windowOrderIds, setWindowOrderIds] = createSignal<number[]>([])
   const [windowsRevision, setWindowsRevision] = createSignal(-1)
   const [windowOrderRevision, setWindowOrderRevision] = createSignal(-1)
@@ -225,6 +227,34 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     }
     return sameWindowArray(prev, out) ? prev : out
   })
+  const shellUiWindowsMap = createMemo((previous: ReadonlyMap<number, ShellUiWindowView> = new Map()) => {
+    const next = new Map<number, ShellUiWindowView>()
+    let changed = previous.size !== allWindowsMap().size
+    for (const [windowId, window] of allWindowsMap()) {
+      const view = shellUiWindowView(window, previous.get(windowId))
+      next.set(windowId, view)
+      if (previous.get(windowId) !== view) changed = true
+    }
+    return changed ? next : previous
+  })
+  const shellUiWindowsList = createMemo((previous: ShellUiWindowView[] = []) => {
+    const out: ShellUiWindowView[] = []
+    const map = shellUiWindowsMap()
+    for (const id of windowsListIds()) {
+      const window = map.get(id)
+      if (window) out.push(window)
+    }
+    return sameWindowArray(previous, out) ? previous : out
+  })
+  const shellUiWindowById = (windowId: number) => {
+    let accessor = shellUiWindowAccessors.get(windowId)
+    if (!accessor) {
+      const createAccessor = () => createMemo(() => shellUiWindowsMap().get(windowId), undefined, { equals: Object.is })
+      accessor = modelOwner ? (runWithOwner(modelOwner, createAccessor) ?? createAccessor()) : createAccessor()
+      shellUiWindowAccessors.set(windowId, accessor)
+    }
+    return accessor
+  }
   const liveFocusedWindowId = createMemo(() => {
     const windowId = focusedWindowId()
     return windowId !== null && windows().has(windowId) ? windowId : null
@@ -362,6 +392,9 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     windowsListIds,
     windowsList,
     workspaceWindowsList,
+    shellUiWindowsMap,
+    shellUiWindowsList,
+    shellUiWindowById,
     workspaceSnapshot,
     focusedWindowId: liveFocusedWindowId,
     shellHostedAppByWindow,

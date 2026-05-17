@@ -41,12 +41,12 @@ import { primeFileBrowserWindowPath } from '@/apps/file-browser/fileBrowserState
 import { primeShellWindowState } from '@/features/shell-ui/shellWindowState'
 import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 import { screensListForLayout } from '@/host/appLayout'
-import type { DerpWindow } from '@/host/appWindowState'
+import type { ShellUiWindowView } from '@/features/shell-ui/shellUiWindowView'
 import type { LayoutScreen } from '@/host/types'
 import { monitorWorkAreaGlobal } from '@/features/tiling/tileSnap'
 
 type BackedShellWindowActionsOptions = {
-  getWindows: () => DerpWindow[]
+  getWindows: () => ShellUiWindowView[]
   getScreenDraftRows: () => LayoutScreen[]
   getOutputGeom: () => { w: number; h: number } | null
   getLayoutCanvasOrigin: () => { x: number; y: number } | null
@@ -57,7 +57,7 @@ type BackedShellWindowActionsOptions = {
 }
 
 function hostedWindowStaggerIndex(
-  windows: readonly DerpWindow[],
+  windows: readonly ShellUiWindowView[],
   monitorName: string,
 ): number {
   return windows.filter(
@@ -69,7 +69,7 @@ function hostedWindowStaggerIndex(
 }
 
 function nextWindowId(
-  windows: readonly DerpWindow[],
+  windows: readonly ShellUiWindowView[],
   pendingIds: Iterable<number>,
   reservedIds: Iterable<number>,
   isWindowId: (windowId: number) => boolean,
@@ -103,7 +103,7 @@ type ResolveBackedWindowClientAreaGlobalArgs = {
   reserveTaskbar: boolean
   work: { x: number; y: number; w: number; h: number }
   staggerIndex: number
-  windows: readonly DerpWindow[]
+  windows: readonly ShellUiWindowView[]
   pendingOpens: readonly Pick<BackedWindowOpenPayload, 'window_id' | 'output_name'>[]
   fallbackMonitorName: string
 }

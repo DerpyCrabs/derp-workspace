@@ -17,7 +17,7 @@ import { SETTINGS_NAV, type SettingsPageId } from './settingsNavigation'
 import type { DefaultApplicationsController } from '@/apps/default-applications/defaultApplications'
 import type { DesktopApplicationsController } from '@/features/desktop/desktopApplicationsState'
 import type { ShellNotificationsState } from '@/features/notifications/notificationsState'
-import type { DerpWindow } from '@/host/appWindowState'
+import type { ShellUiWindowView } from '@/features/shell-ui/shellUiWindowView'
 
 export type { SettingsLayoutScreen }
 
@@ -51,7 +51,7 @@ export type SettingsPanelProps = {
   setSessionAutoSaveEnabled: (enabled: boolean) => void
   defaultApps: DefaultApplicationsController
   desktopApps: DesktopApplicationsController
-  windowsList: Accessor<readonly DerpWindow[]>
+  windowsList: Accessor<readonly ShellUiWindowView[]>
   notificationsState: Accessor<ShellNotificationsState | null>
 }
 

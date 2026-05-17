@@ -3,7 +3,7 @@ import type { ShellBatteryState } from '@/apps/settings/batteryState'
 import { ShellSurfaceLayers } from '@/host/ShellSurfaceLayers'
 import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/shellUiWindows'
 import type { TaskbarPin, TaskbarSniItem, TaskbarWindowRow } from '@/features/taskbar/Taskbar'
-import type { DerpWindow } from '@/host/appWindowState'
+import type { ShellUiWindowView } from '@/features/shell-ui/shellUiWindowView'
 import type { LayoutScreen } from '@/host/types'
 
 type ShellSurfaceRuntimeOptions = {
@@ -31,7 +31,7 @@ type ShellSurfaceRuntimeOptions = {
   trayReservedPx: Accessor<number>
   sniTrayItems: Accessor<TaskbarSniItem[]>
   trayIconSlotPx: Accessor<number>
-  windows: Accessor<ReadonlyMap<number, DerpWindow>>
+  windows: Accessor<ReadonlyMap<number, ShellUiWindowView>>
   closeGroupWindow: (windowId: number) => void
   activateTaskbarGroup: (windowId: number) => void
   activateTaskbarPin: (pin: TaskbarPin, monitorName: string) => void

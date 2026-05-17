@@ -112,6 +112,7 @@ type RegisterShellE2eBridgeOptions = {
   openShellTestWindow: () => boolean
   resetTilingConfig: () => void
   getMenuLayerHostEl: () => HTMLElement | undefined
+  flushImperativeChrome?: () => void
 }
 
 function flattenTaskbarRowsByMonitor(taskbarRowsByMonitor: ReadonlyMap<string, readonly TaskbarRowLike[]>): TaskbarRowLike[] {
@@ -166,6 +167,7 @@ export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
   function publishE2eShellSnapshot(requestId: number) {
     const send = window.__derpShellWireSend
     if (!send) return
+    options.flushImperativeChrome?.()
     const workspaceGroups = options.getWorkspaceGroups()
     let sessionSnapshot: SessionSnapshot | null = null
     let sessionSnapshotError: string | null = null
@@ -222,6 +224,7 @@ export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
   function publishE2eShellHtml(requestId: number, selector?: string | null) {
     const send = window.__derpShellWireSend
     if (!send) return
+    options.flushImperativeChrome?.()
     send('e2e_html_response', requestId, buildE2eShellHtml(document, selector))
   }
 

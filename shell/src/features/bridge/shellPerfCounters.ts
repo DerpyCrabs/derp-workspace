@@ -24,7 +24,9 @@ export type ShellRuntimePerfSnapshot = {
   dom_measure_ms: number
   imperative_chrome_apply_count: number
   imperative_chrome_apply_ms: number
+  imperative_chrome_apply_max_ms: number
   imperative_chrome_nodes: number
+  imperative_chrome_dom_writes: number
   raf_sample_count: number
   raf_sample_ms: number
   raf_max_delta_ms: number
@@ -59,7 +61,9 @@ const counters: ShellRuntimePerfSnapshot = {
   dom_measure_ms: 0,
   imperative_chrome_apply_count: 0,
   imperative_chrome_apply_ms: 0,
+  imperative_chrome_apply_max_ms: 0,
   imperative_chrome_nodes: 0,
+  imperative_chrome_dom_writes: 0,
   raf_sample_count: 0,
   raf_sample_ms: 0,
   raf_max_delta_ms: 0,
@@ -161,10 +165,13 @@ export function noteShellDomMeasure(count = 1, ms = 0) {
   counters.dom_measure_ms += Math.max(0, ms)
 }
 
-export function noteShellImperativeChromeApply(ms: number, nodes: number) {
+export function noteShellImperativeChromeApply(ms: number, nodes: number, domWrites = 0) {
+  const elapsed = Math.max(0, ms)
   counters.imperative_chrome_apply_count += 1
-  counters.imperative_chrome_apply_ms += Math.max(0, ms)
+  counters.imperative_chrome_apply_ms += elapsed
+  counters.imperative_chrome_apply_max_ms = Math.max(counters.imperative_chrome_apply_max_ms, elapsed)
   counters.imperative_chrome_nodes = Math.max(0, Math.trunc(nodes))
+  counters.imperative_chrome_dom_writes += Math.max(0, Math.trunc(domWrites))
 }
 
 export function resetShellRuntimePerfCounters() {
@@ -193,7 +200,9 @@ export function resetShellRuntimePerfCounters() {
   counters.dom_measure_ms = 0
   counters.imperative_chrome_apply_count = 0
   counters.imperative_chrome_apply_ms = 0
+  counters.imperative_chrome_apply_max_ms = 0
   counters.imperative_chrome_nodes = 0
+  counters.imperative_chrome_dom_writes = 0
   resetShellRuntimeRafCounters()
 }
 
@@ -210,6 +219,7 @@ export function shellRuntimePerfSnapshot(): ShellRuntimePerfSnapshot {
     batch_apply_ms: roundMs(counters.batch_apply_ms),
     dom_measure_ms: roundMs(counters.dom_measure_ms),
     imperative_chrome_apply_ms: roundMs(counters.imperative_chrome_apply_ms),
+    imperative_chrome_apply_max_ms: roundMs(counters.imperative_chrome_apply_max_ms),
     raf_sample_ms: roundMs(counters.raf_sample_ms),
     raf_max_delta_ms: roundMs(counters.raf_max_delta_ms),
   }

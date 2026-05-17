@@ -66,7 +66,7 @@ async function scrollToHotkeyActionTrigger(base: string): Promise<ShellSnapshot>
   for (let attempt = 0; attempt < 24; attempt += 1) {
     const settingsWindow = shell.windows.find((window) => window.window_id === SHELL_UI_SETTINGS_WINDOW_ID)
     assert(settingsWindow, 'missing settings window for hotkey scroll')
-    const trigger = shell.controls?.settings_hotkey_action_trigger
+    const trigger = shell.controls?.settings_hotkey_cycle_action_trigger ?? shell.controls?.settings_hotkey_action_trigger
     if (trigger) {
       const minY = settingsWindow.y + 140
       const maxY = settingsWindow.y + settingsWindow.height - 180
@@ -90,7 +90,7 @@ async function clickScratchpadActionOption(base: string): Promise<void> {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
       const openOption = shell.controls?.settings_hotkey_action_scratchpad_option
       if (openOption) return openOption
-      const trigger = shell.controls?.settings_hotkey_action_trigger
+      const trigger = shell.controls?.settings_hotkey_cycle_action_trigger ?? shell.controls?.settings_hotkey_action_trigger
       if (!trigger) return null
       await clickRect(base, trigger)
       const afterClick = await getJson<ShellSnapshot>(base, '/test/state/shell')
@@ -120,7 +120,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
   test('custom hotkey dropdowns respond to pointer selection', async ({ base }) => {
     await openKeyboardSettings(base)
     const ready = await scrollToHotkeyActionTrigger(base)
-    assert(ready.controls?.settings_hotkey_action_trigger, 'missing hotkey dropdown trigger')
+    assert(ready.controls?.settings_hotkey_cycle_action_trigger ?? ready.controls?.settings_hotkey_action_trigger, 'missing hotkey dropdown trigger')
     await clickScratchpadActionOption(base)
     const scratchpadHtml = await waitFor(
       'wait for scratchpad hotkey editor',

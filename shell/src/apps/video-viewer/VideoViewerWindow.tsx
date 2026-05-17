@@ -22,13 +22,12 @@ import {
   subscribeShellWindowState,
 } from '@/features/shell-ui/shellWindowState'
 import type { ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
-import type { DerpWindow } from '@/host/appWindowState'
 
 type VideoViewerWindowProps = {
   windowId: number
   compositorAppState: Accessor<unknown | null>
   shellWireSend: ShellCompositorWireSend
-  windowModel: Accessor<DerpWindow | undefined>
+  fullscreen: Accessor<boolean>
   onOpenContainingFolder?: (path: string) => void
   onOpenExternalFile?: (path: string, context: { directory: string; showHidden: boolean }) => void
 }
@@ -176,9 +175,7 @@ export function VideoViewerWindow(props: VideoViewerWindowProps) {
   }
 
   function toggleWindowFullscreen() {
-    const w = props.windowModel()
-    if (!w || w.minimized) return
-    props.shellWireSend('set_fullscreen', props.windowId, w.fullscreen ? 0 : 1)
+    props.shellWireSend('set_fullscreen', props.windowId, props.fullscreen() ? 0 : 1)
   }
 
   function togglePlay() {
@@ -419,11 +416,11 @@ export function VideoViewerWindow(props: VideoViewerWindowProps) {
               />
               <button
                 type="button"
-                title={props.windowModel()?.fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                title={props.fullscreen() ? 'Exit fullscreen' : 'Fullscreen'}
                 class="inline-flex h-7 w-7 items-center justify-center rounded-md text-white hover:bg-white/10"
                 onClick={() => toggleWindowFullscreen()}
               >
-                {props.windowModel()?.fullscreen ? (
+                {props.fullscreen() ? (
                   <Shrink class="h-3.5 w-3.5" stroke-width={2} />
                 ) : (
                   <Expand class="h-3.5 w-3.5" stroke-width={2} />

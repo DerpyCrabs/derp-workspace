@@ -20,7 +20,7 @@ import {
 import type { ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
 import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/shellUiWindows'
 import { windowLabel as groupedWindowLabel } from '@/features/workspace/tabGroupOps'
-import type { DerpWindow } from '@/host/appWindowState'
+import type { ShellUiWindowView } from '@/features/shell-ui/shellUiWindowView'
 import type { ExclusionHudZone, LayoutScreen } from '@/host/types'
 import {
   fileOpenCategoryForPath,
@@ -35,7 +35,9 @@ import type { WorkspaceTaskbarPinMonitor } from '@/features/workspace/workspaceP
 import type { SettingsPageId } from '@/apps/settings/settingsNavigation'
 
 export type ShellHostedWindowContentEnv = {
-  windowById: (windowId: number) => Accessor<DerpWindow | undefined>
+  currentMonitorName: Accessor<string | null>
+  shellWindowTitle: (windowId: number) => string | null
+  shellWindowFullscreen: (windowId: number) => Accessor<boolean>
   shellHostedAppByWindow: () => Record<number, unknown>
   shellWireSend: ShellCompositorWireSend
   taskbarPins: Accessor<readonly WorkspaceTaskbarPinMonitor[]>
@@ -85,7 +87,7 @@ export type ShellHostedWindowContentEnv = {
   shellChromePrimaryName: Accessor<string | null>
   taskbarAutoHide: Accessor<boolean>
   viewportCss: Accessor<{ w: number; h: number }>
-  windowsList: () => readonly DerpWindow[]
+  windowsList: () => readonly ShellUiWindowView[]
   pointerClient: Accessor<{ x: number; y: number } | null>
   pointerInMain: Accessor<{ x: number; y: number } | null>
   rootPointerDowns: Accessor<number>
@@ -154,7 +156,7 @@ export function renderShellHostedWindowContent(
         screenDraft={env.screenDraft}
         setScreenDraft={env.setScreenDraft}
         markScreenDraftDirty={env.markScreenDraftDirty}
-        currentMonitorName={() => env.windowById(SHELL_UI_SETTINGS_WINDOW_ID)()?.output_name ?? null}
+        currentMonitorName={env.currentMonitorName}
         shellChromePrimaryName={env.shellChromePrimaryName}
         autoShellChromeMonitorName={env.autoShellChromeMonitorName}
         taskbarAutoHide={env.taskbarAutoHide}
@@ -184,12 +186,11 @@ export function renderShellHostedWindowContent(
     )
   }
   if (isShellTestWindowId(windowId)) {
-    const window = env.windowById(windowId)()
     return (
       <ShellTestWindowContent
         windowId={windowId}
         title={
-          window?.title ||
+          env.shellWindowTitle(windowId) ||
           groupedWindowLabel({ window_id: windowId, title: '', app_id: SHELL_UI_TEST_APP_ID })
         }
       />
@@ -257,7 +258,7 @@ export function renderShellHostedWindowContent(
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}
-            windowModel={env.windowById(id)}
+            fullscreen={env.shellWindowFullscreen(id)}
             onOpenContainingFolder={(path) => env.onOpenFileBrowserInNewWindow(path)}
             onOpenExternalFile={(path, context) =>
               env.onOpenFileWith(optionById('xdg-open', fileOpenCategoryForPath(path), env.desktopApps.items()), path, context)
@@ -275,7 +276,7 @@ export function renderShellHostedWindowContent(
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}
-            windowModel={env.windowById(id)}
+            fullscreen={env.shellWindowFullscreen(id)}
             onOpenContainingFolder={(path) => env.onOpenFileBrowserInNewWindow(path)}
             onOpenExternalFile={(path, context) =>
               env.onOpenFileWith(optionById('xdg-open', fileOpenCategoryForPath(path), env.desktopApps.items()), path, context)
@@ -293,7 +294,7 @@ export function renderShellHostedWindowContent(
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}
-            windowModel={env.windowById(id)}
+            fullscreen={env.shellWindowFullscreen(id)}
             onOpenContainingFolder={(path) => env.onOpenFileBrowserInNewWindow(path)}
             onOpenExternalFile={(path, context) =>
               env.onOpenFileWith(optionById('xdg-open', fileOpenCategoryForPath(path), env.desktopApps.items()), path, context)
@@ -311,7 +312,7 @@ export function renderShellHostedWindowContent(
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}
-            windowModel={env.windowById(id)}
+            fullscreen={env.shellWindowFullscreen(id)}
             onOpenContainingFolder={(path) => env.onOpenFileBrowserInNewWindow(path)}
             onOpenExternalFile={(path, context) =>
               env.onOpenFileWith(optionById('xdg-open', fileOpenCategoryForPath(path), env.desktopApps.items()), path, context)

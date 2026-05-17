@@ -1,5 +1,5 @@
 import { For, Index, Show, createSignal, onMount } from 'solid-js'
-import type { DerpWindow } from '@/host/appWindowState'
+import type { ShellUiWindowView } from '@/features/shell-ui/shellUiWindowView'
 import { shellHttpBase } from '@/features/bridge/shellHttp'
 import {
   createDefaultScratchpad,
@@ -37,7 +37,7 @@ function updateRule(item: ScratchpadItem, index: number, next: ScratchpadRule): 
   }
 }
 
-function ruleValueRows(window: DerpWindow): { field: ScratchpadRuleField; value: string }[] {
+function ruleValueRows(window: ShellUiWindowView): { field: ScratchpadRuleField; value: string }[] {
   return [
     { field: 'app_id', value: window.app_id },
     { field: 'title', value: window.title },
@@ -51,7 +51,7 @@ function visibleValue(value: string): string {
   return value.trim().length > 0 ? value : '(empty)'
 }
 
-export function SettingsScratchpadsPage(props: { windows: () => readonly DerpWindow[] }) {
+export function SettingsScratchpadsPage(props: { windows: () => readonly ShellUiWindowView[] }) {
   const [settings, setSettings] = createSignal<ScratchpadSettings>({ items: [] })
   const [err, setErr] = createSignal<string | null>(null)
   const [busy, setBusy] = createSignal(false)
@@ -158,9 +158,6 @@ export function SettingsScratchpadsPage(props: { windows: () => readonly DerpWin
                   </div>
                   <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[0.68rem] text-(--shell-text-dim)">
                     <span>output={visibleValue(window.output_name)}</span>
-                    <span>
-                      rect={window.x},{window.y} {window.width}x{window.height}
-                    </span>
                     <Show when={window.minimized}>
                       <span>minimized</span>
                     </Show>

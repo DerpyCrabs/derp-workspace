@@ -71,7 +71,7 @@ async function createRuntimeFactory() {
       outputGeom: () => ({ w: 1920, h: 1080 }),
       layoutCanvasOrigin: () => ({ x: 0, y: 0 }),
       screenDraftRows: () => [screen],
-      windowById: () => () => windowRow,
+      readCompositorWindow: () => windowRow,
       reserveTaskbarForMon: () => false,
       occupiedSnapZonesOnMonitor: () => [],
       sendSetMonitorTile: () => true,

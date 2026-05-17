@@ -273,6 +273,31 @@ describe('createCompositorModel', () => {
     })
   })
 
+  it('keeps shell ui window views stable across geometry-only authoritative rows', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      model.applyAuthoritativeSnapshotDetails([{ type: 'window_list', revision: 1, windows: [nativeWindow(7, 'Stable')] }])
+      const beforeWindow = model.shellUiWindowsMap().get(7)
+      const beforeList = model.shellUiWindowsList()
+      const accessor = model.shellUiWindowById(7)
+
+      model.applyAuthoritativeSnapshotDetails([
+        {
+          type: 'window_list',
+          revision: 2,
+          windows: [{ ...nativeWindow(7, 'Stable'), x: 400, y: 500, width: 900, height: 700 }],
+        },
+      ])
+
+      expect(model.shellUiWindowsMap().get(7)).toBe(beforeWindow)
+      expect(model.shellUiWindowsList()).toBe(beforeList)
+      expect(accessor()).toBe(beforeWindow)
+      expect(accessor()).not.toHaveProperty('x')
+      expect(accessor()).not.toHaveProperty('width')
+      dispose()
+    })
+  })
+
   it('clears authoritative domains only from explicit snapshot domain clears', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()
