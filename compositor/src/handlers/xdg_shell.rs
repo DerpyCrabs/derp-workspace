@@ -1,7 +1,8 @@
 use smithay::{
     delegate_xdg_shell,
     desktop::{
-        find_popup_root_surface, get_popup_toplevel_coords, PopupKind, PopupManager, Space, Window,
+        find_popup_root_surface, get_popup_toplevel_coords, layer_map_for_output, PopupKind,
+        PopupManager, Space, Window,
     },
     input::{
         keyboard::{
@@ -982,35 +983,47 @@ pub fn handle_commit(popups: &mut PopupManager, space: &Space<DerpSpaceElem>, su
 }
 
 impl CompositorState {
-    fn unconstrain_popup(&self, popup: &PopupSurface) {
+    pub(crate) fn unconstrain_popup(&self, popup: &PopupSurface) {
         let Ok(root) = find_popup_root_surface(&PopupKind::Xdg(popup.clone())) else {
             return;
         };
-        let Some(window) = self.output_topology.space.elements().find_map(|e| {
+        let target = if let Some(window) = self.output_topology.space.elements().find_map(|e| {
             if let DerpSpaceElem::Wayland(w) = e {
                 (w.toplevel().unwrap().wl_surface() == &root).then_some(w.clone())
             } else {
                 None
             }
-        }) else {
+        }) {
+            let window_geo = self
+                .output_topology
+                .space
+                .element_geometry(&DerpSpaceElem::Wayland(window.clone()))
+                .unwrap();
+            let wg = &window_geo;
+            let output = self
+                .output_for_global_xywh(wg.loc.x, wg.loc.y, wg.size.w, wg.size.h)
+                .or_else(|| self.leftmost_output())
+                .unwrap();
+            let output_geo = self.output_topology.space.output_geometry(&output).unwrap();
+            let mut target = output_geo;
+            target.loc -= get_popup_toplevel_coords(&PopupKind::Xdg(popup.clone()));
+            target.loc -= window_geo.loc;
+            target
+        } else if let Some((output, layer)) = self.layer_surface_for_root(&root) {
+            let Some(output_geo) = self.output_topology.space.output_geometry(&output) else {
+                return;
+            };
+            let layer_map = layer_map_for_output(&output);
+            let Some(layer_geo) = layer_map.layer_geometry(&layer) else {
+                return;
+            };
+            let mut target = output_geo;
+            target.loc -= get_popup_toplevel_coords(&PopupKind::Xdg(popup.clone()));
+            target.loc -= output_geo.loc + layer_geo.loc;
+            target
+        } else {
             return;
         };
-
-        let window_geo = self
-            .output_topology
-            .space
-            .element_geometry(&DerpSpaceElem::Wayland(window.clone()))
-            .unwrap();
-        let wg = &window_geo;
-        let output = self
-            .output_for_global_xywh(wg.loc.x, wg.loc.y, wg.size.w, wg.size.h)
-            .or_else(|| self.leftmost_output())
-            .unwrap();
-        let output_geo = self.output_topology.space.output_geometry(&output).unwrap();
-
-        let mut target = output_geo;
-        target.loc -= get_popup_toplevel_coords(&PopupKind::Xdg(popup.clone()));
-        target.loc -= window_geo.loc;
 
         popup.with_pending_state(|state| {
             state.geometry = state.positioner.get_unconstrained_geometry(target);

@@ -82,6 +82,7 @@ impl WlrLayerShellHandler for CompositorState {
     }
 
     fn new_popup(&mut self, _parent: WlrLayerSurface, popup: PopupSurface) {
+        self.unconstrain_popup(&popup);
         let _ = self.popups.track_popup(PopupKind::Xdg(popup));
     }
 

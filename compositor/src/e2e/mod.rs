@@ -203,6 +203,7 @@ struct E2eOskLayerSnapshot {
     output_name: String,
     namespace: String,
     global: E2eRectSnapshot,
+    bbox_global: E2eRectSnapshot,
 }
 
 #[derive(Serialize)]
@@ -211,6 +212,7 @@ struct E2eLayerSurfaceSnapshot {
     output_name: String,
     namespace: String,
     global: Option<E2eRectSnapshot>,
+    bbox_global: Option<E2eRectSnapshot>,
 }
 
 #[derive(Serialize)]
@@ -831,13 +833,20 @@ impl CompositorState {
             let map = layer_map_for_output(output);
             for layer in map.layers() {
                 let geo = map.layer_geometry(layer);
+                let bbox = geo.map(|geo| {
+                    let geo = self.osk_visual_layer_geometry_for_output(output, layer, geo);
+                    let bbox = layer.bbox_with_popups();
+                    Rectangle::new(output_geo.loc + geo.loc + bbox.loc, bbox.size)
+                });
                 layer_surfaces.push(E2eLayerSurfaceSnapshot {
                     surface_id: layer.wl_surface().id().protocol_id(),
                     output_name: output_name.clone(),
                     namespace: layer.namespace().to_string(),
                     global: geo.map(|geo| {
+                        let geo = self.osk_visual_layer_geometry_for_output(output, layer, geo);
                         Self::e2e_rect_snapshot(Rectangle::new(output_geo.loc + geo.loc, geo.size))
                     }),
+                    bbox_global: bbox.map(Self::e2e_rect_snapshot),
                 });
                 if !Self::osk_layer_namespace(layer.namespace()) {
                     continue;
@@ -845,6 +854,7 @@ impl CompositorState {
                 let Some(geo) = geo else {
                     continue;
                 };
+                let geo = self.osk_visual_layer_geometry_for_output(output, layer, geo);
                 osk_layer_surfaces.push(E2eOskLayerSnapshot {
                     surface_id: layer.wl_surface().id().protocol_id(),
                     output_name: output_name.clone(),
@@ -853,6 +863,13 @@ impl CompositorState {
                         output_geo.loc + geo.loc,
                         geo.size,
                     )),
+                    bbox_global: {
+                        let bbox = layer.bbox_with_popups();
+                        Self::e2e_rect_snapshot(Rectangle::new(
+                            output_geo.loc + geo.loc + bbox.loc,
+                            bbox.size,
+                        ))
+                    },
                 });
             }
         }

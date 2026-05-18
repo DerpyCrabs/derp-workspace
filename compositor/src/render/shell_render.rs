@@ -560,7 +560,7 @@ pub(crate) fn shell_move_proxy_visible_rects_for_output(
         return Vec::new();
     };
     let clip_holes =
-        state.shell_exclusion_clip_rects_logical(output, Some(proxy.window_id), false, None);
+        state.shell_exclusion_clip_rects_logical(output, Some(proxy.window_id), false, None, true);
     let mut out = Vec::new();
     for layer in shell_move_proxy_layers(state) {
         let Some(visible) = layer.target_global_rect.intersection(output_geo) else {
@@ -669,7 +669,7 @@ fn build_shell_move_proxy_elements(
         return Vec::new();
     };
     let clip_holes =
-        state.shell_exclusion_clip_rects_logical(output, Some(proxy.window_id), false, None);
+        state.shell_exclusion_clip_rects_logical(output, Some(proxy.window_id), false, None, true);
     let scale = output.current_scale().fractional_scale();
     let mut out = Vec::new();
     for layer in shell_move_proxy_layers(state) {

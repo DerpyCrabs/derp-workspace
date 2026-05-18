@@ -622,6 +622,7 @@ impl CompositorState {
                 true,
             );
             self.refresh_wayland_window_fractional_scale(&window);
+            self.refresh_osk_exclusion_damage();
             let output_name = self
                 .output_for_window_position(
                     rect.loc.x,
@@ -825,13 +826,14 @@ impl CompositorState {
                 return;
             };
             let before = (loc.x, loc.y);
-            let after = (loc.x + pdx, loc.y + pdy);
+            let after = Point::from((loc.x + pdx, loc.y + pdy));
             self.output_topology.space.map_element(
                 DerpSpaceElem::Wayland(window.clone()),
                 after,
                 true,
             );
             self.refresh_wayland_window_fractional_scale(&window);
+            self.refresh_osk_exclusion_damage();
             self.input_routing.shell_move_pending_delta = (0, 0);
             self.notify_geometry_for_window(&window, true);
             self.shell_send_interaction_state();
@@ -863,9 +865,9 @@ impl CompositorState {
             return;
         };
         let before = (loc.x, loc.y);
-        let after = (loc.x + pdx, loc.y + pdy);
         let mut geometry = x11.geometry();
-        geometry.loc = Point::from(after);
+        let after = Point::from((loc.x + pdx, loc.y + pdy));
+        geometry.loc = after;
         if let Err(error) = x11.configure(Some(geometry)) {
             tracing::warn!(target: "derp_shell_move", wid, ?error, "shell_move_flush: x11 configure failed");
             self.input_routing.shell_move_clear_active_state();
@@ -878,6 +880,7 @@ impl CompositorState {
             .space
             .map_element(DerpSpaceElem::X11(x11.clone()), after, true);
         self.refresh_x11_surface_fractional_scale(&x11);
+        self.refresh_osk_exclusion_damage();
         self.input_routing.shell_move_pending_delta = (0, 0);
         let _ = self.sync_registry_from_x11_surface(&x11);
         self.shell_send_interaction_state();

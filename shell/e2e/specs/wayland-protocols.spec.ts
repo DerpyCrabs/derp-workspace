@@ -1575,6 +1575,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
       output: CompositorSnapshot["outputs"][number];
       taskbar: ShellSnapshot["taskbars"][number];
     } | null = null;
+    let nativeWindowIntersectsOsk: {
+      compositor: CompositorSnapshot;
+      window: CompositorSnapshot["windows"][number];
+      output: CompositorSnapshot["outputs"][number];
+    } | null = null;
+    let nativeWindowRestoredForTyping: {
+      compositor: CompositorSnapshot;
+      window: CompositorSnapshot["windows"][number];
+      output: CompositorSnapshot["outputs"][number];
+    } | null = null;
     let textWindow: CompositorSnapshot["windows"][number] | null = null;
     try {
       textClient = await spawnNativeWindow(base, state.knownWindowIds, {
@@ -1583,7 +1593,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         token: `text-input-osk-${stamp}`,
         strip: "green",
         width: 480,
-        height: 260,
+        height: 900,
         textInputProbe: true,
         textInputStatusJson: textStatusPath,
       });
@@ -1695,10 +1705,177 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const busPrefix = `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus`;
       const output = taskbarMoved.output;
       assert(output, "missing output for OSK commit probe");
-      const oskLayer = taskbarMoved.compositor.osk_layer_surfaces?.find(
+      let oskLayer = taskbarMoved.compositor.osk_layer_surfaces?.find(
         (layer) => layer.output_name === output.name && layer.global.width > 0 && layer.global.height > 0,
       );
       assert(oskLayer, "missing visible OSK layer for commit probe");
+      const dragOskLayer = oskLayer;
+      const oskCenter = dragOskLayer.global.x + dragOskLayer.global.width / 2;
+      const outputCenter = output.x + output.width / 2;
+      assert(
+        Math.abs(oskCenter - outputCenter) <= 2,
+        `OSK layer should be centered on output: osk=${JSON.stringify(dragOskLayer.global)} output=${JSON.stringify(output)}`,
+      );
+      const dragStartWindow = compositorWindowById(taskbarMoved.compositor, textClient.window.window_id) ?? focusedTextWindow;
+      await dragBetweenPoints(
+        base,
+        dragStartWindow.x + Math.round(dragStartWindow.width / 2),
+        dragStartWindow.y + 18,
+        dragStartWindow.x + Math.round(dragStartWindow.width / 2),
+        dragOskLayer.global.y + Math.round(dragOskLayer.global.height / 2),
+        10,
+      );
+      nativeWindowIntersectsOsk = await waitFor(
+        "wait for dragged native text-input window to intersect OSK",
+        async () => {
+          const next = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = compositorWindowById(next, textClient!.window.window_id);
+          const nextOutput = next.outputs.find((entry) => entry.name === output.name);
+          if (!window || !nextOutput) return null;
+          const windowBottom = window.y + window.height;
+          const windowRight = window.x + window.width;
+          const oskBottom = dragOskLayer.global.y + dragOskLayer.global.height;
+          const oskRight = dragOskLayer.global.x + dragOskLayer.global.width;
+          return window.x < oskRight &&
+            windowRight > dragOskLayer.global.x &&
+            window.y < oskBottom &&
+            windowBottom > dragOskLayer.global.y + 16
+            ? { compositor: next, window, output: nextOutput }
+            : null;
+        },
+        5000,
+        100,
+      );
+      const coveredScreenshot = await captureScreenshotRect(base, {
+        x: output.x,
+        y: output.y,
+        width: output.width,
+        height: output.height,
+      });
+      const coveredPng = await readPngRgba(coveredScreenshot.path);
+      const scaleX = coveredPng.width / output.width;
+      const scaleY = coveredPng.height / output.height;
+      const overlapX0 = Math.max(nativeWindowIntersectsOsk.window.x, dragOskLayer.global.x, output.x);
+      const overlapY0 = Math.max(nativeWindowIntersectsOsk.window.y, dragOskLayer.global.y, output.y);
+      const overlapX1 = Math.min(
+        nativeWindowIntersectsOsk.window.x + nativeWindowIntersectsOsk.window.width,
+        dragOskLayer.global.x + dragOskLayer.global.width,
+        output.x + output.width,
+      );
+      const overlapY1 = Math.min(
+        nativeWindowIntersectsOsk.window.y + nativeWindowIntersectsOsk.window.height,
+        dragOskLayer.global.y + dragOskLayer.global.height,
+        output.y + output.height,
+      );
+      let greenPixelsInOsk = 0;
+      let checkedPixelsInOsk = 0;
+      let hiddenOskScreenshot: { path: string } | null = null;
+      let oskVisibleChangedPixels = 0;
+      let oskVisibleComparedPixels = 0;
+      const px0 = Math.max(0, Math.floor((overlapX0 - output.x) * scaleX));
+      const py0 = Math.max(0, Math.floor((overlapY0 - output.y) * scaleY));
+      const px1 = Math.min(coveredPng.width, Math.ceil((overlapX1 - output.x) * scaleX));
+      const py1 = Math.min(coveredPng.height, Math.ceil((overlapY1 - output.y) * scaleY));
+      for (let y = py0; y < py1; y += 1) {
+        for (let x = px0; x < px1; x += 1) {
+          const index = (y * coveredPng.width + x) * 4;
+          const r = coveredPng.data[index];
+          const g = coveredPng.data[index + 1];
+          const b = coveredPng.data[index + 2];
+          const a = coveredPng.data[index + 3];
+          checkedPixelsInOsk += 1;
+          if (a > 180 && g > 120 && g > r + 35 && g > b + 20) greenPixelsInOsk += 1;
+        }
+      }
+      assert(checkedPixelsInOsk > 0, "expected OSK/window overlap pixels to check");
+      assert(
+        greenPixelsInOsk < Math.max(4, Math.floor(checkedPixelsInOsk * 0.002)),
+        `native window rendered above OSK: green=${greenPixelsInOsk}/${checkedPixelsInOsk}`,
+      );
+      await runLocalShell(
+        `${busPrefix} busctl --user call sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b false`,
+      );
+      hiddenOskScreenshot = await captureScreenshotRect(base, {
+        x: output.x,
+        y: output.y,
+        width: output.width,
+        height: output.height,
+      });
+      const hiddenOskPng = await readPngRgba(hiddenOskScreenshot.path);
+      assert(
+        hiddenOskPng.width === coveredPng.width && hiddenOskPng.height === coveredPng.height,
+        "OSK visibility comparison screenshots should have matching dimensions",
+      );
+      const oskPx0 = Math.max(0, Math.floor((dragOskLayer.global.x - output.x) * scaleX));
+      const oskPy0 = Math.max(0, Math.floor((dragOskLayer.global.y - output.y) * scaleY));
+      const oskPx1 = Math.min(coveredPng.width, Math.ceil((dragOskLayer.global.x + dragOskLayer.global.width - output.x) * scaleX));
+      const oskPy1 = Math.min(coveredPng.height, Math.ceil((dragOskLayer.global.y + dragOskLayer.global.height - output.y) * scaleY));
+      for (let y = oskPy0; y < oskPy1; y += 1) {
+        for (let x = oskPx0; x < oskPx1; x += 1) {
+          const index = (y * coveredPng.width + x) * 4;
+          const delta =
+            Math.abs(coveredPng.data[index] - hiddenOskPng.data[index]) +
+            Math.abs(coveredPng.data[index + 1] - hiddenOskPng.data[index + 1]) +
+            Math.abs(coveredPng.data[index + 2] - hiddenOskPng.data[index + 2]);
+          oskVisibleComparedPixels += 1;
+          if (delta > 24) oskVisibleChangedPixels += 1;
+        }
+      }
+      assert(oskVisibleComparedPixels > 0, "expected OSK visibility pixels to compare");
+      assert(
+        oskVisibleChangedPixels > Math.floor(oskVisibleComparedPixels * 0.03),
+        `OSK did not visibly render before hide: changed=${oskVisibleChangedPixels}/${oskVisibleComparedPixels}`,
+      );
+      await runLocalShell(
+        `${busPrefix} busctl --user call sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b true`,
+      );
+      await dragBetweenPoints(
+        base,
+        nativeWindowIntersectsOsk.window.x + Math.round(nativeWindowIntersectsOsk.window.width / 2),
+        nativeWindowIntersectsOsk.window.y + 18,
+        nativeWindowIntersectsOsk.window.x + Math.round(nativeWindowIntersectsOsk.window.width / 2),
+        output.y + 220,
+        10,
+      );
+      nativeWindowRestoredForTyping = await waitFor(
+        "wait for native text-input window restored above OSK",
+        async () => {
+          const next = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          const window = compositorWindowById(next, textClient!.window.window_id);
+          const nextOutput = next.outputs.find((entry) => entry.name === output.name);
+          if (!window || !nextOutput) return null;
+          return window.y + 120 < dragOskLayer.global.y ? { compositor: next, window, output: nextOutput } : null;
+        },
+        5000,
+        100,
+      );
+      await touchTap(base, nativeWindowRestoredForTyping.window.x + 70, nativeWindowRestoredForTyping.window.y + 78, 17);
+      taskbarMoved = await waitFor(
+        "wait for text-input OSK after native drag",
+        async () => {
+          const { compositor: nextCompositor, shell } = await getSnapshots(base);
+          const nextOutput = nextCompositor.outputs.find((entry) => entry.name === output.name);
+          const taskbar = shell.taskbars.find((entry) => entry.monitor === output.name);
+          if (!nextOutput || !taskbar?.rect) return null;
+          const usableBottom = (nextOutput.usable_y ?? nextOutput.y) + (nextOutput.usable_height ?? nextOutput.height);
+          if ((nextOutput.usable_height ?? nextOutput.height) >= nextOutput.height) return null;
+          if (nextCompositor.osk_layer_visible_on_preferred_output !== true) return null;
+          if (taskbar.rect.global_y + taskbar.rect.height > usableBottom + 2) return null;
+          return { compositor: nextCompositor, output: nextOutput, taskbar };
+        },
+        5000,
+        100,
+      );
+      oskLayer = taskbarMoved.compositor.osk_layer_surfaces?.find(
+        (layer) => layer.output_name === output.name && layer.global.width > 0 && layer.global.height > 0,
+      );
+      assert(oskLayer, "missing visible OSK layer after native drag");
       const screenshot = await captureScreenshotRect(base, {
         x: output.x,
         y: output.y,
@@ -1752,6 +1929,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
         mouseFocused,
         touchFocused,
         taskbarMoved,
+        nativeWindowIntersectsOsk,
+        nativeWindowRestoredForTyping,
+        coveredScreenshot,
+        hiddenOskScreenshot,
+        greenPixelsInOsk,
+        checkedPixelsInOsk,
+        oskVisibleChangedPixels,
+        oskVisibleComparedPixels,
         hidden,
         screenshot,
         textWindow,
@@ -1817,6 +2002,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
         mouseFocused,
         touchFocused,
         taskbarMoved,
+        nativeWindowIntersectsOsk,
+        nativeWindowRestoredForTyping,
         textWindow,
         compositor,
         shell,
@@ -2031,14 +2218,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       );
       const menuShell = await waitForProgramsMenuOpen(base);
       assert(menuShell.controls.programs_menu_search, "missing programs menu search");
-      await touchTap(
-        base,
-        menuShell.controls.programs_menu_search.x + Math.round(menuShell.controls.programs_menu_search.width / 2),
-        menuShell.controls.programs_menu_search.y + Math.round(menuShell.controls.programs_menu_search.height / 2),
-        32,
-      );
       const paletteTouchFocused = await waitFor(
-        "wait for touch-focused command palette OSK",
+        "wait for touch-opened command palette OSK",
         async () => {
           const { compositor, shell } = await getSnapshots(base);
           const search = shell.controls?.programs_menu_search;
@@ -2065,8 +2246,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
         100,
       );
       assert(paletteTouchFocused.shell.controls.programs_menu_search, "missing focused programs menu search");
+      assert(paletteTouchFocused.shell.controls.programs_menu_panel, "missing focused programs menu panel");
       const paletteOutput = paletteTouchFocused.output;
       const paletteOskLayer = paletteTouchFocused.oskLayer;
+      const palettePanel = paletteTouchFocused.shell.controls.programs_menu_panel;
+      assert(
+        palettePanel.global_y + palettePanel.height <= paletteOskLayer.global.y + 2,
+        `command palette overlaps OSK: panel=${JSON.stringify(palettePanel)} osk=${JSON.stringify(paletteOskLayer.global)}`,
+      );
       const paletteTapPoints = [0.36, 0.42, 0.48, 0.54].map((xRatio) => ({
         x: paletteOskLayer.global.x + Math.round(paletteOskLayer.global.width * xRatio),
         y: paletteOskLayer.global.y + Math.round(paletteOskLayer.global.height * 0.23),
@@ -2077,6 +2264,17 @@ export default defineGroup(import.meta.url, ({ test }) => {
         paletteOskLayer,
         paletteTapPoints,
       });
+      await touchTap(
+        base,
+        paletteOskLayer.global.x + 20,
+        paletteOskLayer.global.y + Math.round(paletteOskLayer.global.height * 0.23),
+        39,
+      );
+      const afterOskGapTap = await getJson<ShellSnapshot>(base, "/test/state/shell");
+      assert(
+        afterOskGapTap.programs_menu_query.length === 0,
+        `empty OSK layer area should not type into command palette: ${afterOskGapTap.programs_menu_query}`,
+      );
       for (const [index, point] of paletteTapPoints.entries()) {
         await touchTap(base, point.x, point.y, 40 + index);
       }
@@ -2086,6 +2284,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           "/test/state/compositor",
         ),
         shell: await getJson<ShellSnapshot>(base, "/test/state/shell"),
+        afterOskGapTap,
         paletteTapPoints,
       });
       const typedPalette = await waitFor(
@@ -2289,6 +2488,57 @@ export default defineGroup(import.meta.url, ({ test }) => {
         100,
       );
       await clickRect(base, shellWithOskToggle.controls!.taskbar_osk_toggle!);
+      const manuallyOpened = await waitFor(
+        "wait for taskbar-opened OSK",
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const oskLayer = compositor.osk_layer_surfaces?.find(
+            (layer) => layer.global.width > 0 && layer.global.height > 0,
+          );
+          return compositor.osk_visible === true && oskLayer ? { compositor, shell, oskLayer } : null;
+        },
+        5000,
+        100,
+      );
+      const manualOskLayer = manuallyOpened.oskLayer;
+      await touchTap(
+        base,
+        manualOskLayer.global.x + Math.round(manualOskLayer.global.width / 2),
+        manualOskLayer.global.y + manualOskLayer.global.height - 8,
+        61,
+      );
+      const manualAfterBottomTouch = await waitFor(
+        "wait for taskbar-opened OSK to stay visible after bottom touch",
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          return compositor.osk_visible === true ? { compositor, shell } : null;
+        },
+        5000,
+        100,
+      );
+      const shellWithPrograms = await waitFor(
+        "wait for programs toggle while manual OSK is open",
+        async () => {
+          const { shell } = await getSnapshots(base);
+          return shell.controls?.taskbar_programs_toggle ? shell : null;
+        },
+        5000,
+        100,
+      );
+      assert(shellWithPrograms.controls?.taskbar_programs_toggle, "missing programs toggle");
+      await clickRect(base, shellWithPrograms.controls.taskbar_programs_toggle);
+      await waitForProgramsMenuOpen(base);
+      const manualAfterShellFocus = await waitFor(
+        "wait for manually opened OSK to stay visible after shell focus",
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          return compositor.osk_visible === true ? { compositor, shell } : null;
+        },
+        5000,
+        100,
+      );
+      await tapKey(base, KEY.escape);
+      await waitForProgramsMenuClosed(base);
       const compositor = await getJson<CompositorSnapshot>(
         base,
         "/test/state/compositor",
@@ -2301,6 +2551,29 @@ export default defineGroup(import.meta.url, ({ test }) => {
         width: output.width,
         height: output.height,
       });
+      const shellWithHideToggle = await waitFor(
+        "wait for OSK toggle before hiding manual OSK",
+        async () => {
+          const { shell } = await getSnapshots(base);
+          return shell.controls?.taskbar_osk_toggle ? shell : null;
+        },
+        5000,
+        100,
+      );
+      assert(shellWithHideToggle.controls?.taskbar_osk_toggle, "missing OSK toggle before hiding manual OSK");
+      await clickRect(base, shellWithHideToggle.controls.taskbar_osk_toggle);
+      const manuallyHidden = await waitFor(
+        "wait for taskbar-hidden manual OSK",
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(
+            base,
+            "/test/state/compositor",
+          );
+          return compositor.osk_visible !== true ? compositor : null;
+        },
+        5000,
+        100,
+      );
       const busPrefix = `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus`;
       const hidden = await runLocalShell(
         `${busPrefix} busctl --user call sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b false`,
@@ -2309,10 +2582,135 @@ export default defineGroup(import.meta.url, ({ test }) => {
         stopped,
         started: { pid: started.pid, env: started.env },
         taskbarOskToggle: shellWithOskToggle.controls?.taskbar_osk_toggle,
+        manuallyOpened,
+        manualOskLayer,
+        manualAfterBottomTouch,
+        manualAfterShellFocus,
+        manuallyHidden,
         hidden,
         screenshot,
       });
     } finally {
+      await postJson(base, "/settings_osk", original);
+    }
+  });
+
+  test("command palette on the left monitor stays above touch-opened squeekboard", async ({
+    base,
+  }) => {
+    const command = await runLocalShell("command -v squeekboard");
+    assert(command.status === 0, `missing squeekboard: ${command.stderr}`);
+    const initial = await getSnapshots(base);
+    if (initial.compositor.outputs.length < 2) {
+      throw new SkipError("requires at least two outputs");
+    }
+    const targetOutput = [...initial.compositor.outputs].sort(
+      (left, right) => left.x - right.x || left.y - right.y,
+    )[0];
+    assert(targetOutput, "missing left output");
+    const initialTaskbar = initial.shell.taskbars.find(
+      (taskbar) => taskbar.monitor === targetOutput.name,
+    );
+    const hadPrograms = initialTaskbar?.has_programs_toggle === true;
+    const original = await getJson<OskSettings>(base, "/settings_osk");
+    try {
+      await postJson(base, "/settings_osk", {
+        enabled: true,
+        provider: "squeekboard",
+      });
+      await postJson(base, "/test/taskbar/component", {
+        output: targetOutput.name,
+        component: "programs",
+        enabled: true,
+      });
+      const shellWithLeftPrograms = await waitFor(
+        "wait for left monitor programs toggle",
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          const taskbar = shell.taskbars.find((entry) => entry.monitor === targetOutput.name);
+          return taskbar?.programs_toggle ? { shell, taskbar } : null;
+        },
+        5000,
+        100,
+      );
+      await touchTap(
+        base,
+        shellWithLeftPrograms.taskbar.programs_toggle!.x + Math.round(shellWithLeftPrograms.taskbar.programs_toggle!.width / 2),
+        shellWithLeftPrograms.taskbar.programs_toggle!.y + Math.round(shellWithLeftPrograms.taskbar.programs_toggle!.height / 2),
+        80,
+      );
+      await waitFor(
+        "wait for left monitor programs menu",
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const search = shell.controls?.programs_menu_search;
+          if (!shell.programs_menu_open || !search) return null;
+          if (
+            search.global_x < targetOutput.x ||
+            search.global_x >= targetOutput.x + targetOutput.width ||
+            search.global_y < targetOutput.y ||
+            search.global_y >= targetOutput.y + targetOutput.height
+          ) {
+            return null;
+          }
+          return { compositor, shell, search };
+        },
+        5000,
+        100,
+      );
+      const touchFocused = await waitFor(
+        "wait for left touch-opened command palette above OSK",
+        async () => {
+          const { compositor, shell } = await getSnapshots(base);
+          const panel = shell.controls?.programs_menu_panel;
+          const search = shell.controls?.programs_menu_search;
+          const oskLayer = compositor.osk_layer_surfaces?.find(
+            (layer) =>
+              layer.output_name === targetOutput.name &&
+              layer.global.width > 0 &&
+              layer.global.height > 0,
+          );
+          if (
+            !shell.programs_menu_open ||
+            !panel ||
+            !search ||
+            !oskLayer ||
+            compositor.osk_visible !== true ||
+            compositor.osk_shell_text_input_active !== true
+          ) {
+            return null;
+          }
+          if (panel.global_y + panel.height > oskLayer.global.y + 2) return null;
+          return { compositor, shell, panel, oskLayer };
+        },
+        5000,
+        100,
+      );
+      const screenshot = await captureScreenshotRect(base, {
+        x: targetOutput.x,
+        y: targetOutput.y,
+        width: targetOutput.width,
+        height: targetOutput.height,
+      });
+      await writeJsonArtifact("left-monitor-command-palette-osk.json", {
+        output: targetOutput,
+        panel: touchFocused.panel,
+        oskLayer: touchFocused.oskLayer,
+        screenshot: await copyArtifactFile(
+          "left-monitor-command-palette-osk.png",
+          screenshot.path,
+        ),
+      });
+      await tapKey(base, KEY.escape);
+      await waitForProgramsMenuClosed(base);
+    } finally {
+      if (!hadPrograms) {
+        await postJson(base, "/test/taskbar/component", {
+          output: targetOutput.name,
+          component: "programs",
+          enabled: false,
+        });
+      }
       await postJson(base, "/settings_osk", original);
     }
   });

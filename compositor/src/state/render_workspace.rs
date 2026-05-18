@@ -220,6 +220,7 @@ impl CompositorState {
         elem_window: Option<u32>,
         include_self_decor: bool,
         ordered_window_ids_on_output: Option<&[u32]>,
+        include_osk: bool,
     ) -> Vec<Rectangle<i32, Logical>> {
         let Some(ws) = self.workspace_logical_bounds() else {
             return Vec::new();
@@ -242,6 +243,13 @@ impl CompositorState {
                 .iter()
                 .filter_map(|z| z.intersection(visible)),
         );
+        if include_osk {
+            out.extend(
+                self.osk_visual_exclusion_rects_for_output(output)
+                    .into_iter()
+                    .filter_map(|z| z.intersection(visible)),
+            );
+        }
         if let Some(rect) = self
             .shell_native_drag_preview_clip_rect()
             .and_then(|rect| rect.intersection(visible))
@@ -301,12 +309,14 @@ impl CompositorState {
         elem_window: Option<u32>,
         include_self_decor: bool,
         ordered_window_ids_on_output: Option<&[u32]>,
+        include_osk: bool,
     ) -> Option<Arc<exclusion_clip::ShellExclusionClipCtx>> {
         let zones = self.shell_exclusion_clip_rects_logical(
             output,
             elem_window,
             include_self_decor,
             ordered_window_ids_on_output,
+            include_osk,
         );
         if zones.is_empty() {
             return None;
@@ -360,12 +370,36 @@ impl CompositorState {
             return None;
         }
         let info = self.windows.window_registry.window_info(window_id)?;
+        let window_rect = Rectangle::new(
+            Point::from((info.x, info.y)),
+            Size::from((info.width.max(1), info.height.max(1))),
+        );
+        if self.session_services.osk_visible == Some(true) {
+            for output in self.output_topology.space.outputs() {
+                let Some(output_geo) = self.output_topology.space.output_geometry(output) else {
+                    continue;
+                };
+                if !window_rect.overlaps(output_geo) {
+                    continue;
+                }
+                for osk in self.osk_visual_exclusion_rects_for_output(output) {
+                    if !window_rect.overlaps(osk) {
+                        continue;
+                    }
+                    let visible = Rectangle::new(
+                        output_geo.loc,
+                        Size::from((
+                            output_geo.size.w,
+                            osk.loc.y.saturating_sub(output_geo.loc.y),
+                        )),
+                    );
+                    return window_rect.intersection(visible);
+                }
+            }
+        }
         if info.minimized || self.native_window_uses_shell_chrome(&info) {
             return None;
         }
-        Some(Rectangle::new(
-            Point::from((info.x, info.y)),
-            Size::from((info.width.max(1), info.height.max(1))),
-        ))
+        Some(window_rect)
     }
 }

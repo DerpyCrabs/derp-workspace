@@ -79,6 +79,7 @@ impl CompositorState {
                 return;
             }
         };
+        self.sync_squeekboard_input_sources();
         let display = self.core.socket_name.to_string_lossy().into_owned();
         let gtk_theme = crate::session::settings_config::squeekboard_gtk_theme_for_theme(
             &crate::session::settings_config::read_theme_settings(),
@@ -128,6 +129,73 @@ impl CompositorState {
         }
         let next = crate::session::settings_config::squeekboard_gtk_theme_for_theme(theme);
         if self.session_services.osk_gtk_theme.as_deref() == Some(next.as_str()) {
+            return;
+        }
+        let visible =
+            self.session_services.osk_visible == Some(true) || self.osk_layer_surface_visible_now();
+        crate::sidecar::terminate_sidecar(&mut self.session_services.osk_child);
+        self.session_services.osk_gtk_theme = None;
+        self.session_services.osk_visible = None;
+        self.session_services.osk_layer_surfaces.clear();
+        self.start_osk(&settings.provider);
+        if visible {
+            self.set_osk_visible(true);
+        }
+    }
+
+    pub(crate) fn sync_squeekboard_input_sources(&self) {
+        let settings = crate::session::settings_config::read_keyboard_settings();
+        if settings.layouts.is_empty() {
+            return;
+        }
+        let sources = settings
+            .layouts
+            .iter()
+            .map(|entry| {
+                let id = if entry.variant.is_empty() {
+                    entry.layout.clone()
+                } else {
+                    format!("{}+{}", entry.layout, entry.variant)
+                };
+                format!("('xkb', '{id}')")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let value = format!("[{sources}]");
+        let mut command = std::process::Command::new("gsettings");
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .arg("set")
+            .arg("org.gnome.desktop.input-sources")
+            .arg("sources")
+            .arg(&value);
+        if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+            let uid = unsafe { libc::geteuid() };
+            let bus = format!("/run/user/{uid}/bus");
+            if std::path::Path::new(&bus).exists() {
+                command.env("DBUS_SESSION_BUS_ADDRESS", format!("unix:path={bus}"));
+            }
+        }
+        match command.status() {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                tracing::warn!(target: "derp_osk", ?status, %value, "squeekboard input sources sync failed");
+            }
+            Err(error) => {
+                tracing::warn!(target: "derp_osk", %error, %value, "squeekboard input sources sync failed");
+            }
+        }
+    }
+
+    pub(crate) fn refresh_osk_keyboard_layouts(&mut self) {
+        self.sync_squeekboard_input_sources();
+        let settings = crate::session::settings_config::read_osk_settings();
+        if !settings.enabled
+            || settings.provider != "squeekboard"
+            || self.session_services.osk_child.is_none()
+        {
             return;
         }
         let visible =
@@ -264,14 +332,12 @@ impl CompositorState {
             self.unmap_osk_layer_surfaces();
             return;
         }
-        let mut active = false;
-        self.input_routing
-            .seat
-            .text_input()
-            .with_active_text_input(|_, _| active = true);
+        let active = self.osk_native_text_input_active_now();
         if active != self.session_services.osk_last_text_input_active {
             self.session_services.osk_last_text_input_active = active;
-            self.session_services.osk_visibility_override = None;
+            if self.session_services.osk_visibility_override != Some(true) {
+                self.session_services.osk_visibility_override = None;
+            }
         }
         if !active {
             self.session_services.osk_text_input_visibility_allowed = false;
@@ -429,36 +495,95 @@ impl CompositorState {
         !Self::osk_layer_namespace(namespace) || self.session_services.osk_visible == Some(true)
     }
 
-    fn osk_layer_global_for_point(
+    pub(crate) fn osk_layer_surface_under(
         &self,
         pos: Point<f64, Logical>,
-    ) -> Option<Rectangle<i32, Logical>> {
-        let pos = pos.to_i32_round();
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        let pos_i = pos.to_i32_round();
         for output in self.output_topology.space.outputs() {
             let Some(output_geo) = self.output_topology.space.output_geometry(output) else {
                 continue;
             };
+            let local = pos - output_geo.loc.to_f64();
             let map = layer_map_for_output(output);
             for layer in map.layers() {
                 if !Self::osk_layer_namespace(layer.namespace()) {
                     continue;
                 }
-                let Some(geo) = map.layer_geometry(layer) else {
+                let Some(geometry) = map.layer_geometry(layer) else {
                     continue;
                 };
-                if geo.size.w <= 0 || geo.size.h <= 0 {
+                let geometry = self.osk_visual_layer_geometry_for_output(output, layer, geometry);
+                let bbox = layer.bbox_with_popups();
+                let global = Rectangle::new(output_geo.loc + geometry.loc + bbox.loc, bbox.size);
+                if !global.contains(pos_i) {
                     continue;
                 }
-                let global = Rectangle::new(output_geo.loc + geo.loc, geo.size);
-                if global.contains(pos) {
-                    return Some(global);
+                let hit_local = local - geometry.loc.to_f64();
+                if let Some((wl_surface, surface_loc)) =
+                    layer.surface_under(hit_local, WindowSurfaceType::ALL)
+                {
+                    return Some((
+                        wl_surface,
+                        (surface_loc + geometry.loc + output_geo.loc).to_f64(),
+                    ));
                 }
+                return Some((
+                    layer.wl_surface().clone(),
+                    (geometry.loc + output_geo.loc).to_f64(),
+                ));
             }
         }
         None
     }
 
-    fn osk_layer_surface_visible_now(&self) -> bool {
+    pub(crate) fn osk_visual_layer_geometry_for_output(
+        &self,
+        output: &Output,
+        layer: &DesktopLayerSurface,
+        mut geometry: Rectangle<i32, Logical>,
+    ) -> Rectangle<i32, Logical> {
+        if !Self::osk_layer_namespace(layer.namespace()) {
+            return geometry;
+        }
+        let Some(output_geo) = self.output_topology.space.output_geometry(output) else {
+            return geometry;
+        };
+        if geometry.size.w > output_geo.size.w {
+            geometry.loc.x = (output_geo.size.w - geometry.size.w) / 2;
+        }
+        if geometry.size.h > output_geo.size.h {
+            geometry.loc.y = output_geo.size.h.saturating_sub(geometry.size.h);
+        }
+        geometry
+    }
+
+    pub(crate) fn osk_visual_exclusion_rects_for_output(
+        &self,
+        output: &Output,
+    ) -> Vec<Rectangle<i32, Logical>> {
+        let Some(output_geo) = self.output_topology.space.output_geometry(output) else {
+            return Vec::new();
+        };
+        let map = layer_map_for_output(output);
+        map.layers()
+            .filter(|layer| {
+                Self::osk_layer_namespace(layer.namespace())
+                    && self.layer_surface_visible_during_render(layer.namespace())
+            })
+            .filter_map(|layer| {
+                let geometry = map.layer_geometry(layer)?;
+                let geometry = self.osk_visual_layer_geometry_for_output(output, layer, geometry);
+                let bbox = layer.bbox_with_popups();
+                Some(Rectangle::new(
+                    output_geo.loc + geometry.loc + bbox.loc,
+                    bbox.size,
+                ))
+            })
+            .collect()
+    }
+
+    pub(crate) fn osk_layer_surface_visible_now(&self) -> bool {
         for output in self.output_topology.space.outputs() {
             if Self::osk_layer_surface_visible_on_output(output) {
                 return true;
@@ -490,71 +615,40 @@ impl CompositorState {
         false
     }
 
-    pub(crate) fn point_in_osk_fallback_touch_area(&self, pos: Point<f64, Logical>) -> bool {
-        if self.session_services.osk_visible != Some(true)
-            || !self.session_services.osk_shell_text_input_active
-        {
-            return false;
-        }
-        if self.osk_layer_global_for_point(pos).is_some() {
-            return true;
-        }
-        let Some(output) = self.preferred_osk_output() else {
-            return false;
-        };
-        let Some(geo) = self.output_topology.space.output_geometry(&output) else {
-            return false;
-        };
-        let pos = pos.to_i32_round();
-        let y_min = geo.loc.y + geo.size.h.saturating_mul(55) / 100;
-        geo.contains(pos) && pos.y >= y_min
-    }
-
-    pub(crate) fn shell_osk_key_for_point(&self, pos: Point<f64, Logical>) -> Option<char> {
-        if self.session_services.osk_visible != Some(true)
-            || !self.session_services.osk_shell_text_input_active
-        {
-            return None;
-        }
-        let pos = pos.to_i32_round();
-        let geo = if let Some(layer_geo) = self.osk_layer_global_for_point(pos.to_f64()) {
-            layer_geo
-        } else {
-            let output = self.preferred_osk_output()?;
-            self.output_topology.space.output_geometry(&output)?
-        };
-        if !geo.contains(pos) {
-            return None;
-        }
-        let x_ratio = (pos.x - geo.loc.x) as f64 / f64::from(geo.size.w.max(1));
-        let y_ratio = (pos.y - geo.loc.y) as f64 / f64::from(geo.size.h.max(1));
-        let row = if y_ratio < 0.76 {
-            "qwertyuiop"
-        } else if y_ratio < 0.88 {
-            "asdfghjkl"
-        } else {
-            "zxcvbnm"
-        };
-        let index = (x_ratio.clamp(0.0, 0.999) * row.len() as f64).floor() as usize;
-        row.chars().nth(index)
-    }
-
     pub(crate) fn allow_osk_for_touch_text_input_at(&mut self, pos: Point<f64, Logical>) {
         self.session_services.osk_text_input_visibility_allowed = true;
-        self.session_services.osk_visibility_override = None;
+        if self.session_services.osk_visibility_override != Some(true) {
+            self.session_services.osk_visibility_override = None;
+        }
         self.set_osk_preferred_output_for_point(pos);
         self.update_osk_visibility_from_text_input();
     }
 
     pub(crate) fn disallow_osk_for_pointer_text_input(&mut self) {
+        if self.session_services.osk_text_input_visibility_allowed
+            && self.osk_native_text_input_active_now()
+        {
+            return;
+        }
         if !self.session_services.osk_text_input_visibility_allowed
             && self.session_services.osk_visibility_override.is_none()
         {
             return;
         }
         self.session_services.osk_text_input_visibility_allowed = false;
-        self.session_services.osk_visibility_override = None;
+        if self.session_services.osk_visibility_override != Some(true) {
+            self.session_services.osk_visibility_override = None;
+        }
         self.update_osk_visibility_from_text_input();
+    }
+
+    fn osk_native_text_input_active_now(&self) -> bool {
+        let mut active = false;
+        self.input_routing
+            .seat
+            .text_input()
+            .with_active_text_input(|_, _| active = true);
+        active
     }
 
     pub(crate) fn shell_editable_focus_from_shell(
@@ -569,14 +663,18 @@ impl CompositorState {
             self.input_routing
                 .seat
                 .deactivate_input_method_without_text_input();
-            self.session_services.osk_visibility_override = Some(false);
-            self.set_osk_visible(false);
+            if self.session_services.osk_visibility_override != Some(true) {
+                self.session_services.osk_visibility_override = Some(false);
+                self.set_osk_visible(false);
+            }
             self.update_osk_visibility_from_text_input();
             return;
         }
         if active && touch {
             self.session_services.osk_shell_text_input_active = true;
-            self.session_services.osk_visibility_override = None;
+            if self.session_services.osk_visibility_override != Some(true) {
+                self.session_services.osk_visibility_override = None;
+            }
             let pos = Point::from((
                 self.output_topology.shell_canvas_logical_origin.0 as f64 + shell_x as f64,
                 self.output_topology.shell_canvas_logical_origin.1 as f64 + shell_y as f64,
@@ -593,7 +691,7 @@ impl CompositorState {
                 .seat
                 .activate_input_method_without_text_input();
             self.update_osk_visibility_from_text_input();
-            self.keep_shell_hosted_windows_above_osk();
+            self.refresh_osk_exclusion_damage();
             return;
         }
         if !active {
@@ -601,7 +699,9 @@ impl CompositorState {
             self.input_routing
                 .seat
                 .deactivate_input_method_without_text_input();
-            self.session_services.osk_visibility_override = None;
+            if self.session_services.osk_visibility_override != Some(true) {
+                self.session_services.osk_visibility_override = None;
+            }
             self.update_osk_visibility_from_text_input();
         }
     }
@@ -627,7 +727,9 @@ impl CompositorState {
         self.input_routing
             .seat
             .deactivate_input_method_without_text_input();
-        self.session_services.osk_visibility_override = None;
+        if self.session_services.osk_visibility_override != Some(true) {
+            self.session_services.osk_visibility_override = None;
+        }
         self.update_osk_visibility_from_text_input();
     }
 
@@ -649,84 +751,11 @@ impl CompositorState {
         }
     }
 
-    pub(crate) fn keep_shell_hosted_windows_above_osk(&mut self) {
+    pub(crate) fn refresh_osk_exclusion_damage(&mut self) {
         if self.session_services.osk_visible != Some(true) {
             return;
         }
-        let window_ids: Vec<_> = self
-            .windows
-            .window_registry
-            .all_records()
-            .into_iter()
-            .filter(|record| {
-                self.windows
-                    .window_registry
-                    .is_shell_hosted(record.info.window_id)
-                    && !record.info.minimized
-            })
-            .map(|record| record.info.window_id)
-            .collect();
-        let mut changed = false;
-        for window_id in window_ids {
-            changed |= self.keep_shell_hosted_window_above_osk(window_id);
-        }
-        if changed {
-            self.shell_reply_window_list();
-            self.shell_osr.shell_exclusion_zones_need_full_damage = true;
-        }
-    }
-
-    fn keep_shell_hosted_window_above_osk(&mut self, window_id: u32) -> bool {
-        let Some(info) = self.windows.window_registry.window_info(window_id) else {
-            return false;
-        };
-        let output = self
-            .output_for_window_position(info.x, info.y, info.width, info.height)
-            .and_then(|name| {
-                self.output_topology
-                    .space
-                    .outputs()
-                    .find(|output| output.name() == name)
-                    .cloned()
-            })
-            .or_else(|| {
-                self.preferred_osk_output()
-                    .filter(|output| output.name() == info.output_name)
-            })
-            .or_else(|| self.preferred_osk_output());
-        let Some(output) = output else {
-            return false;
-        };
-        let Some(work) = self.shell_maximize_work_area_global_for_output(&output) else {
-            return false;
-        };
-        let left = info.x;
-        let top = info.y;
-        let right = info.x.saturating_add(info.width);
-        let bottom = info.y.saturating_add(info.height);
-        let work_right = work.loc.x.saturating_add(work.size.w);
-        let work_bottom = work.loc.y.saturating_add(work.size.h);
-        if left >= work.loc.x && top >= work.loc.y && right <= work_right && bottom <= work_bottom {
-            return false;
-        }
-        let snap =
-            self.windows
-                .window_registry
-                .update_shell_hosted(window_id, |info, _float_restore| {
-                    let width = info.width.min(work.size.w).max(1);
-                    let height = info.height.min(work.size.h).max(1);
-                    info.x = info.x.clamp(work.loc.x, work_right.saturating_sub(width));
-                    info.y = work_bottom.saturating_sub(height).max(work.loc.y);
-                    info.width = width;
-                    info.height = height;
-                    info.output_name = output.name();
-                    info.clone()
-                });
-        if let Some(snap) = snap {
-            self.shell_backed_emit_geometry_messages(&snap);
-            return true;
-        }
-        false
+        self.shell_osr.shell_exclusion_zones_need_full_damage = true;
     }
 
     pub(crate) fn preferred_osk_output(&self) -> Option<Output> {
@@ -817,6 +846,7 @@ impl CompositorState {
             let Some(geo) = map.layer_geometry(layer) else {
                 continue;
             };
+            let geo = self.osk_visual_layer_geometry_for_output(output, layer, geo);
             if geo.size.w <= 0 || geo.size.h <= 0 {
                 continue;
             }

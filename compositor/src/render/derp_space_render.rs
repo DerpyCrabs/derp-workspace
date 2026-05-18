@@ -32,10 +32,12 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
     SpaceRenderElements<GlesRenderer, DerpWinRenderEl>,
     Option<u32>,
     bool,
+    bool,
 )> {
     let mut out: Vec<(
         SpaceRenderElements<GlesRenderer, DerpWinRenderEl>,
         Option<u32>,
+        bool,
         bool,
     )> = Vec::new();
     let output_scale = output.current_scale().fractional_scale();
@@ -51,7 +53,11 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
             if !state.layer_surface_visible_during_render(surface.namespace()) {
                 continue;
             }
-            let Some(loc) = layer_map.layer_geometry(surface).map(|g| g.loc) else {
+            let Some(loc) = layer_map.layer_geometry(surface).map(|g| {
+                state
+                    .osk_visual_layer_geometry_for_output(output, surface, g)
+                    .loc
+            }) else {
                 continue;
             };
             surface.with_surfaces(|surface, _| {
@@ -66,7 +72,7 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                 Scale::from(output_scale),
                 alpha,
             ) {
-                out.push((SpaceRenderElements::Surface(el), None, true));
+                out.push((SpaceRenderElements::Surface(el), None, true, false));
             }
         }
         lower
@@ -110,6 +116,7 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                             SpaceRenderElements::Element(Wrap::from(el)),
                             wid,
                             include_self_decor,
+                            true,
                         ));
                     }
                 }
@@ -126,7 +133,12 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                         scale,
                         window_alpha,
                     ) {
-                        out.push((SpaceRenderElements::Element(Wrap::from(el)), wid, true));
+                        out.push((
+                            SpaceRenderElements::Element(Wrap::from(el)),
+                            wid,
+                            true,
+                            true,
+                        ));
                     }
                 }
             }
@@ -137,7 +149,11 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
         if !state.layer_surface_visible_during_render(surface.namespace()) {
             continue;
         }
-        let Some(loc) = layer_map.layer_geometry(surface).map(|g| g.loc) else {
+        let Some(loc) = layer_map.layer_geometry(surface).map(|g| {
+            state
+                .osk_visual_layer_geometry_for_output(output, surface, g)
+                .loc
+        }) else {
             continue;
         };
         surface.with_surfaces(|surface, _| {
@@ -152,7 +168,7 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
             Scale::from(output_scale),
             alpha,
         ) {
-            out.push((SpaceRenderElements::Surface(el), None, true));
+            out.push((SpaceRenderElements::Surface(el), None, true, false));
         }
     }
 

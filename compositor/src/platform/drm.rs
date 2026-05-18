@@ -332,14 +332,23 @@ impl DrmHead {
                 );
                 let ordered_window_ids_on_output = state.ordered_window_ids_on_output(output);
                 let empty_clip_ctx = state.shell_empty_clip_ctx_for_draw(output);
-                for (el, wid, include_self_decor) in tagged {
-                    let excl_ctx = state.shell_exclusion_clip_ctx_for_draw(
-                        output,
-                        wid,
-                        include_self_decor,
-                        Some(&ordered_window_ids_on_output),
-                    );
-                    let clip_bounds = wid.and_then(|id| state.native_window_space_clip_bounds(id));
+                for (el, wid, include_self_decor, clip_exclusions) in tagged {
+                    let excl_ctx = if clip_exclusions {
+                        state.shell_exclusion_clip_ctx_for_draw(
+                            output,
+                            wid,
+                            include_self_decor,
+                            Some(&ordered_window_ids_on_output),
+                            true,
+                        )
+                    } else {
+                        None
+                    };
+                    let clip_bounds = if clip_exclusions {
+                        wid.and_then(|id| state.native_window_space_clip_bounds(id))
+                    } else {
+                        None
+                    };
                     match (excl_ctx, clip_bounds) {
                         (None, None) => render_elements.push(DesktopStack::Space(
                             crate::desktop::desktop_stack::FractionalDamageSpaceElements::new(

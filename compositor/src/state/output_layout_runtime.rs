@@ -570,7 +570,7 @@ impl CompositorState {
 
     pub(crate) fn refresh_usable_area_dependent_window_layouts(&mut self) {
         self.refresh_taskbar_dependent_window_layouts();
-        self.keep_shell_hosted_windows_above_osk();
+        self.refresh_osk_exclusion_damage();
         self.resync_embedded_shell_host_after_ipc_connect();
         self.send_shell_output_layout();
     }

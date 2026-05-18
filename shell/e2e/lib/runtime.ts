@@ -177,6 +177,7 @@ export interface CompositorOskLayerSnapshot {
   output_name: string
   namespace: string
   global: CompositorWorkspaceRect
+  bbox_global?: CompositorWorkspaceRect
 }
 
 export interface CompositorLayerSurfaceSnapshot {
@@ -184,6 +185,7 @@ export interface CompositorLayerSurfaceSnapshot {
   output_name: string
   namespace: string
   global: CompositorWorkspaceRect | null
+  bbox_global?: CompositorWorkspaceRect | null
 }
 
 export interface CompositorShellUiWindowSnapshot {

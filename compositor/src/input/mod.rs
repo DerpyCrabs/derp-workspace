@@ -1020,23 +1020,30 @@ impl CompositorState {
         if self.screenshot_selection_active() {
             return TouchRoute::PointerEmulation { last_pos: pos };
         }
-        let in_osk_fallback = self.point_in_osk_fallback_touch_area(pos);
+        let osk_layer_under = if self.session_services.osk_visible == Some(true)
+            || self.osk_layer_surface_visible_now()
+        {
+            self.osk_layer_surface_under(pos)
+        } else {
+            None
+        };
+        let in_osk_layer = osk_layer_under.is_some();
         if self.shell_osr.shell_exclusion_overlay_open
-            && !in_osk_fallback
+            && !in_osk_layer
             && !self.shell_point_in_shell_floating_overlay_global(pos)
             && !self.shell_pointer_route_to_cef(pos)
         {
             self.shell_dismiss_context_menu_from_compositor();
             self.sync_shell_shared_state_for_input();
         }
+        if let Some((focus, surface_origin)) = osk_layer_under {
+            return TouchRoute::OskLayer {
+                focus,
+                surface_origin,
+            };
+        }
         let in_excl = self.point_in_shell_exclusion_zones(pos);
         let in_shell_ui = self.shell_ui_placement_topmost_for_input_at(pos).is_some();
-        if !in_excl && !in_shell_ui && in_osk_fallback {
-            if self.session_services.osk_shell_text_input_active {
-                return TouchRoute::ShellOskKey { last_pos: pos };
-            }
-            return TouchRoute::PointerEmulation { last_pos: pos };
-        }
         if !in_excl && !in_shell_ui {
             if let Some((_window_id, surface, surface_origin)) =
                 self.native_surface_under_no_shell_exclusion(pos)
@@ -1098,7 +1105,24 @@ impl CompositorState {
                 self.shell_keyboard_capture_shell_ui();
                 self.shell_emit_shell_ui_focus_from_point(pos);
             }
-            TouchRoute::ShellOskKey { .. } => {}
+            TouchRoute::OskLayer {
+                focus,
+                surface_origin,
+            } => {
+                if let Some(touch) = self.input_routing.seat.get_touch() {
+                    touch.down(
+                        self,
+                        Some((focus.clone(), *surface_origin)),
+                        &TouchDownEvent {
+                            slot,
+                            location: pos,
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time: time_msec,
+                        },
+                    );
+                    touch.frame(self);
+                }
+            }
             TouchRoute::PointerEmulation { .. } => {
                 if let Some((output_geo, local)) = self.touch_output_geo_and_local(pos) {
                     self.pointer_motion_output_local(output_geo, local, time_msec);
@@ -1150,10 +1174,29 @@ impl CompositorState {
                     .touch_routes
                     .insert(slot_id, TouchRoute::ShellCef { last_pos: pos });
             }
-            TouchRoute::ShellOskKey { .. } => {
-                self.input_routing
-                    .touch_routes
-                    .insert(slot_id, TouchRoute::ShellOskKey { last_pos: pos });
+            TouchRoute::OskLayer {
+                focus,
+                surface_origin,
+            } => {
+                if let Some(touch) = self.input_routing.seat.get_touch() {
+                    touch.motion(
+                        self,
+                        Some((focus.clone(), surface_origin)),
+                        &TouchMotionEvent {
+                            slot,
+                            location: pos,
+                            time: time_msec,
+                        },
+                    );
+                    touch.frame(self);
+                }
+                self.input_routing.touch_routes.insert(
+                    slot_id,
+                    TouchRoute::OskLayer {
+                        focus,
+                        surface_origin,
+                    },
+                );
             }
             TouchRoute::PointerEmulation { .. } => {
                 if let Some((output_geo, local)) = self.touch_output_geo_and_local(pos) {
@@ -1189,10 +1232,17 @@ impl CompositorState {
             TouchRoute::ShellCef { last_pos } => {
                 self.send_touch_to_cef(slot_id, shell_wire::TOUCH_PHASE_RELEASED, last_pos);
             }
-            TouchRoute::ShellOskKey { last_pos } => {
-                if let Some(ch) = self.shell_osk_key_for_point(last_pos) {
-                    let text = ch.to_string();
-                    let _ = self.shell_ipc_commit_text_to_cef(&text);
+            TouchRoute::OskLayer { .. } => {
+                if let Some(touch) = self.input_routing.seat.get_touch() {
+                    touch.up(
+                        self,
+                        &TouchUpEvent {
+                            slot,
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time: time_msec,
+                        },
+                    );
+                    touch.frame(self);
                 }
             }
             TouchRoute::PointerEmulation { last_pos } => {
@@ -1225,7 +1275,9 @@ impl CompositorState {
                 TouchRoute::ShellCef { last_pos } => {
                     self.send_touch_to_cef(slot_id, shell_wire::TOUCH_PHASE_CANCELLED, last_pos);
                 }
-                TouchRoute::ShellOskKey { .. } => {}
+                TouchRoute::OskLayer { .. } => {
+                    cancel_native = true;
+                }
                 TouchRoute::PointerEmulation { last_pos } => {
                     if let Some((output_geo, local)) = self.touch_output_geo_and_local(last_pos) {
                         self.pointer_motion_output_local(output_geo, local, time_msec);

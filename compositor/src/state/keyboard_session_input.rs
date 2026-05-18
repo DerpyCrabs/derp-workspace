@@ -49,6 +49,7 @@ impl CompositorState {
         let session_default_layout_index = self.keyboard_layout_index_current();
         self.workspace_layout
             .set_session_default_layout_index(session_default_layout_index);
+        self.refresh_osk_keyboard_layouts();
         self.emit_keyboard_layout_to_shell();
         Ok(())
     }

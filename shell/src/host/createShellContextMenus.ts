@@ -143,6 +143,10 @@ function layoutScreenCssRect(
     y: screen.y - oy,
     width: screen.width,
     height: screen.height,
+    usable_x: screen.usable_x === undefined ? undefined : screen.usable_x - ox,
+    usable_y: screen.usable_y === undefined ? undefined : screen.usable_y - oy,
+    usable_width: screen.usable_width,
+    usable_height: screen.usable_height,
     physical_width: screen.physical_width,
     physical_height: screen.physical_height,
     transform: screen.transform,
@@ -402,7 +406,13 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       }
     }
     if (!og || !primary) return null
-    const targetCss = layoutScreenCssRect(primary, co)
+    const screenCss = layoutScreenCssRect(primary, co)
+    const targetCss = {
+      x: screenCss.usable_x ?? screenCss.x,
+      y: screenCss.usable_y ?? screenCss.y,
+      width: screenCss.usable_width ?? screenCss.width,
+      height: screenCss.usable_height ?? screenCss.height,
+    }
     const width = Math.max(320, Math.min(704, targetCss.width - 24))
     const height = Math.max(240, Math.min(608, targetCss.height - 24))
     return { targetCss, width, height }
@@ -519,15 +529,24 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     })
   }
 
-  function focusProgramsMenuSearch() {
-    queueMicrotask(() => programsMenuSearchRef?.focus())
-    requestAnimationFrame(() => {
+  function focusProgramsMenuSearch(touchInitiated = false) {
+    const focusSearch = () => {
       programsMenuSearchRef?.focus()
-      requestAnimationFrame(() => programsMenuSearchRef?.focus())
+      if (!touchInitiated || !programsMenuSearchRef) return
+      const rect = programsMenuSearchRef.getBoundingClientRect()
+      window.__DERP_SHELL_TOUCH_DOWN?.(
+        Math.round(rect.left + rect.width / 2),
+        Math.round(rect.top + rect.height / 2),
+      )
+    }
+    queueMicrotask(focusSearch)
+    requestAnimationFrame(() => {
+      focusSearch()
+      requestAnimationFrame(focusSearch)
     })
   }
 
-  function openProgramsMenu(outputName?: string | null) {
+  function openProgramsMenu(outputName?: string | null, touchInitiated = false) {
     args.closeAllAtlasSelects()
     args.shellWireSend('programs_menu_opened', args.focusedWindowId() ?? 0)
     setProgramsMenuOutputName(outputName ?? null)
@@ -535,7 +554,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     openRootContextMenu(programsMenuTrigger)
     setProgramsMenuQuery('')
     setProgramsMenuHighlightIdx(0)
-    focusProgramsMenuSearch()
+    focusProgramsMenuSearch(touchInitiated)
     void desktopApps.refresh()
     void refreshDesktopAppUsageFromRemote().then((counts) => setProgramsUsageCounts(counts))
   }
@@ -611,7 +630,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     openProgramsMenu(outputName)
   }
 
-  function onProgramsMenuClick(e: MouseEvent & { currentTarget: HTMLButtonElement }) {
+  function onProgramsMenuClick(e: (MouseEvent | PointerEvent) & { currentTarget: HTMLButtonElement }) {
     e.preventDefault()
     if (triggerIsOpen(programsMenuTrigger)) {
       hideContextMenu()
@@ -620,7 +639,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     const monitorName =
       e.currentTarget.closest('[data-shell-taskbar-monitor]')?.getAttribute('data-shell-taskbar-monitor') ??
       null
-    openProgramsMenu(monitorName)
+    openProgramsMenu(monitorName, typeof PointerEvent !== 'undefined' && e instanceof PointerEvent && e.pointerType === 'touch')
   }
 
   function onPowerMenuClick(e: MouseEvent & { currentTarget: HTMLButtonElement }) {

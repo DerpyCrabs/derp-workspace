@@ -629,14 +629,23 @@ fn append_output_capture_elements<'a>(
         );
         let ordered_window_ids_on_output = state.ordered_window_ids_on_output(output);
         let empty_clip_ctx = state.shell_empty_clip_ctx_for_draw(output);
-        for (el, wid, include_self_decor) in tagged {
-            let excl_ctx = state.shell_exclusion_clip_ctx_for_draw(
-                output,
-                wid,
-                include_self_decor,
-                Some(&ordered_window_ids_on_output),
-            );
-            let clip_bounds = wid.and_then(|id| state.native_window_space_clip_bounds(id));
+        for (el, wid, include_self_decor, clip_exclusions) in tagged {
+            let excl_ctx = if clip_exclusions {
+                state.shell_exclusion_clip_ctx_for_draw(
+                    output,
+                    wid,
+                    include_self_decor,
+                    Some(&ordered_window_ids_on_output),
+                    true,
+                )
+            } else {
+                None
+            };
+            let clip_bounds = if clip_exclusions {
+                wid.and_then(|id| state.native_window_space_clip_bounds(id))
+            } else {
+                None
+            };
             match (excl_ctx, clip_bounds) {
                 (None, None) => render_elements.push(DesktopStack::Space(
                     FractionalDamageSpaceElements::new(el, output_scale),
@@ -812,7 +821,7 @@ fn render_window_output_texture(
             1.0,
         )
         .into_iter()
-        .filter_map(|(el, wid, _)| (wid == Some(window_id)).then_some(el))
+        .filter_map(|(el, wid, _, _)| (wid == Some(window_id)).then_some(el))
         .collect();
     let rendered_bounds = state
         .capture_window_source_descriptor(window_id)
