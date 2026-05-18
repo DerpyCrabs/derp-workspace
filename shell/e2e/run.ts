@@ -71,6 +71,14 @@ function filterShellRestartTests(groups: typeof allGroups, enabled: boolean) {
     .filter((group) => group.tests.length > 0)
 }
 
+function perfMetricsEnabled() {
+  return process.env.DERP_E2E_PERF_METRICS === '1' || process.env.DERP_PERF_METRICS === '1'
+}
+
+function artifactTestsEnabled() {
+  return process.env.DERP_E2E_ARTIFACT_TESTS === '1'
+}
+
 function parseArgs(argv: string[]) {
   const selectors: string[] = []
   let showTimeLogs = true
@@ -95,6 +103,8 @@ async function main(): Promise<void> {
   const selectors = args.selectors.flatMap((value) => value.split(',')).map((value) => value.trim()).filter(Boolean)
   const { selected: rawSelected, unmatched } = selectGroups(selectors, args.sessionRestore ? allGroups : defaultGroups)
   const selected = filterShellRestartTests(rawSelected, args.sessionRestore)
+    .filter((group) => group.name !== 'perf-smoke.spec.ts' || perfMetricsEnabled())
+    .filter((group) => group.name !== 'artifacts.spec.ts' || artifactTestsEnabled() || selectors.length > 0)
   if (unmatched.length > 0) {
     throw new Error(`unknown e2e spec selector(s): ${unmatched.join(', ')}; available: ${allGroups.map((group) => group.name).join(', ')}`)
   }

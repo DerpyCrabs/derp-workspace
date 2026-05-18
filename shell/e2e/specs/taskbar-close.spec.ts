@@ -12,6 +12,7 @@ import {
   clickRect,
   closeTaskbarWindow,
   defineGroup,
+  doubleClickRect,
   dragRectToRect,
   ensureWorkspaceTabShowsWindow,
   getJson,
@@ -83,7 +84,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     const mdSelected = fileBrowserRow(await getJson<ShellSnapshot>(base, '/test/state/shell'), 'markdown-with-image.md', navigated.windowId)
     assert(mdSelected?.rect, 'missing md row after select')
-    await clickRect(base, assertRectMinSize('open md second click', mdSelected.rect, 32, 24))
+    await doubleClickRect(base, assertRectMinSize('open md row', mdSelected.rect, 32, 24))
     const editor = await waitFor(
       'wait for text editor window',
       async () => {

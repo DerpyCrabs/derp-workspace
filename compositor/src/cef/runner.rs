@@ -1004,8 +1004,13 @@ fn run_cef(
                     crate::cef::shared_state::SHELL_SHARED_STATE_KIND_UI_WINDOWS,
                 ))
                 .unwrap_or_else(|_| "null".to_string());
+            let perf_metrics_js = if env_flag("DERP_PERF_METRICS") {
+                "true"
+            } else {
+                "false"
+            };
             Some(format!(
-                "window.__DERP_SPAWN_URL={spawn_js};window.__DERP_SHELL_HTTP={base_js};window.__DERP_COMPOSITOR_SNAPSHOT_PATH={snapshot_path_js};window.__DERP_SHELL_EXCLUSION_STATE_PATH={exclusion_state_path_js};window.__DERP_SHELL_UI_WINDOWS_STATE_PATH={ui_windows_state_path_js};window.__DERP_SHELL_SHARED_STATE_ABI={};window.dispatchEvent(new Event('derp-shell-http-ready'));",
+                "window.__DERP_SPAWN_URL={spawn_js};window.__DERP_SHELL_HTTP={base_js};window.__DERP_COMPOSITOR_SNAPSHOT_PATH={snapshot_path_js};window.__DERP_SHELL_EXCLUSION_STATE_PATH={exclusion_state_path_js};window.__DERP_SHELL_UI_WINDOWS_STATE_PATH={ui_windows_state_path_js};window.__DERP_SHELL_SHARED_STATE_ABI={};window.__DERP_PERF_METRICS={perf_metrics_js};window.dispatchEvent(new Event('derp-shell-http-ready'));",
                 crate::cef::shared_state::SHELL_SHARED_STATE_ABI_VERSION,
             ))
         }

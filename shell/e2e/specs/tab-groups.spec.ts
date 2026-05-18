@@ -34,6 +34,7 @@ import {
   postJson,
   pickMonitorMove,
   pointerButton,
+  pointerButtonWithoutSync,
   spawnCommand,
   rectCenter,
   rightClickRect,
@@ -2320,7 +2321,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     } finally {
       if (!released) {
         try {
-          await pointerButton(base, BTN_LEFT, 'release')
+          await pointerButtonWithoutSync(base, BTN_LEFT, 'release')
         } catch {}
       }
       if (jsWindowId !== null) {
@@ -2728,7 +2729,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           })
           return stable
         } finally {
-          await pointerButton(base, BTN_LEFT, 'release')
+          await pointerButtonWithoutSync(base, BTN_LEFT, 'release')
         }
       })
       await timing.step('select file browser tab in mixed group', () => selectTabByClick(base, fileBrowserWindowId))

@@ -1,9 +1,10 @@
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { watch, type FSWatcher } from 'node:fs'
 import path from 'node:path'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { inflateSync } from 'node:zlib'
+import { promisify } from 'node:util'
 
 export const BTN_LEFT = 0x110
 export const BTN_RIGHT = 0x111
@@ -28,6 +29,7 @@ export const ANSI = {
   bgCyan: '\x1b[46m',
   black: '\x1b[30m',
 } as const
+const execFileAsync = promisify(execFile)
 export const KEY = {
   backspace: 14,
   enter: 28,
@@ -1420,7 +1422,7 @@ function e2eOwnedNativeWindow(window: WindowSnapshot): boolean {
 }
 
 function unexpectedNativeWindows(compositor: CompositorSnapshot, state: E2eState): WindowSnapshot[] {
-  return compositor.windows.filter((window) => !window.shell_hosted && !state.spawnedNativeWindowIds.has(window.window_id))
+  return compositor.windows.filter((window) => !window.shell_hosted && window.lifecycle !== 'tray_hidden' && !state.spawnedNativeWindowIds.has(window.window_id))
 }
 
 function emptySessionStateBody(): Record<string, unknown> {
@@ -2579,6 +2581,8 @@ export async function waitFor<T>(description: string, fn: () => Promise<T | null
     timeout.abort()
     compositor.child.kill('SIGTERM')
   }
+  const finalValue = await evaluate()
+  if (finalValue) return finalValue
   recordTimingEvent({
     kind: 'wait',
     label: description,
@@ -2936,6 +2940,10 @@ export async function pointerGesture(base: string, gesture: 'swipe' | 'pinch' | 
 export async function pointerButton(base: string, button: number, action: 'press' | 'release'): Promise<void> {
   await postJson(base, '/test/input/pointer_button', { button, action })
   await syncTest(base)
+}
+
+export async function pointerButtonWithoutSync(base: string, button: number, action: 'press' | 'release'): Promise<void> {
+  await postJson(base, '/test/input/pointer_button', { button, action })
 }
 
 export async function touchDown(base: string, x: number, y: number, id = 0): Promise<void> {
@@ -4237,7 +4245,27 @@ export async function waitForTaskbarEntry(base: string, windowId: number, timeou
 }
 
 async function closeWindowBestEffort(base: string, windowId: number): Promise<boolean> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  const killWindowClient = async (timeoutMs = 1200) => {
+    const { compositor } = await getSnapshots(base)
+    const window = compositorWindowById(compositor, windowId)
+    const pid = window?.wayland_client_pid
+    if (typeof pid !== 'number' || !Number.isFinite(pid) || pid <= 1) return false
+    const rawPid = String(Math.trunc(pid))
+    await execFileAsync('kill', ['-TERM', rawPid]).catch(() => undefined)
+    try {
+      await waitForWindowGone(base, windowId, timeoutMs)
+      return true
+    } catch {}
+    await execFileAsync('kill', ['-KILL', rawPid]).catch(() => undefined)
+    await waitForWindowGone(base, windowId, timeoutMs)
+    return true
+  }
+  try {
+    const { compositor } = await getSnapshots(base)
+    const window = compositorWindowById(compositor, windowId)
+    if (window?.lifecycle === 'tray_hidden' && (await killWindowClient(900))) return true
+  } catch {}
+  for (let attempt = 0; attempt < 1; attempt += 1) {
     try {
       await closeWindow(base, windowId)
       await waitForWindowGone(base, windowId, 1200)
@@ -4245,10 +4273,13 @@ async function closeWindowBestEffort(base: string, windowId: number): Promise<bo
     } catch {}
     try {
       await crashWindow(base, windowId)
-      await waitForWindowGone(base, windowId, 4000)
+      await waitForWindowGone(base, windowId, 1200)
       return true
     } catch {}
   }
+  try {
+    if (await killWindowClient()) return true
+  } catch {}
   return false
 }
 
@@ -4344,16 +4375,11 @@ export async function cleanupNativeWindows(base: string, windowIds: Set<number>)
   for (const windowId of [...ids]) {
     try {
       const { compositor } = await getSnapshots(base)
-      if (!compositorWindowById(compositor, windowId)) {
+      const window = compositorWindowById(compositor, windowId)
+      if (!window || window.lifecycle === 'tray_hidden') {
         windowIds.delete(windowId)
         continue
       }
-    } catch {}
-    try {
-      await crashWindow(base, windowId)
-      await waitForWindowGone(base, windowId, 4000)
-      windowIds.delete(windowId)
-      continue
     } catch {}
     try {
       if (await closeWindowBestEffort(base, windowId)) {
@@ -4368,15 +4394,7 @@ export async function cleanupUnexpectedNativeWindows(base: string, state: E2eSta
   try {
     const { compositor } = await getSnapshots(base)
     for (const window of unexpectedNativeWindows(compositor, state)) {
-      try {
-        await closeWindow(base, window.window_id)
-        await waitForWindowGone(base, window.window_id, 4000)
-      } catch {
-        try {
-          await crashWindow(base, window.window_id)
-          await waitForWindowGone(base, window.window_id, 4000)
-        } catch {}
-      }
+      await closeWindowBestEffort(base, window.window_id)
     }
   } catch {}
 }

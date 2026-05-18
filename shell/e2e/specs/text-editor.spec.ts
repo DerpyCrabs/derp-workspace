@@ -15,6 +15,7 @@ import {
   clickRect,
   compositorWindowById,
   defineGroup,
+  doubleClickRect,
   ensureWorkspaceTabShowsWindow,
   getJson,
   prepareFileBrowserFixtures,
@@ -74,7 +75,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     const mdSelected = fileBrowserRow(await getJson<ShellSnapshot>(base, '/test/state/shell'), 'markdown-with-image.md', navigated.windowId)
     assert(mdSelected?.rect, 'missing md row after select')
-    await clickRect(base, assertRectMinSize('open md second click', mdSelected.rect, 32, 24))
+    await doubleClickRect(base, assertRectMinSize('open md row', mdSelected.rect, 32, 24))
     const editor = await waitFor(
       'wait for text editor window with markdown preview image',
       async () => {
@@ -172,7 +173,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     const sel = fileBrowserRow(await getJson<ShellSnapshot>(base, '/test/state/shell'), 'writable-note.txt', navigated.windowId)
     assert(sel?.rect, 'missing txt row after select')
-    await clickRect(base, assertRectMinSize('open txt second click', sel.rect, 32, 24))
+    await doubleClickRect(base, assertRectMinSize('open txt row', sel.rect, 32, 24))
     const editor = await waitFor(
       'wait for text editor window with edit control',
       async () => {
@@ -264,7 +265,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     const sel = fileBrowserRow(await getJson<ShellSnapshot>(base, '/test/state/shell'), 'read-only-doc.md', navigated.windowId)
     assert(sel?.rect, 'missing row after select')
-    await clickRect(base, assertRectMinSize('open read only md', sel.rect, 32, 24))
+    await doubleClickRect(base, assertRectMinSize('open read only md', sel.rect, 32, 24))
     const editor = await waitFor(
       'wait for read-only text editor window',
       async () => {

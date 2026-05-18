@@ -9,7 +9,7 @@ require_remote_sync_tools
 remote_test_lock_acquire
 
 remote_env=()
-for name in DERP_E2E_BASE DERP_SHELL_HTTP_URL_FILE DERP_E2E_ARTIFACT_DIR DERP_E2E_NATIVE_BIN DERP_E2E_SPAWN_COMMAND DERP_E2E_SYNTHETIC_LOAD DERP_E2E_SYNTHETIC_LOAD_WORKERS; do
+for name in DERP_E2E_BASE DERP_SHELL_HTTP_URL_FILE DERP_E2E_ARTIFACT_DIR DERP_E2E_NATIVE_BIN DERP_E2E_SPAWN_COMMAND DERP_E2E_SYNTHETIC_LOAD DERP_E2E_SYNTHETIC_LOAD_WORKERS DERP_E2E_PERF_METRICS DERP_E2E_ARTIFACT_TESTS; do
   value="${!name:-}"
   if [[ -n "$value" ]]; then
     remote_env+=("export ${name}=$(printf '%q' "$value")")
@@ -27,6 +27,9 @@ for arg in "$@"; do
   fi
   remote_args+=("$(printf '%q' "$arg")")
 done
+if [[ "${DERP_E2E_TIME_LOGS:-0}" != "1" ]]; then
+  remote_args+=("--no-time-logs")
+fi
 remote_args_str="${remote_args[*]:-}"
 
 DERP_E2E_REMOTE_SNAPSHOT="$SCRIPT_DIR/.derp-e2e-remote-snapshot"
@@ -347,6 +350,11 @@ fi
 {
   [[ -f "\$env_file" ]] && grep -v '^export DERP_VALIDATE_STATE=' "\$env_file" || true
   printf '\\nexport DERP_VALIDATE_STATE=1\\n'
+  if [[ $(printf '%q' "${DERP_E2E_PERF_METRICS:-0}") == "1" ]]; then
+    printf 'export DERP_PERF_METRICS=1\\n'
+  else
+    printf 'unset DERP_PERF_METRICS\\n'
+  fi
 } >"\$env_file.tmp"
 mv "\$env_file.tmp" "\$env_file"
 EOF
@@ -374,6 +382,8 @@ pkill -u "$(id -un)" -x xterm 2>/dev/null || true
 pkill -u "$(id -un)" -x gedit 2>/dev/null || true
 pkill -u "$(id -un)" -x foot 2>/dev/null || true
 pkill -u "$(id -un)" -x file-roller 2>/dev/null || true
+pkill -u "$(id -un)" -f '[v]2rayN' 2>/dev/null || true
+pkill -u "$(id -un)" -f '[x]ray' 2>/dev/null || true
 pkill -u "$(id -un)" -f '[w]leird-' 2>/dev/null || true
 mapfile -t pids < <(pgrep -u "$(id -un)" -x compositor || true)
 if [[ ${#pids[@]} -eq 0 ]]; then
@@ -451,6 +461,8 @@ set -euo pipefail
 for pattern in xterm gedit file-roller derp-test-client foot; do
   pkill -u "$(id -un)" -x "$pattern" 2>/dev/null || true
 done
+pkill -u "$(id -un)" -f '[v]2rayN' 2>/dev/null || true
+pkill -u "$(id -un)" -f '[x]ray' 2>/dev/null || true
 pkill -u "$(id -un)" -f '[w]leird-' 2>/dev/null || true
 deadline=$((SECONDS + 5))
 while (( SECONDS < deadline )); do
@@ -459,6 +471,8 @@ while (( SECONDS < deadline )); do
     && ! pgrep -u "$(id -un)" -x foot >/dev/null 2>&1 \
     && ! pgrep -u "$(id -un)" -x file-roller >/dev/null 2>&1 \
     && ! pgrep -u "$(id -un)" -x derp-test-client >/dev/null 2>&1 \
+    && ! pgrep -u "$(id -un)" -f '[v]2rayN' >/dev/null 2>&1 \
+    && ! pgrep -u "$(id -un)" -f '[x]ray' >/dev/null 2>&1 \
     && ! pgrep -u "$(id -un)" -f '[w]leird-' >/dev/null 2>&1; then
     exit 0
   fi
@@ -468,6 +482,8 @@ pkill -KILL -u "$(id -un)" -x gedit 2>/dev/null || true
 pkill -KILL -u "$(id -un)" -x foot 2>/dev/null || true
 pkill -KILL -u "$(id -un)" -x file-roller 2>/dev/null || true
 pkill -KILL -u "$(id -un)" -x derp-test-client 2>/dev/null || true
+pkill -KILL -u "$(id -un)" -f '[v]2rayN' 2>/dev/null || true
+pkill -KILL -u "$(id -un)" -f '[x]ray' 2>/dev/null || true
 pkill -KILL -u "$(id -un)" -f '[w]leird-' 2>/dev/null || true
 REMOTE
 e2e_remote_record_phase "cleanup_clients" "$phase_start"

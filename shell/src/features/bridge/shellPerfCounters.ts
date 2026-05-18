@@ -200,6 +200,10 @@ const counters: ShellRuntimePerfSnapshot = {
   raf_over_50_count: 0,
 }
 
+function perfMetricsEnabled() {
+  return true
+}
+
 const roundMs = (value: number) => Math.round(value * 1000) / 1000
 let rafSampleId = 0
 let rafSampleLast = 0
@@ -298,6 +302,7 @@ function shellRuntimeRafStep(now: number) {
 }
 
 export function startShellRuntimeFrameSampling() {
+  if (!perfMetricsEnabled()) return
   resetShellRuntimeRafCounters()
   rafSampleLast = 0
   if (rafSampleId) cancelAnimationFrame(rafSampleId)
@@ -311,27 +316,32 @@ export function stopShellRuntimeFrameSampling() {
 }
 
 export function noteShellSnapshotDecode(ms: number, bytes: number) {
+  if (!perfMetricsEnabled()) return
   counters.snapshot_decode_count += 1
   counters.snapshot_decode_ms += Math.max(0, ms)
   counters.snapshot_decode_bytes += Math.max(0, bytes)
 }
 
 export function noteShellBatchDecode(ms: number, details: number) {
+  if (!perfMetricsEnabled()) return
   counters.batch_decode_count += 1
   counters.batch_decode_ms += Math.max(0, ms)
   counters.batch_decode_details += Math.max(0, details)
 }
 
 export function noteShellBatchCoalesce(dropped: number) {
+  if (!perfMetricsEnabled()) return
   counters.batch_coalesce_dropped += Math.max(0, Math.trunc(dropped))
 }
 
 export function noteShellSnapshotRead(ms: number) {
+  if (!perfMetricsEnabled()) return
   counters.snapshot_read_count += 1
   counters.snapshot_read_ms += Math.max(0, ms)
 }
 
 export function noteShellSnapshotApply(ms: number, details: number) {
+  if (!perfMetricsEnabled()) return
   const elapsed = Math.max(0, ms)
   counters.snapshot_apply_count += 1
   counters.snapshot_apply_ms += elapsed
@@ -340,6 +350,7 @@ export function noteShellSnapshotApply(ms: number, details: number) {
 }
 
 export function noteShellModelUpdate(ms: number) {
+  if (!perfMetricsEnabled()) return
   const elapsed = Math.max(0, ms)
   counters.model_update_count += 1
   counters.model_update_ms += elapsed
@@ -347,6 +358,7 @@ export function noteShellModelUpdate(ms: number) {
 }
 
 export function noteShellInteractionApply(ms: number) {
+  if (!perfMetricsEnabled()) return
   const elapsed = Math.max(0, ms)
   counters.interaction_apply_count += 1
   counters.interaction_apply_ms += elapsed
@@ -354,6 +366,7 @@ export function noteShellInteractionApply(ms: number) {
 }
 
 export function noteShellWindowApply(ms: number) {
+  if (!perfMetricsEnabled()) return
   const elapsed = Math.max(0, ms)
   counters.window_apply_count += 1
   counters.window_apply_ms += elapsed
@@ -361,6 +374,7 @@ export function noteShellWindowApply(ms: number) {
 }
 
 export function noteShellBatchApply(ms: number, details: number) {
+  if (!perfMetricsEnabled()) return
   const elapsed = Math.max(0, ms)
   counters.batch_apply_count += 1
   counters.batch_apply_ms += elapsed
@@ -369,6 +383,7 @@ export function noteShellBatchApply(ms: number, details: number) {
 }
 
 export function noteShellVisualFollowup(ms: number) {
+  if (!perfMetricsEnabled()) return
   const elapsed = Math.max(0, ms)
   counters.visual_followup_count += 1
   counters.visual_followup_ms += elapsed
@@ -376,11 +391,13 @@ export function noteShellVisualFollowup(ms: number) {
 }
 
 export function noteShellDomMeasure(count = 1, ms = 0) {
+  if (!perfMetricsEnabled()) return
   counters.dom_measure_count += Math.max(0, Math.trunc(count))
   counters.dom_measure_ms += Math.max(0, ms)
 }
 
 export function noteShellImperativeChromeDetailApply(ms: number, details: number) {
+  if (!perfMetricsEnabled()) return
   const elapsed = Math.max(0, ms)
   counters.imperative_chrome_detail_apply_count += 1
   counters.imperative_chrome_detail_apply_ms += elapsed
@@ -405,6 +422,7 @@ export function noteShellImperativeChromeApply(
     stateAgeMs?: number
   } = {},
 ) {
+  if (!perfMetricsEnabled()) return
   const elapsed = Math.max(0, ms)
   counters.imperative_chrome_apply_count += 1
   counters.imperative_chrome_apply_ms += elapsed
@@ -447,6 +465,7 @@ export function noteShellUiWindowsFlush(
   changed: boolean,
   stampRefresh: boolean,
 ) {
+  if (!perfMetricsEnabled()) return
   const elapsed = Math.max(0, ms)
   counters.shell_ui_windows_flush_count += 1
   counters.shell_ui_windows_flush_ms += elapsed
@@ -458,6 +477,7 @@ export function noteShellUiWindowsFlush(
 }
 
 export function noteShellSharedStateSync(ms: number) {
+  if (!perfMetricsEnabled()) return
   const elapsed = Math.max(0, ms)
   counters.shared_state_sync_count += 1
   counters.shared_state_sync_ms += elapsed
@@ -465,6 +485,7 @@ export function noteShellSharedStateSync(ms: number) {
 }
 
 export function beginShellActionToChrome(op: string, ...args: readonly unknown[]) {
+  if (!perfMetricsEnabled()) return
   if (!isTrackedShellAction(op)) return
   expireShellActions()
   pendingShellActions.push({
@@ -482,6 +503,7 @@ export function beginShellActionToChrome(op: string, ...args: readonly unknown[]
 }
 
 function completeShellActionToChrome(windowId: number | null, ops: readonly string[]) {
+  if (!perfMetricsEnabled()) return
   expireShellActions()
   const now = perfNow()
   const index = pendingShellActions.findIndex((entry) =>
@@ -533,6 +555,7 @@ function detailWindowId(detail: { window_id?: unknown }) {
 }
 
 export function noteShellStateToChromeApply(startedAt: number, details: readonly { type?: unknown; window_id?: unknown; move_window_id?: unknown; resize_window_id?: unknown }[]) {
+  if (!perfMetricsEnabled()) return
   const elapsed = Math.max(0, perfNow() - startedAt)
   counters.state_to_chrome_count += 1
   counters.state_to_chrome_ms += elapsed
@@ -558,6 +581,7 @@ export function noteShellStateToChromeApply(startedAt: number, details: readonly
 }
 
 export function resetShellRuntimePerfCounters() {
+  if (!perfMetricsEnabled()) return
   counters.batch_decode_count = 0
   counters.batch_decode_ms = 0
   counters.batch_decode_details = 0
@@ -710,6 +734,7 @@ export function shellRuntimePerfSnapshot(): ShellRuntimePerfSnapshot {
 }
 
 export function installShellRuntimePerfCounters() {
+  if (!perfMetricsEnabled()) return () => {}
   window.__DERP_SHELL_PERF_SNAPSHOT = shellRuntimePerfSnapshot
   window.__DERP_SHELL_PERF_RESET = resetShellRuntimePerfCounters
   window.__DERP_SHELL_PERF_FRAME_SAMPLE_START = startShellRuntimeFrameSampling

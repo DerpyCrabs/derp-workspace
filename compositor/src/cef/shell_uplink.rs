@@ -36,6 +36,9 @@ fn snapshot_payload_len(bytes: &[u8]) -> usize {
 }
 
 fn send_snapshot_perf(frame: &Frame, kind: &str, payload_len: usize) {
+    if !crate::cef::begin_frame_diag::perf_metrics_enabled() {
+        return;
+    }
     let Some(mut msg) = process_message_create(Some(&CefString::from(PROCESS_MESSAGE_NAME))) else {
         return;
     };
@@ -49,6 +52,9 @@ fn send_snapshot_perf(frame: &Frame, kind: &str, payload_len: usize) {
 }
 
 fn send_bridge_perf(frame: &Frame, kind: &str, value_us: u64) {
+    if !crate::cef::begin_frame_diag::perf_metrics_enabled() {
+        return;
+    }
     let Some(mut msg) = process_message_create(Some(&CefString::from(PROCESS_MESSAGE_NAME))) else {
         return;
     };
@@ -195,6 +201,16 @@ fn set_shell_bootstrap_globals(global: &mut V8Value, attrs: sys::cef_v8_property
         attrs,
         "__DERP_SHELL_SHARED_STATE_ABI",
         crate::cef::shared_state::SHELL_SHARED_STATE_ABI_VERSION,
+    );
+    set_global_u32(
+        global,
+        attrs,
+        "__DERP_PERF_METRICS",
+        if crate::cef::begin_frame_diag::perf_metrics_enabled() {
+            1
+        } else {
+            0
+        },
     );
 }
 

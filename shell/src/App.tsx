@@ -148,6 +148,7 @@ declare global {
     __DERP_SHELL_EXCLUSION_STATE_PATH?: string | null;
     __DERP_SHELL_UI_WINDOWS_STATE_PATH?: string | null;
     __DERP_SHELL_SHARED_STATE_ABI?: number;
+    __DERP_PERF_METRICS?: boolean | number;
     /** Registered by CEF render process: shell→compositor control. */
     __derpShellWireSend?: ShellCompositorWireSend;
     __derpShellSharedStateWrite?: (

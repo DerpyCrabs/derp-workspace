@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static COMPOSITOR_SCHEDULE: AtomicU64 = AtomicU64::new(0);
@@ -97,6 +97,24 @@ static SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_US: AtomicU64 = AtomicU64::new(0);
 static SHELL_ACTION_TO_STATE_NATIVE_PREVIEW_MAX_US: AtomicU64 = AtomicU64::new(0);
 static LATENCY: Mutex<LatencyTrace> = Mutex::new(LatencyTrace::new());
 static ACTION_STATE_TRACES: Mutex<Vec<ActionStateTrace>> = Mutex::new(Vec::new());
+static PERF_METRICS_ENABLED: OnceLock<bool> = OnceLock::new();
+
+pub(crate) fn perf_metrics_enabled() -> bool {
+    if !std::env::var_os("DERP_E2E_PERF_METRICS_ONLY").is_some() {
+        return true;
+    }
+    *PERF_METRICS_ENABLED.get_or_init(|| {
+        std::env::var_os("DERP_PERF_METRICS").is_some_and(|value| {
+            value.as_os_str() == std::ffi::OsStr::new("1")
+                || value
+                    .as_os_str()
+                    .eq_ignore_ascii_case(std::ffi::OsStr::new("true"))
+                || value
+                    .as_os_str()
+                    .eq_ignore_ascii_case(std::ffi::OsStr::new("yes"))
+        })
+    })
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ActionStateBucket {
@@ -310,6 +328,9 @@ struct ShellBridgeSnapshot {
 }
 
 pub(crate) fn note_shell_view_invalidate(reason: ShellViewInvalidateReason) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     if let Ok(mut latency) = LATENCY.lock() {
         latency.view_invalidate_at = Some(Instant::now());
         latency.view_invalidate_reason = Some(reason);
@@ -317,67 +338,112 @@ pub(crate) fn note_shell_view_invalidate(reason: ShellViewInvalidateReason) {
 }
 
 pub(crate) fn note_drm_render_tick() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     DRM_RENDER_TICK.fetch_add(1, Ordering::Relaxed);
     maybe_log_shell_latency();
 }
 
 pub(crate) fn note_drm_render_late_timer() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     DRM_RENDER_LATE_TIMER.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn note_drm_fullscreen_shell_bypass() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     DRM_FULLSCREEN_SHELL_BYPASS.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_detail_batch(message_count: usize) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_DETAIL_BATCH_COUNT.fetch_add(1, Ordering::Relaxed);
     SHELL_DETAIL_MESSAGE_COUNT.fetch_add(message_count as u64, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_detail_window_list() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_DETAIL_WINDOW_LIST_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_detail_window_mapped() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_DETAIL_WINDOW_MAPPED_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_detail_window_geometry() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_DETAIL_WINDOW_GEOMETRY_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_detail_window_metadata() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_DETAIL_WINDOW_METADATA_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_detail_window_state() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_DETAIL_WINDOW_STATE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_detail_focus_changed() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_DETAIL_FOCUS_CHANGED_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_reply_window_list() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_REPLY_WINDOW_LIST_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_snapshot_notify() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_SNAPSHOT_NOTIFY_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_snapshot_read(payload_len: usize) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_SNAPSHOT_READ_COUNT.fetch_add(1, Ordering::Relaxed);
     SHELL_SNAPSHOT_FULL_BYTES.fetch_add(payload_len as u64, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_snapshot_encode(duration: Duration, message_count: usize) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_SNAPSHOT_ENCODE_COUNT.fetch_add(1, Ordering::Relaxed);
     SHELL_SNAPSHOT_ENCODE_US.fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
     SHELL_SNAPSHOT_ENCODE_MESSAGES.fetch_add(message_count as u64, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_shared_state_write(kind: u32, payload_len: usize, row_count: u64) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     match kind {
         1 => {
             SHELL_SHARED_STATE_EXCLUSION_WRITES.fetch_add(1, Ordering::Relaxed);
@@ -394,11 +460,17 @@ pub(crate) fn note_shell_shared_state_write(kind: u32, payload_len: usize, row_c
 }
 
 pub(crate) fn note_shell_ui_windows_staged(row_count: usize) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_UI_WINDOWS_STAGED_COUNT.fetch_add(1, Ordering::Relaxed);
     SHELL_UI_WINDOWS_STAGED_ROWS.fetch_add(row_count as u64, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_ui_windows_promoted(row_count: usize, changed: bool, wait_frames: u64) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_UI_WINDOWS_PROMOTED_COUNT.fetch_add(1, Ordering::Relaxed);
     SHELL_UI_WINDOWS_PROMOTED_ROWS.fetch_add(row_count as u64, Ordering::Relaxed);
     SHELL_UI_WINDOWS_PROMOTION_WAIT_FRAMES.fetch_add(wait_frames, Ordering::Relaxed);
@@ -409,6 +481,9 @@ pub(crate) fn note_shell_ui_windows_promoted(row_count: usize, changed: bool, wa
 }
 
 pub(crate) fn note_shell_ui_windows_pending_dropped() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     SHELL_UI_WINDOWS_PENDING_DROPPED_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -420,6 +495,9 @@ pub(crate) fn note_cef_accelerated_paint(
     dirty_rect_coverage_per_mille: u16,
     dirty_rect_bbox_full: bool,
 ) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     CEF_ACCELERATED_PAINT.fetch_add(1, Ordering::Relaxed);
     SHELL_DIRTY_RECT_SAMPLES.fetch_add(1, Ordering::Relaxed);
     SHELL_DIRTY_RECT_COUNT.fetch_add(dirty_rect_count as u64, Ordering::Relaxed);
@@ -460,10 +538,16 @@ pub(crate) fn note_cef_accelerated_paint(
 }
 
 pub(crate) fn note_cef_software_paint() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     CEF_SOFTWARE_PAINT.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_dmabuf_rx(width: u32, height: u32) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     if let Ok(mut latency) = LATENCY.lock() {
         latency.dmabuf_rx_at = Some(Instant::now());
         latency.dmabuf_rx_size = Some((width, height));
@@ -478,6 +562,9 @@ pub(crate) fn unix_micros_now() -> u64 {
 }
 
 pub(crate) fn note_shell_action_renderer_to_browser(op: &str, sent_at_us: u64) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     if sent_at_us == 0 {
         return;
     }
@@ -493,6 +580,9 @@ pub(crate) fn note_shell_action_renderer_to_browser(op: &str, sent_at_us: u64) {
 }
 
 pub(crate) fn note_shell_action_browser_to_compositor(duration: Duration) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     let us = duration.as_micros().min(u128::from(u64::MAX)) as u64;
     SHELL_ACTION_BROWSER_TO_COMPOSITOR_COUNT.fetch_add(1, Ordering::Relaxed);
     SHELL_ACTION_BROWSER_TO_COMPOSITOR_US.fetch_add(us, Ordering::Relaxed);
@@ -500,6 +590,9 @@ pub(crate) fn note_shell_action_browser_to_compositor(duration: Duration) {
 }
 
 pub(crate) fn note_shell_state_compositor_to_ui(duration: Duration) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     let us = duration.as_micros().min(u128::from(u64::MAX)) as u64;
     SHELL_STATE_COMPOSITOR_TO_UI_COUNT.fetch_add(1, Ordering::Relaxed);
     SHELL_STATE_COMPOSITOR_TO_UI_US.fetch_add(us, Ordering::Relaxed);
@@ -507,6 +600,9 @@ pub(crate) fn note_shell_state_compositor_to_ui(duration: Duration) {
 }
 
 pub(crate) fn note_shell_state_browser_to_renderer_duration_us(elapsed: u64) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     if elapsed == 0 {
         return;
     }
@@ -516,6 +612,9 @@ pub(crate) fn note_shell_state_browser_to_renderer_duration_us(elapsed: u64) {
 }
 
 pub(crate) fn note_shell_state_renderer_apply(duration: Duration) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     let us = duration.as_micros().min(u128::from(u64::MAX)) as u64;
     SHELL_STATE_RENDERER_APPLY_COUNT.fetch_add(1, Ordering::Relaxed);
     SHELL_STATE_RENDERER_APPLY_US.fetch_add(us, Ordering::Relaxed);
@@ -537,6 +636,9 @@ fn action_state_bucket(op: &str) -> Option<ActionStateBucket> {
 }
 
 pub(crate) fn note_shell_action_browser_received(op: &str, window_id: Option<u32>) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     let Some(bucket) = action_state_bucket(op) else {
         return;
     };
@@ -674,6 +776,9 @@ pub(crate) fn note_shell_state_queued_for_action(
     msg: &shell_wire::DecodedCompositorToShellMessage,
     queued_at: Instant,
 ) {
+    if !perf_metrics_enabled() {
+        return;
+    }
     let Ok(mut traces) = ACTION_STATE_TRACES.lock() else {
         return;
     };
@@ -973,6 +1078,9 @@ pub(crate) fn reset_perf_counters() {
 }
 
 fn maybe_log_shell_latency() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     let Ok(mut latency) = LATENCY.lock() else {
         return;
     };
@@ -1019,6 +1127,9 @@ fn maybe_log_shell_latency() {
 }
 
 pub(crate) fn maybe_log_cef_begin_frame_pacing() {
+    if !perf_metrics_enabled() {
+        return;
+    }
     let ticks = DRM_RENDER_TICK.load(Ordering::Relaxed);
     let sched = COMPOSITOR_SCHEDULE.load(Ordering::Relaxed);
     let sched_idle = COMPOSITOR_SCHEDULE_IDLE.load(Ordering::Relaxed);

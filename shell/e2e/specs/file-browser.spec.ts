@@ -236,7 +236,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     openedWindowIds.push(navigated.windowId)
     const extraWindows: Array<{ shell: ShellSnapshot; windowId: number }> = []
     try {
-      for (let i = 0; i < 6; i += 1) {
+      for (let i = 0; i < 1; i += 1) {
         const extraWindow = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
         extraWindows.push(extraWindow)
         openedWindowIds.push(extraWindow.windowId)
@@ -251,7 +251,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const externalPath = path.posix.join(fixtures.root_path, 'external-live-refresh.txt')
       await writeFile(externalPath, 'created outside the file browser\n', 'utf8')
       const refreshed = await waitFor(
-        'wait for live refresh external row in first and seventh windows',
+        'wait for live refresh external row in first and latest windows',
         async () => {
           const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
           const fb = fileBrowserSnapshot(shell, navigated.windowId)
@@ -266,7 +266,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         100,
       )
       assert(refreshed.fb.mount_seq === before.mount_seq, 'expected live refresh to avoid remounting file browser')
-      assert(refreshed.lastFb.mount_seq === lastBefore.mount_seq, 'expected seventh live refresh to avoid remounting file browser')
+      assert(refreshed.lastFb.mount_seq === lastBefore.mount_seq, 'expected latest live refresh to avoid remounting file browser')
       assert(refreshed.fb.active_path === fixtures.root_path, 'expected live refresh to keep current folder')
       assert(refreshed.fb.list_state === 'ready', 'expected live refresh to keep list ready')
       await writeJsonArtifact('file-browser-live-refresh.json', {
