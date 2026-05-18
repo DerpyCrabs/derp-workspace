@@ -73,7 +73,6 @@ use smithay::{
         presentation::{
             PresentationFeedbackCachedState, PresentationFeedbackCallback, PresentationState,
         },
-        session_lock::{LockSurface, SessionLockManagerState, SessionLocker},
         selection::{
             data_device::{
                 clear_data_device_selection, current_data_device_selection_userdata,
@@ -86,6 +85,7 @@ use smithay::{
             wlr_data_control::DataControlState,
             SelectionTarget,
         },
+        session_lock::{LockSurface, SessionLockManagerState, SessionLocker},
         shell::{
             kde::decoration::{KdeDecorationHandler, KdeDecorationState},
             wlr_layer::{Layer, WlrLayerShellState},
@@ -923,6 +923,7 @@ impl CompositorState {
                 shell_primary_output_name: None,
                 taskbar_auto_hide: false,
                 taskbar_side_by_output_name: HashMap::new(),
+                taskbar_components_by_output_name: HashMap::new(),
                 output_vrr_by_name: HashMap::new(),
                 output_flip_state_by_name: HashMap::new(),
                 display_config_save_pending: false,

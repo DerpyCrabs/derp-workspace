@@ -377,6 +377,27 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_set_taskbar_component(&self, name: String, component: String, enabled: bool) {
+        self.run(move |s| {
+            let primary = s
+                .output_topology
+                .shell_effective_primary_output()
+                .map(|output| output.name());
+            let current = s
+                .output_topology
+                .taskbar_components_for_output_name(name.as_str(), primary.as_deref());
+            let mut next = current;
+            match component.as_str() {
+                "programs" => next.programs = enabled,
+                "osk" => next.osk = enabled,
+                "keyboard_layout" => next.keyboard_layout = enabled,
+                "clock" => next.clock = enabled,
+                _ => return,
+            }
+            s.set_taskbar_components(name, next);
+        });
+    }
+
     pub fn shell_shared_state_sync(&self, kind: u32) {
         self.run(move |s| {
             s.sync_shell_shared_state(kind);

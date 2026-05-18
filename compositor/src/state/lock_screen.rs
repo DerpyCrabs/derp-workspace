@@ -21,7 +21,10 @@ impl CompositorState {
     }
 
     pub(crate) fn lock_screen_locked(&self) -> bool {
-        matches!(self.lock_screen.phase, LockScreenPhase::Locked | LockScreenPhase::Unlocking)
+        matches!(
+            self.lock_screen.phase,
+            LockScreenPhase::Locked | LockScreenPhase::Unlocking
+        )
     }
 
     fn lock_screen_phase_label(&self) -> &'static str {
@@ -104,9 +107,11 @@ impl CompositorState {
         let tx = self.shell_osr.cef_to_compositor_tx.clone();
         std::thread::spawn(move || {
             let ok = authenticate_lock_password(&password);
-            let _ = tx.send(crate::cef::compositor_tx::CefToCompositor::Run(Box::new(move |s| {
-                s.lock_screen_finish_auth(ok);
-            })));
+            let _ = tx.send(crate::cef::compositor_tx::CefToCompositor::Run(Box::new(
+                move |s| {
+                    s.lock_screen_finish_auth(ok);
+                },
+            )));
         });
         Ok(())
     }
@@ -143,10 +148,12 @@ fn authenticate_lock_password(password: &str) -> bool {
     if let Ok(expected) = std::env::var("DERP_E2E_LOCK_PASSWORD") {
         return password == expected;
     }
-    let Some(user) = std::env::var("USER")
-        .ok()
-        .filter(|value| !value.is_empty() && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-')))
-    else {
+    let Some(user) = std::env::var("USER").ok().filter(|value| {
+        !value.is_empty()
+            && value
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+    }) else {
         return false;
     };
     let Ok(mut child) = std::process::Command::new("su")

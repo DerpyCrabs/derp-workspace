@@ -257,10 +257,7 @@ impl DrmHead {
                     state.capture.mark_rendered_frame();
                 }
                 out
-            } else if state
-                .shell_osr
-                .shell_presentation_fullscreen
-            {
+            } else if state.shell_osr.shell_presentation_fullscreen {
                 match space_render_elements(renderer, [&state.output_topology.space], output, 1.0) {
                     Ok(space_els) => {
                         for el in &shell_render.move_proxy {

@@ -43,6 +43,10 @@ const monitor: LayoutScreen = {
   vrr_supported: false,
   vrr_enabled: false,
   taskbar_side: 'bottom',
+  taskbar_programs: true,
+  taskbar_osk: true,
+  taskbar_keyboard_layout: true,
+  taskbar_clock: true,
 }
 
 describe('backedShellWindowActions', () => {

@@ -1469,6 +1469,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
       state.desktopApps.length >= 6,
       `need desktop apps for launcher scroll test, got ${state.desktopApps.length}`,
     );
+    const beforeOpen = await getJson<ShellSnapshot>(base, "/test/state/shell");
+    if (beforeOpen.programs_menu_open) {
+      await keyAction(base, KEY.super, "tap");
+      await waitForProgramsMenuClosed(base);
+    }
     const opened = await openProgramsMenu(base, "click");
     assert(opened.programs_menu_open, "programs menu should be open");
     const metrics0 = opened.programs_menu_list_scroll;

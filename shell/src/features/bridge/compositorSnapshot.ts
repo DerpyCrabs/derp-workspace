@@ -233,6 +233,32 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
       }
     }
   }
+  if (cursor < view.byteLength) {
+    if (cursor + 4 > view.byteLength) return null
+    const componentCount = view.getUint32(cursor, true)
+    cursor += 4
+    if (componentCount > MAX_OUTPUT_LAYOUT_SCREENS) return null
+    for (let i = 0; i < componentCount; i += 1) {
+      if (cursor + 4 > view.byteLength) return null
+      const nameLen = view.getUint32(cursor, true)
+      cursor += 4
+      if (nameLen === 0 || nameLen > MAX_OUTPUT_LAYOUT_NAME_BYTES) return null
+      const name = readUtf8(bytes, cursor, nameLen)
+      if (name == null) return null
+      cursor += nameLen
+      if (cursor + 4 > view.byteLength) return null
+      const flags = view.getUint32(cursor, true)
+      cursor += 4
+      if ((flags & ~15) !== 0) return null
+      const screen = screens.find((entry) => entry.name === name)
+      if (screen) {
+        screen.taskbar_programs = (flags & 1) !== 0
+        screen.taskbar_osk = (flags & 2) !== 0
+        screen.taskbar_keyboard_layout = (flags & 4) !== 0
+        screen.taskbar_clock = (flags & 8) !== 0
+      }
+    }
+  }
   if (cursor !== view.byteLength) return null
   return {
     type: 'output_layout',

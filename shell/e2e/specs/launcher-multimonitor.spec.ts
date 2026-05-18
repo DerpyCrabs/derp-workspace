@@ -350,6 +350,116 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact("multimonitor-output-identities.json", { outputs, taskbars: shell.taskbars });
   });
 
+  test("secondary taskbar controls can be enabled independently", async ({
+    base,
+  }) => {
+    const initial = await getSnapshots(base);
+    if (initial.compositor.outputs.length < 2) {
+      throw new SkipError("requires at least two outputs");
+    }
+    const primaryControl =
+      initial.shell.controls?.taskbar_settings_toggle ??
+      initial.shell.controls?.taskbar_programs_toggle;
+    assert(primaryControl, "missing primary taskbar control");
+    const primaryCenter = rectCenter(primaryControl);
+    const primaryTaskbar = initial.shell.taskbars.find((taskbar) =>
+      pointInRect(taskbar.rect, primaryCenter),
+    );
+    assert(primaryTaskbar, "missing primary taskbar");
+    const secondaryOutput = initial.compositor.outputs.find(
+      (output) => output.name !== primaryTaskbar.monitor,
+    );
+    if (!secondaryOutput) {
+      throw new SkipError("requires a non-primary output");
+    }
+    const originalOsk = await getJson<{ enabled: boolean; provider: string }>(
+      base,
+      "/settings_osk",
+    );
+    const components = ["programs", "osk", "keyboard_layout", "clock"];
+    try {
+      await postJson(base, "/settings_osk", {
+        ...originalOsk,
+        enabled: true,
+        provider: originalOsk.provider || "squeekboard",
+      });
+      await openSettings(base, "click");
+      await waitFor(
+        "wait for displays settings taskbar component controls",
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          if (shell.controls?.settings_tab_displays) {
+            await clickRect(base, shell.controls.settings_tab_displays);
+          }
+          const buttons = shell.settings_taskbar_component_buttons ?? [];
+          return components.every((component) =>
+            buttons.some(
+              (button) =>
+                button.output === secondaryOutput.name &&
+                button.component === component &&
+                button.rect,
+            ),
+          )
+            ? shell
+            : null;
+        },
+        5000,
+        100,
+      );
+      for (const component of components) {
+        const shell = await waitFor(
+          `wait for ${component} component setting`,
+          async () => {
+            const next = await getJson<ShellSnapshot>(base, "/test/state/shell");
+            const button = next.settings_taskbar_component_buttons?.find(
+              (entry) =>
+                entry.output === secondaryOutput.name &&
+                entry.component === component &&
+                entry.rect,
+            );
+            return button ? { shell: next, button } : null;
+          },
+          5000,
+          100,
+        );
+        if (!shell.button.pressed) {
+          await clickRect(base, shell.button.rect!);
+        }
+      }
+      const enabled = await waitFor(
+        "wait for enabled secondary taskbar controls",
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          const taskbar = taskbarForMonitor(shell, secondaryOutput.name);
+          if (
+            !taskbar?.has_programs_toggle ||
+            !taskbar.has_osk_toggle ||
+            !taskbar.has_keyboard_layout ||
+            !taskbar.has_clock
+          ) {
+            return null;
+          }
+          return { shell, taskbar };
+        },
+        5000,
+        100,
+      );
+      await writeJsonArtifact("secondary-taskbar-controls.json", {
+        output: secondaryOutput.name,
+        taskbar: enabled.taskbar,
+      });
+    } finally {
+      for (const component of components) {
+        await postJson(base, "/test/taskbar/component", {
+          output: secondaryOutput.name,
+          component,
+          enabled: false,
+        });
+      }
+      await postJson(base, "/settings_osk", originalOsk);
+    }
+  });
+
   test("programs menu opens searches and optionally launches a terminal app", async ({
     base,
     state,

@@ -168,11 +168,9 @@ fn pending_message_dedup_key(
                 PendingCompositorMessageStaticKey::CommandPaletteState,
             ))
         }
-        shell_wire::DecodedCompositorToShellMessage::LockState { .. } => {
-            Some(PendingCompositorMessageDedupKey::Static(
-                PendingCompositorMessageStaticKey::LockState,
-            ))
-        }
+        shell_wire::DecodedCompositorToShellMessage::LockState { .. } => Some(
+            PendingCompositorMessageDedupKey::Static(PendingCompositorMessageStaticKey::LockState),
+        ),
         shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {
             Some(PendingCompositorMessageDedupKey::Static(
                 PendingCompositorMessageStaticKey::InteractionState,

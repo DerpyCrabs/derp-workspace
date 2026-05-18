@@ -260,6 +260,16 @@ export interface ShellTaskbar {
   monitor: string
   side?: string
   rect: Rect
+  programs_toggle?: Rect | null
+  osk_toggle?: Rect | null
+  keyboard_layout?: Rect | null
+  tray_strip?: Rect | null
+  clock?: Rect | null
+  has_programs_toggle?: boolean
+  has_osk_toggle?: boolean
+  has_keyboard_layout?: boolean
+  has_tray_strip?: boolean
+  has_clock?: boolean
 }
 
 export interface ShellTaskbarWindow {
@@ -281,6 +291,13 @@ export interface ShellTaskbarPin {
 export interface ShellTaskbarSideButton {
   output: string
   side: string
+  rect?: Rect | null
+}
+
+export interface ShellTaskbarComponentButton {
+  output: string
+  component: string
+  pressed: boolean
   rect?: Rect | null
 }
 
@@ -588,6 +605,7 @@ export interface ShellSnapshot {
   windows: WindowSnapshot[]
   taskbars: ShellTaskbar[]
   settings_taskbar_side_buttons?: ShellTaskbarSideButton[]
+  settings_taskbar_component_buttons?: ShellTaskbarComponentButton[]
   taskbar_pins?: ShellTaskbarPin[]
   shell_test_inputs?: ShellTestInputSnapshot[]
   shell_test_hide_inputs?: ShellTestHideInputSnapshot[]

@@ -1660,6 +1660,30 @@ fn handle_one(
         return Ok(());
     }
 
+    if req_path == "/test/taskbar/component" {
+        let name = v
+            .get("output")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "taskbar component: missing output".to_string())?
+            .to_string();
+        let component = v
+            .get("component")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "taskbar component: missing component".to_string())?
+            .to_string();
+        match component.as_str() {
+            "programs" | "osk" | "keyboard_layout" | "clock" => {}
+            _ => return Err("taskbar component: invalid component".into()),
+        }
+        let enabled = v
+            .get("enabled")
+            .and_then(|x| x.as_bool())
+            .ok_or_else(|| "taskbar component: missing enabled".to_string())?;
+        uplink.shell_set_taskbar_component(name, component, enabled);
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if req_path == "/test/output/layout" {
         let screens = v
             .get("screens")
@@ -1796,11 +1820,10 @@ fn handle_one(
             uplink.settings_osk_apply(osk)?;
         }
         "/settings_lock_screen" => {
-            let lock_screen =
-                serde_json::from_value::<crate::session::settings_config::LockScreenSettingsFile>(
-                    v,
-                )
-                .map_err(|e| format!("invalid lock screen settings: {e}"))?;
+            let lock_screen = serde_json::from_value::<
+                crate::session::settings_config::LockScreenSettingsFile,
+            >(v)
+            .map_err(|e| format!("invalid lock screen settings: {e}"))?;
             uplink.settings_lock_screen_apply(lock_screen)?;
         }
         "/lock" => {

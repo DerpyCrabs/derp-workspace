@@ -69,6 +69,10 @@ export type TaskbarProps = {
   orientation: 'horizontal' | 'vertical'
   side: 'bottom' | 'top' | 'left' | 'right'
   isPrimary: boolean
+  showPrograms: boolean
+  showOsk: boolean
+  showKeyboardLayout: boolean
+  showClock: boolean
   batteryState: ShellBatteryState | null
   trayReservedPx: number
   menuBounds: ClientMenuBounds
@@ -379,6 +383,12 @@ export function Taskbar(props: TaskbarProps) {
     const current = props.batteryState
     return current?.is_present ? current : null
   })
+  const extendedControlsVisible = () =>
+    props.isPrimary ||
+    props.showPrograms ||
+    props.showKeyboardLayout ||
+    props.showOsk ||
+    props.showClock
   const batteryFillWidth = createMemo(() => {
     const pct = Math.max(0, Math.min(100, Math.round(battery()?.percentage ?? 0)))
     if (pct <= 0) return 0
@@ -397,7 +407,7 @@ export function Taskbar(props: TaskbarProps) {
     ]
   }
 
-  if (props.isPrimary) {
+  if (props.showClock) {
     const interval = window.setInterval(() => setNow(new Date()), 15000)
     onCleanup(() => window.clearInterval(interval))
   }
@@ -518,7 +528,7 @@ export function Taskbar(props: TaskbarProps) {
       }}
     >
       <Show
-        when={props.isPrimary}
+        when={extendedControlsVisible()}
         fallback={
           <div
             data-shell-taskbar-exclude
@@ -555,42 +565,41 @@ export function Taskbar(props: TaskbarProps) {
           </div>
         }
       >
-        <div
-          data-shell-taskbar-exclude
-          data-shell-taskbar-monitor={props.monitorName}
-          class="flex shrink-0 items-stretch"
-          classList={{
-            'mr-1 h-full': props.orientation === 'horizontal',
-            'mb-1 w-full flex-col': props.orientation === 'vertical',
-          }}
-        >
-          <ProgramsTaskbarMenu>
-            <TaskbarContextMenuTrigger>
-              {(menu) => (
-                <button
-                  type="button"
-                  class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) shrink-0 cursor-pointer"
-                  classList={{
-                    'h-full w-9': props.orientation === 'horizontal',
-                    'h-9 w-full': props.orientation === 'vertical',
-                  }}
-                  data-shell-programs-toggle
-                  aria-expanded={menu.open()}
-                  aria-haspopup="menu"
-                  aria-label="Search apps"
-                  title="Search apps"
-                  onPointerDown={menu.onPointerDown}
-                  onClick={menu.onClick}
-                >
-                  <LayoutGrid class="h-4 w-4" stroke-width={2} />
-                </button>
-              )}
-            </TaskbarContextMenuTrigger>
-            <TaskbarContextMenuContent>
-              <ProgramsContextMenu />
-            </TaskbarContextMenuContent>
-          </ProgramsTaskbarMenu>
-        </div>
+        <Show when={props.showPrograms}>
+          <div
+            data-shell-taskbar-exclude
+            data-shell-taskbar-monitor={props.monitorName}
+            class="flex shrink-0 items-stretch"
+            classList={{
+              'mr-1 h-full': props.orientation === 'horizontal',
+              'mb-1 w-full flex-col': props.orientation === 'vertical',
+            }}
+          >
+            <ProgramsTaskbarMenu>
+              <TaskbarContextMenuTrigger>
+                {(menu) => (
+                  <button
+                    type="button"
+                    class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) shrink-0 cursor-pointer"
+                    classList={{
+                      'h-full w-9': props.orientation === 'horizontal',
+                      'h-9 w-full': props.orientation === 'vertical',
+                    }}
+                    data-shell-programs-toggle
+                    aria-expanded={menu.open()}
+                    aria-haspopup="menu"
+                    aria-label="Search apps"
+                    title="Search apps"
+                    onPointerDown={menu.onPointerDown}
+                    onClick={menu.onClick}
+                  >
+                    <LayoutGrid class="h-4 w-4" stroke-width={2} />
+                  </button>
+                )}
+              </TaskbarContextMenuTrigger>
+            </ProgramsTaskbarMenu>
+          </div>
+        </Show>
         <div
           data-shell-taskbar-exclude
           data-shell-taskbar-monitor={props.monitorName}
@@ -633,8 +642,9 @@ export function Taskbar(props: TaskbarProps) {
             'mt-auto w-full flex-col': props.orientation === 'vertical',
           }}
         >
-          <Show when={props.keyboardLayoutLabel}>
+          <Show when={props.showKeyboardLayout && props.keyboardLayoutLabel}>
             <span
+              data-shell-keyboard-layout
               class="flex shrink-0 items-center justify-center bg-transparent px-2 text-center text-[0.72rem] font-normal tabular-nums uppercase tracking-[0.08em] text-(--shell-text-muted)"
               classList={{
                 'h-full min-w-9 border-l border-(--shell-border)': props.orientation === 'horizontal',
@@ -645,7 +655,7 @@ export function Taskbar(props: TaskbarProps) {
               {keyboardIndicator(props.keyboardLayoutLabel!)}
             </span>
           </Show>
-          <Show when={props.oskEnabled}>
+          <Show when={props.showOsk && props.oskEnabled}>
             <button
               type="button"
               class="inline-flex cursor-pointer items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
@@ -664,144 +674,148 @@ export function Taskbar(props: TaskbarProps) {
               <Keyboard class="h-4 w-4" stroke-width={2} />
             </button>
           </Show>
-          <div
-            data-shell-tray-strip
-            class="flex shrink-0 items-stretch bg-transparent"
-            classList={{
-              'h-full border-l border-(--shell-border)': props.orientation === 'horizontal',
-              'w-full flex-col border-t border-(--shell-border)': props.orientation === 'vertical',
-            }}
-            style={{
-              width: props.orientation === 'horizontal' ? `${Math.max(0, props.trayReservedPx)}px` : undefined,
-              'min-width': props.orientation === 'horizontal' ? `${Math.max(0, props.trayReservedPx)}px` : undefined,
-            }}
-            aria-label="Tray"
-          >
-            <For each={props.sniTrayItems}>
-              {(it) => {
-                let suppressClickAfterPointer = false
-                const slot = () => Math.max(24, Math.min(48, props.trayIconSlotPx))
-                const src = () =>
-                  it.icon_base64.length > 0 ? `data:image/png;base64,${it.icon_base64}` : ''
-                return (
+          <Show when={props.isPrimary}>
+            <div
+              data-shell-tray-strip
+              class="flex shrink-0 items-stretch bg-transparent"
+              classList={{
+                'h-full border-l border-(--shell-border)': props.orientation === 'horizontal',
+                'w-full flex-col border-t border-(--shell-border)': props.orientation === 'vertical',
+              }}
+              style={{
+                width: props.orientation === 'horizontal' ? `${Math.max(0, props.trayReservedPx)}px` : undefined,
+                'min-width': props.orientation === 'horizontal' ? `${Math.max(0, props.trayReservedPx)}px` : undefined,
+              }}
+              aria-label="Tray"
+            >
+              <For each={props.sniTrayItems}>
+                {(it) => {
+                  let suppressClickAfterPointer = false
+                  const slot = () => Math.max(24, Math.min(48, props.trayIconSlotPx))
+                  const src = () =>
+                    it.icon_base64.length > 0 ? `data:image/png;base64,${it.icon_base64}` : ''
+                  return (
+                    <button
+                      type="button"
+                      class="box-border flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent px-0.5 text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) touch-manipulation"
+                      style={{
+                        width: props.orientation === 'horizontal' ? `${slot()}px` : undefined,
+                        'min-width': props.orientation === 'horizontal' ? `${slot()}px` : undefined,
+                        height: props.orientation === 'vertical' ? `${slot()}px` : undefined,
+                      }}
+                      title={it.title}
+                      onPointerUp={(e) => {
+                        if (e.button !== 0) return
+                        suppressClickAfterPointer = true
+                        window.setTimeout(() => {
+                          suppressClickAfterPointer = false
+                        }, 0)
+                        props.onSniTrayActivate(it.id)
+                      }}
+                      onClick={() => {
+                        if (suppressClickAfterPointer) return
+                        props.onSniTrayActivate(it.id)
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        props.onSniTrayContextMenu(it.id, e.clientX, e.clientY)
+                      }}
+                    >
+                      <Show when={src()} fallback={<AppWindow class="h-5 w-5 opacity-70" stroke-width={2} />}>
+                        <img
+                          alt=""
+                          class="h-[22px] w-[22px] max-h-[22px] max-w-[22px] object-contain"
+                          src={src()}
+                          draggable={false}
+                        />
+                      </Show>
+                    </button>
+                  )
+                }}
+              </For>
+            </div>
+          </Show>
+          <Show when={props.isPrimary}>
+            <VolumeTaskbarMenu>
+              <TaskbarContextMenuTrigger>
+                {(menu) => (
                   <button
                     type="button"
-                    class="box-border flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent px-0.5 text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) touch-manipulation"
-                    style={{
-                      width: props.orientation === 'horizontal' ? `${slot()}px` : undefined,
-                      'min-width': props.orientation === 'horizontal' ? `${slot()}px` : undefined,
-                      height: props.orientation === 'vertical' ? `${slot()}px` : undefined,
+                    class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
+                    classList={{
+                      'h-full w-9': props.orientation === 'horizontal',
+                      'h-9 w-full': props.orientation === 'vertical',
+                      'bg-(--shell-control-muted-hover) text-(--shell-text)': menu.open(),
                     }}
-                    title={it.title}
-                    onPointerUp={(e) => {
-                      if (e.button !== 0) return
-                      suppressClickAfterPointer = true
-                      window.setTimeout(() => {
-                        suppressClickAfterPointer = false
-                      }, 0)
-                      props.onSniTrayActivate(it.id)
-                    }}
-                    onClick={() => {
-                      if (suppressClickAfterPointer) return
-                      props.onSniTrayActivate(it.id)
-                    }}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      props.onSniTrayContextMenu(it.id, e.clientX, e.clientY)
-                    }}
+                    data-shell-volume-toggle
+                    aria-expanded={menu.open()}
+                    aria-haspopup="dialog"
+                    title={props.volumeMuted ? 'Volume muted' : props.volumePercent !== null ? `Volume ${props.volumePercent}%` : 'Volume'}
+                    onPointerDown={menu.onPointerDown}
+                    onClick={menu.onClick}
                   >
-                    <Show when={src()} fallback={<AppWindow class="h-5 w-5 opacity-70" stroke-width={2} />}>
-                      <img
-                        alt=""
-                        class="h-[22px] w-[22px] max-h-[22px] max-w-[22px] object-contain"
-                        src={src()}
-                        draggable={false}
-                      />
-                    </Show>
+                    {volumeIcon()}
                   </button>
-                )
+                )}
+              </TaskbarContextMenuTrigger>
+              <TaskbarContextMenuContent>
+                <VolumeContextMenu />
+              </TaskbarContextMenuContent>
+            </VolumeTaskbarMenu>
+            <button
+              type="button"
+              class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
+              classList={{
+                'h-full w-9': props.orientation === 'horizontal',
+                'h-9 w-full': props.orientation === 'vertical',
+                'bg-(--shell-control-muted-hover) text-(--shell-text)': props.settingsPanelOpen,
               }}
-            </For>
-          </div>
-          <VolumeTaskbarMenu>
-            <TaskbarContextMenuTrigger>
-              {(menu) => (
-                <button
-                  type="button"
-                  class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
-                  classList={{
-                    'h-full w-9': props.orientation === 'horizontal',
-                    'h-9 w-full': props.orientation === 'vertical',
-                    'bg-(--shell-control-muted-hover) text-(--shell-text)': menu.open(),
-                  }}
-                  data-shell-volume-toggle
-                  aria-expanded={menu.open()}
-                  aria-haspopup="dialog"
-                  title={props.volumeMuted ? 'Volume muted' : props.volumePercent !== null ? `Volume ${props.volumePercent}%` : 'Volume'}
-                  onPointerDown={menu.onPointerDown}
-                  onClick={menu.onClick}
-                >
-                  {volumeIcon()}
-                </button>
-              )}
-            </TaskbarContextMenuTrigger>
-            <TaskbarContextMenuContent>
-              <VolumeContextMenu />
-            </TaskbarContextMenuContent>
-          </VolumeTaskbarMenu>
-          <button
-            type="button"
-            class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
-            classList={{
-              'h-full w-9': props.orientation === 'horizontal',
-              'h-9 w-full': props.orientation === 'vertical',
-              'bg-(--shell-control-muted-hover) text-(--shell-text)': props.settingsPanelOpen,
-            }}
-            data-shell-settings-toggle
-            aria-pressed={props.settingsPanelOpen}
-            title={props.settingsPanelOpen ? 'Hide settings' : 'Settings'}
-            onPointerDown={(e) => {
-              e.preventDefault()
-              suppressSettingsClick = true
-              props.onSettingsPanelToggle()
-            }}
-            onClick={() => {
-              if (suppressSettingsClick) {
-                suppressSettingsClick = false
-                return
-              }
-              props.onSettingsPanelToggle()
-            }}
-          >
-            <Settings class="h-4 w-4" stroke-width={2} />
-          </button>
-          <button
-            type="button"
-            class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
-            classList={{
-              'h-full w-9': props.orientation === 'horizontal',
-              'h-9 w-full': props.orientation === 'vertical',
-              'bg-(--shell-control-muted-hover) text-(--shell-text)': props.debugPanelOpen,
-            }}
-            data-shell-debug-toggle
-            aria-pressed={props.debugPanelOpen}
-            title={props.debugPanelOpen ? 'Hide debug panel' : 'Show debug panel'}
-            onPointerDown={(e) => {
-              e.preventDefault()
-              suppressDebugClick = true
-              props.onDebugPanelToggle()
-            }}
-            onClick={() => {
-              if (suppressDebugClick) {
-                suppressDebugClick = false
-                return
-              }
-              props.onDebugPanelToggle()
-            }}
-          >
-            <Bug class="h-4 w-4" stroke-width={2} />
-          </button>
-          <Show when={battery()}>
+              data-shell-settings-toggle
+              aria-pressed={props.settingsPanelOpen}
+              title={props.settingsPanelOpen ? 'Hide settings' : 'Settings'}
+              onPointerDown={(e) => {
+                e.preventDefault()
+                suppressSettingsClick = true
+                props.onSettingsPanelToggle()
+              }}
+              onClick={() => {
+                if (suppressSettingsClick) {
+                  suppressSettingsClick = false
+                  return
+                }
+                props.onSettingsPanelToggle()
+              }}
+            >
+              <Settings class="h-4 w-4" stroke-width={2} />
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
+              classList={{
+                'h-full w-9': props.orientation === 'horizontal',
+                'h-9 w-full': props.orientation === 'vertical',
+                'bg-(--shell-control-muted-hover) text-(--shell-text)': props.debugPanelOpen,
+              }}
+              data-shell-debug-toggle
+              aria-pressed={props.debugPanelOpen}
+              title={props.debugPanelOpen ? 'Hide debug panel' : 'Show debug panel'}
+              onPointerDown={(e) => {
+                e.preventDefault()
+                suppressDebugClick = true
+                props.onDebugPanelToggle()
+              }}
+              onClick={() => {
+                if (suppressDebugClick) {
+                  suppressDebugClick = false
+                  return
+                }
+                props.onDebugPanelToggle()
+              }}
+            >
+              <Bug class="h-4 w-4" stroke-width={2} />
+            </button>
+          </Show>
+          <Show when={props.isPrimary && battery()}>
             {(currentBattery) => (
               <span
                 data-shell-battery-indicator
@@ -831,44 +845,56 @@ export function Taskbar(props: TaskbarProps) {
               </span>
             )}
           </Show>
-          <PowerTaskbarMenu>
-            <TaskbarContextMenuTrigger>
-              {(menu) => (
-                <button
-                  type="button"
-                  class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
-                  classList={{
-                    'h-full w-9': props.orientation === 'horizontal',
-                    'h-9 w-full': props.orientation === 'vertical',
-                    'bg-(--shell-control-muted-hover) text-(--shell-text)': menu.open(),
-                  }}
-                  data-shell-power-toggle
-                  aria-expanded={menu.open()}
-                  aria-haspopup="menu"
-                  title="Power"
-                  onPointerDown={menu.onPointerDown}
-                  onClick={menu.onClick}
-                >
-                  <Power class="h-4 w-4" stroke-width={2} />
-                </button>
-              )}
-            </TaskbarContextMenuTrigger>
-            <TaskbarContextMenuContent>
-              <PowerContextMenu />
-            </TaskbarContextMenuContent>
-          </PowerTaskbarMenu>
-          <div
-            class="flex shrink-0 flex-col justify-center px-2 text-[10px] leading-tight text-(--shell-text-dim)"
-            classList={{
-              'min-w-18 items-end border-l border-(--shell-border)': props.orientation === 'horizontal',
-              'h-9 w-full items-center border-t border-(--shell-border)': props.orientation === 'vertical',
-            }}
-          >
-            <span class="text-[0.76rem] font-semibold text-(--shell-text)">
-              {clockTimeFormatter.format(now())}
-            </span>
-            <span>{clockDateFormatter.format(now())}</span>
-          </div>
+          <Show when={props.isPrimary}>
+            <PowerTaskbarMenu>
+              <TaskbarContextMenuTrigger>
+                {(menu) => (
+                  <button
+                    type="button"
+                    class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
+                    classList={{
+                      'h-full w-9': props.orientation === 'horizontal',
+                      'h-9 w-full': props.orientation === 'vertical',
+                      'bg-(--shell-control-muted-hover) text-(--shell-text)': menu.open(),
+                    }}
+                    data-shell-power-toggle
+                    aria-expanded={menu.open()}
+                    aria-haspopup="menu"
+                    title="Power"
+                    onPointerDown={menu.onPointerDown}
+                    onClick={menu.onClick}
+                  >
+                    <Power class="h-4 w-4" stroke-width={2} />
+                  </button>
+                )}
+              </TaskbarContextMenuTrigger>
+              <TaskbarContextMenuContent>
+                <PowerContextMenu />
+              </TaskbarContextMenuContent>
+            </PowerTaskbarMenu>
+          </Show>
+          <Show when={props.showClock}>
+            <div
+              data-shell-clock
+              class="flex shrink-0 flex-col justify-center px-2 text-[10px] leading-tight text-(--shell-text-dim)"
+              classList={{
+                'min-w-18 items-end border-l border-(--shell-border)': props.orientation === 'horizontal',
+                'h-9 w-full items-center border-t border-(--shell-border)': props.orientation === 'vertical',
+              }}
+            >
+              <span class="text-[0.76rem] font-semibold text-(--shell-text)">
+                {clockTimeFormatter.format(now())}
+              </span>
+              <span>{clockDateFormatter.format(now())}</span>
+            </div>
+          </Show>
+          <Show when={props.isPrimary}>
+            <ProgramsTaskbarMenu>
+              <TaskbarContextMenuContent>
+                <ProgramsContextMenu />
+              </TaskbarContextMenuContent>
+            </ProgramsTaskbarMenu>
+          </Show>
         </div>
       </Show>
     </div>

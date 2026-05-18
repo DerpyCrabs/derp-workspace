@@ -110,6 +110,11 @@ export type ShellHostedWindowContentEnv = {
   setOutputVrr: (name: string, enabled: boolean) => void
   setTaskbarAutoHide: (enabled: boolean) => void
   setTaskbarSide: (name: string, side: 'bottom' | 'top' | 'left' | 'right') => void
+  setTaskbarComponent: (
+    name: string,
+    component: 'programs' | 'osk' | 'keyboard_layout' | 'clock',
+    enabled: boolean,
+  ) => void
   applyCompositorLayoutFromDraft: () => void
   monitorRefreshLabel: (milli: number) => string
   keyboardLayoutLabel: Accessor<string | null>
@@ -172,6 +177,7 @@ export function renderShellHostedWindowContent(
         setOutputVrr={(name, enabled) => env.setOutputVrr(name, enabled)}
         setTaskbarAutoHide={(enabled) => env.setTaskbarAutoHide(enabled)}
         setTaskbarSide={(name, side) => env.setTaskbarSide(name, side)}
+        setTaskbarComponent={(name, component, enabled) => env.setTaskbarComponent(name, component, enabled)}
         applyCompositorLayoutFromDraft={env.applyCompositorLayoutFromDraft}
         monitorRefreshLabel={env.monitorRefreshLabel}
         keyboardLayoutLabel={env.keyboardLayoutLabel}

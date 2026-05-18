@@ -550,6 +550,24 @@ impl CompositorState {
         self.display_config_request_save();
     }
 
+    pub fn set_taskbar_components(
+        &mut self,
+        output_name: String,
+        components: ShellTaskbarComponents,
+    ) {
+        if !self
+            .output_topology
+            .set_taskbar_components(output_name, components)
+            .needs_side_effects()
+        {
+            return;
+        }
+        self.refresh_taskbar_dependent_window_layouts();
+        self.resync_embedded_shell_host_after_ipc_connect();
+        self.send_shell_output_layout();
+        self.display_config_request_save();
+    }
+
     pub(crate) fn refresh_usable_area_dependent_window_layouts(&mut self) {
         self.refresh_taskbar_dependent_window_layouts();
         self.keep_shell_hosted_windows_above_osk();

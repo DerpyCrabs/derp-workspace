@@ -150,6 +150,10 @@ function layoutScreenCssRect(
     vrr_supported: screen.vrr_supported,
     vrr_enabled: screen.vrr_enabled,
     taskbar_side: screen.taskbar_side,
+    taskbar_programs: screen.taskbar_programs,
+    taskbar_osk: screen.taskbar_osk,
+    taskbar_keyboard_layout: screen.taskbar_keyboard_layout,
+    taskbar_clock: screen.taskbar_clock,
   }
 }
 

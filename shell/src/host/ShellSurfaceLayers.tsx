@@ -115,9 +115,14 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
           onCleanup(taskbarRegistration.unregister)
           const trailingTaskbarControlSize = () => {
             const side = currentScreen().taskbar_side
-            const clock = side === 'left' || side === 'right' ? 36 : 72
-            const battery = props.batteryState()?.is_present ? 36 : 0
-            return 36 + 36 + 36 + battery + 36 + clock
+            const screen = currentScreen()
+            const clock = screen.taskbar_clock ? (side === 'left' || side === 'right' ? 36 : 72) : 0
+            const keyboardLayout = screen.taskbar_keyboard_layout && props.keyboardLayoutLabel() ? 36 : 0
+            const osk = screen.taskbar_osk && props.oskEnabled() ? 36 : 0
+            const primaryControls = props.isPrimaryTaskbarScreen(screen)
+              ? 36 + 36 + 36 + (props.batteryState()?.is_present ? 36 : 0) + 36
+              : 0
+            return keyboardLayout + osk + primaryControls + clock
           }
           const trayReservedForScreen = () => {
             if (!props.isPrimaryTaskbarScreen(currentScreen())) return 0
@@ -169,6 +174,10 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
                     orientation={currentScreen().taskbar_side === 'left' || currentScreen().taskbar_side === 'right' ? 'vertical' : 'horizontal'}
                     side={currentScreen().taskbar_side}
                     isPrimary={props.isPrimaryTaskbarScreen(currentScreen())}
+                    showPrograms={currentScreen().taskbar_programs}
+                    showOsk={currentScreen().taskbar_osk}
+                    showKeyboardLayout={currentScreen().taskbar_keyboard_layout}
+                    showClock={currentScreen().taskbar_clock}
                     batteryState={
                       props.isPrimaryTaskbarScreen(currentScreen()) ? props.batteryState() : null
                     }
@@ -190,9 +199,9 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
                     windows={props.taskbarRowsForScreen(currentScreen())}
                     focusedWindowId={props.focusedWindowId()}
                     keyboardLayoutLabel={
-                      props.isPrimaryTaskbarScreen(currentScreen()) ? props.keyboardLayoutLabel() : null
+                      currentScreen().taskbar_keyboard_layout ? props.keyboardLayoutLabel() : null
                     }
-                    oskEnabled={props.isPrimaryTaskbarScreen(currentScreen()) && props.oskEnabled()}
+                    oskEnabled={currentScreen().taskbar_osk && props.oskEnabled()}
                     onOskToggle={props.onOskToggle}
                     settingsPanelOpen={props.settingsHudFrameVisible()}
                     onSettingsPanelToggle={props.onSettingsPanelToggle}

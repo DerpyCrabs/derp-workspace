@@ -7,7 +7,7 @@ use smithay::backend::drm::DrmDevice;
 use smithay::reexports::drm::control::{connector, Device as ControlDevice};
 
 use crate::drm::{DrmHead, DrmSession};
-use crate::state::{transform_to_wire, CompositorState, ShellTaskbarSide};
+use crate::state::{transform_to_wire, CompositorState, ShellTaskbarComponents, ShellTaskbarSide};
 use smithay::input::keyboard::XkbConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -32,6 +32,18 @@ pub struct ScreenEntry {
     pub vrr_enabled: bool,
     #[serde(default)]
     pub taskbar_side: ShellTaskbarSide,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub taskbar_programs: Option<bool>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub taskbar_osk: Option<bool>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub taskbar_keyboard_layout: Option<bool>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub taskbar_clock: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -322,13 +334,40 @@ pub fn apply_stored_from_heads(
     }
     state.output_topology.taskbar_auto_hide = cfg.taskbar_auto_hide;
     state.output_topology.taskbar_side_by_output_name.clear();
+    state
+        .output_topology
+        .taskbar_components_by_output_name
+        .clear();
     for s in &cfg.screens {
         if let Some(n) = resolve_entry(&s.connector, s.monitor_id.as_ref(), &live) {
             if s.taskbar_side != ShellTaskbarSide::Bottom {
                 state
                     .output_topology
                     .taskbar_side_by_output_name
-                    .insert(n, s.taskbar_side);
+                    .insert(n.clone(), s.taskbar_side);
+            }
+            if s.taskbar_programs.is_some()
+                || s.taskbar_osk.is_some()
+                || s.taskbar_keyboard_layout.is_some()
+                || s.taskbar_clock.is_some()
+            {
+                let defaults = state
+                    .output_topology
+                    .default_taskbar_components_for_output_name(n.as_str());
+                state
+                    .output_topology
+                    .taskbar_components_by_output_name
+                    .insert(
+                        n,
+                        ShellTaskbarComponents {
+                            programs: s.taskbar_programs.unwrap_or(defaults.programs),
+                            osk: s.taskbar_osk.unwrap_or(defaults.osk),
+                            keyboard_layout: s
+                                .taskbar_keyboard_layout
+                                .unwrap_or(defaults.keyboard_layout),
+                            clock: s.taskbar_clock.unwrap_or(defaults.clock),
+                        },
+                    );
             }
         }
     }
@@ -448,6 +487,10 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
     let Some(path) = display_config_path() else {
         return;
     };
+    let primary_output_name = state
+        .output_topology
+        .shell_effective_primary_output()
+        .map(|output| output.name());
     let screens: Vec<ScreenEntry> = session
         .heads
         .iter()
@@ -457,6 +500,10 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
             let g = state.output_topology.space.output_geometry(out)?;
             let edid = read_connector_edid(&session.drm, h.connector);
             let monitor_id = edid.as_deref().and_then(monitor_id_from_edid);
+            let components = state.output_topology.taskbar_components_for_output_name(
+                h.connector_name.as_str(),
+                primary_output_name.as_deref(),
+            );
             Some(ScreenEntry {
                 connector: h.connector_name.clone(),
                 monitor_id,
@@ -465,6 +512,10 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
                 transform: transform_to_wire(out.current_transform()),
                 vrr_enabled: h.vrr_supported && h.vrr_enabled,
                 taskbar_side: state.taskbar_side_for_output_name(h.connector_name.as_str()),
+                taskbar_programs: Some(components.programs),
+                taskbar_osk: Some(components.osk),
+                taskbar_keyboard_layout: Some(components.keyboard_layout),
+                taskbar_clock: Some(components.clock),
             })
         })
         .collect();
@@ -628,6 +679,10 @@ mod tests {
                 transform: 0,
                 vrr_enabled: false,
                 taskbar_side: ShellTaskbarSide::Right,
+                taskbar_programs: Some(true),
+                taskbar_osk: Some(false),
+                taskbar_keyboard_layout: Some(true),
+                taskbar_clock: Some(true),
             }],
             keyboard: KeyboardXkbFile::default(),
             desktop_background: DesktopBackgroundConfig::default(),

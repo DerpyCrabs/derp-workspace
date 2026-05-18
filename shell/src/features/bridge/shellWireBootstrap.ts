@@ -131,6 +131,13 @@ export const shellWireSend: ShellCompositorWireSend = function shellWireSend(
   ) {
     fn(op, arg, arg2);
   } else if (
+    op === "set_taskbar_component" &&
+    typeof arg === "string" &&
+    typeof arg2 === "string" &&
+    arg3 !== undefined
+  ) {
+    fn(op, arg, arg2, arg3);
+  } else if (
     op === "native_drag_preview_ready" &&
     typeof arg === "number" &&
     typeof arg2 === "number"

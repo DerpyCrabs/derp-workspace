@@ -529,6 +529,16 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     monitor: taskbarEl.getAttribute('data-shell-taskbar-monitor') ?? '',
     side: taskbarEl.getAttribute('data-shell-taskbar-side') ?? '',
     rect: snapshotRect(taskbarEl, args.origin),
+    programs_toggle: snapshotRect(taskbarEl.querySelector('[data-shell-programs-toggle]'), args.origin),
+    osk_toggle: snapshotRect(taskbarEl.querySelector('[data-shell-osk-toggle]'), args.origin),
+    keyboard_layout: snapshotRect(taskbarEl.querySelector('[data-shell-keyboard-layout]'), args.origin),
+    tray_strip: snapshotRect(taskbarEl.querySelector('[data-shell-tray-strip]'), args.origin),
+    clock: snapshotRect(taskbarEl.querySelector('[data-shell-clock]'), args.origin),
+    has_programs_toggle: taskbarEl.querySelector('[data-shell-programs-toggle]') !== null,
+    has_osk_toggle: taskbarEl.querySelector('[data-shell-osk-toggle]') !== null,
+    has_keyboard_layout: taskbarEl.querySelector('[data-shell-keyboard-layout]') !== null,
+    has_tray_strip: taskbarEl.querySelector('[data-shell-tray-strip]') !== null,
+    has_clock: taskbarEl.querySelector('[data-shell-clock]') !== null,
   }))
   const programsMenuItems: E2eProgramsMenuItem[] = cache.queryAllAttr('data-command-palette-id').map((button) => ({
     id: button.getAttribute('data-command-palette-id') ?? '',
@@ -543,6 +553,15 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     side: button.getAttribute('data-settings-taskbar-side-option') ?? '',
     rect: snapshotRect(button, args.origin),
   }))
+  const settingsTaskbarComponentButtons = cache.queryAllAttr('data-settings-taskbar-component').map((button) => ({
+    output: button.getAttribute('data-settings-taskbar-component-output') ?? '',
+    component: button.getAttribute('data-settings-taskbar-component') ?? '',
+    pressed: button.getAttribute('aria-pressed') === 'true',
+    rect: snapshotRect(button, args.origin),
+  }))
+  const primaryTaskbarEl = cache.query('[data-shell-settings-toggle]')?.closest('[data-shell-taskbar-side]')
+  const primaryTaskbarRect = (selector: string) =>
+    snapshotRect(primaryTaskbarEl?.querySelector(selector) ?? null, args.origin) ?? queryRect(cache, selector, args.origin)
   const portalPickerPanel = queryRect(cache, '[data-shell-portal-picker-panel]', args.origin)
   const portalPickerCancel = queryRect(cache, '[data-shell-portal-picker-cancel]', args.origin)
   const portalPickerWindows = cache.queryAllAttr('data-shell-portal-picker-window').map((button) => ({
@@ -1038,7 +1057,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       scratchpad: !!(window.shell_flags & SHELL_WINDOW_FLAG_SCRATCHPAD),
     })),
     controls: {
-      taskbar_programs_toggle: queryRect(cache, '[data-shell-programs-toggle]', args.origin),
+      taskbar_programs_toggle: primaryTaskbarRect('[data-shell-programs-toggle]'),
       taskbar_settings_toggle: queryRect(cache, '[data-shell-settings-toggle]', args.origin),
       taskbar_debug_toggle: queryRect(cache, '[data-shell-debug-toggle]', args.origin),
       taskbar_volume_toggle: queryRect(cache, '[data-shell-volume-toggle]', args.origin),
@@ -1285,6 +1304,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     },
     taskbars: taskbarButtons,
     settings_taskbar_side_buttons: settingsTaskbarSideButtons,
+    settings_taskbar_component_buttons: settingsTaskbarComponentButtons,
     taskbar_pins: taskbarPins,
     shell_test_inputs: shellTestInputs,
     shell_test_hide_inputs: shellTestHideInputs,

@@ -19,6 +19,10 @@ export type LayoutScreen = {
   vrr_supported: boolean
   vrr_enabled: boolean
   taskbar_side: TaskbarSide
+  taskbar_programs: boolean
+  taskbar_osk: boolean
+  taskbar_keyboard_layout: boolean
+  taskbar_clock: boolean
 }
 
 export type TaskbarSide = 'bottom' | 'top' | 'left' | 'right'

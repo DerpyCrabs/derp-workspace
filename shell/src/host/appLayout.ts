@@ -27,6 +27,10 @@ export function screensListForLayout(
         vrr_supported: false,
         vrr_enabled: false,
         taskbar_side: 'bottom',
+        taskbar_programs: true,
+        taskbar_osk: true,
+        taskbar_keyboard_layout: true,
+        taskbar_clock: true,
       },
     ]
   }
@@ -60,6 +64,10 @@ export function layoutScreenCssRect(s: LayoutScreen, origin: CanvasOrigin): Layo
     vrr_supported: s.vrr_supported,
     vrr_enabled: s.vrr_enabled,
     taskbar_side: s.taskbar_side,
+    taskbar_programs: s.taskbar_programs,
+    taskbar_osk: s.taskbar_osk,
+    taskbar_keyboard_layout: s.taskbar_keyboard_layout,
+    taskbar_clock: s.taskbar_clock,
   }
 }
 

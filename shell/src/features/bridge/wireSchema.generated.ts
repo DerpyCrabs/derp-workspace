@@ -333,7 +333,7 @@ export type SharedShellExclusionTrayStrip = { x: number; y: number; w: number; h
 
 export type CompositorInteractionVisual = { x: number; y: number; width: number; height: number; maximized: boolean; fullscreen: boolean }
 
-export type OutputLayoutScreenDetail = { name: string; identity?: string; x: number; y: number; width: number; height: number; usable_x?: number; usable_y?: number; usable_width?: number; usable_height?: number; physical_width?: number; physical_height?: number; transform: number; refresh_milli_hz?: number; vrr_supported?: boolean; vrr_enabled?: boolean; taskbar_side?: 'bottom' | 'top' | 'left' | 'right' }
+export type OutputLayoutScreenDetail = { name: string; identity?: string; x: number; y: number; width: number; height: number; usable_x?: number; usable_y?: number; usable_width?: number; usable_height?: number; physical_width?: number; physical_height?: number; transform: number; refresh_milli_hz?: number; vrr_supported?: boolean; vrr_enabled?: boolean; taskbar_side?: 'bottom' | 'top' | 'left' | 'right'; taskbar_programs?: boolean; taskbar_osk?: boolean; taskbar_keyboard_layout?: boolean; taskbar_clock?: boolean }
 
 export type TraySniMenuEntryDetail = { dbusmenu_id: number; label: string; separator: boolean; enabled: boolean }
 

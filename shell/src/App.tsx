@@ -744,6 +744,10 @@ function App() {
         vrr_supported: false,
         vrr_enabled: false,
         taskbar_side: "bottom",
+        taskbar_programs: true,
+        taskbar_osk: true,
+        taskbar_keyboard_layout: true,
+        taskbar_clock: true,
       };
       return { primary: single, secondary: [] as LayoutScreen[] };
     }
@@ -1469,6 +1473,13 @@ function App() {
         shellWireSend("set_taskbar_auto_hide", enabled ? 1 : 0),
       setTaskbarSide: (name, side) =>
         shellWireSend("set_taskbar_side", name, side),
+      setTaskbarComponent: (name, component, enabled) =>
+        shellWireSend(
+          "set_taskbar_component",
+          name,
+          component,
+          enabled ? 1 : 0,
+        ),
       applyCompositorLayoutFromDraft: () => {
         const screens = screenDraft.rows.map((r) => ({
           name: r.name,

@@ -173,7 +173,11 @@ function sameScreenList(left: readonly LayoutScreen[], right: readonly LayoutScr
       l.refresh_milli_hz !== r.refresh_milli_hz ||
       l.vrr_supported !== r.vrr_supported ||
       l.vrr_enabled !== r.vrr_enabled ||
-      l.taskbar_side !== r.taskbar_side
+      l.taskbar_side !== r.taskbar_side ||
+      l.taskbar_programs !== r.taskbar_programs ||
+      l.taskbar_osk !== r.taskbar_osk ||
+      l.taskbar_keyboard_layout !== r.taskbar_keyboard_layout ||
+      l.taskbar_clock !== r.taskbar_clock
     ) {
       return false
     }
@@ -594,6 +598,11 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   }
 
   const applyOutputLayoutDetail = (d: Extract<DerpShellDetail, { type: 'output_layout' }>) => {
+    const pr =
+      typeof d.shell_chrome_primary === 'string' && d.shell_chrome_primary.length > 0
+        ? d.shell_chrome_primary
+        : null
+    const fallbackPrimaryName = pr ?? d.screens.slice().sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x))[0]?.name ?? null
     const screens = d.screens.map((s) => ({
       name: s.name,
       identity: s.identity,
@@ -629,11 +638,12 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         s.taskbar_side === 'top' || s.taskbar_side === 'left' || s.taskbar_side === 'right'
           ? s.taskbar_side
           : ('bottom' as const),
+      taskbar_programs: typeof s.taskbar_programs === 'boolean' ? s.taskbar_programs : s.name === fallbackPrimaryName,
+      taskbar_osk: typeof s.taskbar_osk === 'boolean' ? s.taskbar_osk : s.name === fallbackPrimaryName,
+      taskbar_keyboard_layout:
+        typeof s.taskbar_keyboard_layout === 'boolean' ? s.taskbar_keyboard_layout : s.name === fallbackPrimaryName,
+      taskbar_clock: typeof s.taskbar_clock === 'boolean' ? s.taskbar_clock : s.name === fallbackPrimaryName,
     }))
-    const pr =
-      typeof d.shell_chrome_primary === 'string' && d.shell_chrome_primary.length > 0
-        ? d.shell_chrome_primary
-        : null
     const next = {
       revision: typeof d.revision === 'number' && Number.isFinite(d.revision) ? Math.trunc(d.revision) : 0,
       logical: { w: d.canvas_logical_width, h: d.canvas_logical_height },

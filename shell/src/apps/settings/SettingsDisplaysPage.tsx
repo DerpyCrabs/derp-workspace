@@ -5,6 +5,10 @@ import ArrowDownToLine from 'lucide-solid/icons/arrow-down-to-line'
 import ArrowLeftToLine from 'lucide-solid/icons/arrow-left-to-line'
 import ArrowRightToLine from 'lucide-solid/icons/arrow-right-to-line'
 import ArrowUpToLine from 'lucide-solid/icons/arrow-up-to-line'
+import Clock3 from 'lucide-solid/icons/clock-3'
+import Keyboard from 'lucide-solid/icons/keyboard'
+import Languages from 'lucide-solid/icons/languages'
+import LayoutGrid from 'lucide-solid/icons/layout-grid'
 import { Select } from '@/host/Select'
 import { formatMonitorPixels } from '@/host/appLayout'
 import { TransformPicker } from '@/features/tiling/TransformPicker'
@@ -137,6 +141,11 @@ export type SettingsDisplaysPageProps = {
   setOutputVrr: (name: string, enabled: boolean) => void
   setTaskbarAutoHide: (enabled: boolean) => void
   setTaskbarSide: (name: string, side: 'bottom' | 'top' | 'left' | 'right') => void
+  setTaskbarComponent: (
+    name: string,
+    component: 'programs' | 'osk' | 'keyboard_layout' | 'clock',
+    enabled: boolean,
+  ) => void
   applyCompositorLayoutFromDraft: () => void
   monitorRefreshLabel: (milli: number) => string
 }
@@ -146,6 +155,13 @@ const TASKBAR_SIDE_OPTIONS = [
   { side: 'top' as const, label: 'Top', Icon: ArrowUpToLine },
   { side: 'left' as const, label: 'Left', Icon: ArrowLeftToLine },
   { side: 'right' as const, label: 'Right', Icon: ArrowRightToLine },
+]
+
+const TASKBAR_COMPONENT_OPTIONS = [
+  { key: 'programs' as const, label: 'Programs', field: 'taskbar_programs' as const, Icon: LayoutGrid },
+  { key: 'osk' as const, label: 'Keyboard', field: 'taskbar_osk' as const, Icon: Keyboard },
+  { key: 'keyboard_layout' as const, label: 'Layout', field: 'taskbar_keyboard_layout' as const, Icon: Languages },
+  { key: 'clock' as const, label: 'Clock', field: 'taskbar_clock' as const, Icon: Clock3 },
 ]
 
 export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
@@ -560,6 +576,36 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                               onClick={() => props.setTaskbarSide(row.name, option.side)}
                             >
                               <Icon class="h-4 w-4" stroke-width={2} />
+                            </button>
+                          )
+                        }}
+                      </For>
+                    </div>
+                  </div>
+                  <div class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide text-(--shell-text-dim)">
+                    controls
+                    <div class="flex flex-wrap gap-1" data-settings-taskbar-components={row.name}>
+                      <For each={TASKBAR_COMPONENT_OPTIONS}>
+                        {(option) => {
+                          const Icon = option.Icon
+                          const enabled = () => row[option.field]
+                          return (
+                            <button
+                              type="button"
+                              class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) flex h-7 min-w-8 cursor-pointer items-center justify-center gap-1 rounded px-1.5 text-[0.68rem] font-semibold disabled:cursor-default"
+                              classList={{
+                                'border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover)':
+                                  enabled(),
+                              }}
+                              disabled={!props.canSessionControl()}
+                              title={`${option.label} on ${row.name}`}
+                              aria-pressed={enabled()}
+                              data-settings-taskbar-component={option.key}
+                              data-settings-taskbar-component-output={row.name}
+                              onClick={() => props.setTaskbarComponent(row.name, option.key, !enabled())}
+                            >
+                              <Icon class="h-3.5 w-3.5" stroke-width={2} />
+                              <span>{option.label}</span>
                             </button>
                           )
                         }}

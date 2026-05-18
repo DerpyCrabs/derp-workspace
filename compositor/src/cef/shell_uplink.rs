@@ -149,6 +149,7 @@ fn is_shell_action_latency_op(op: &str) -> bool {
             | "set_output_vrr"
             | "set_taskbar_auto_hide"
             | "set_taskbar_side"
+            | "set_taskbar_component"
             | "set_tile_preview"
             | "set_chrome_metrics"
             | "workspace_mutation"
@@ -577,6 +578,12 @@ fn handle_uplink_list(
                 return;
             };
             uplink.shell_set_taskbar_side(name, side);
+        }
+        "set_taskbar_component" => {
+            let name = cef_string_userfree_to_string(&args.string(1));
+            let component = cef_string_userfree_to_string(&args.string(2));
+            let enabled = args.int(3) != 0;
+            uplink.shell_set_taskbar_component(name, component, enabled);
         }
         "set_tile_preview" => {
             let vis = args.int(1) != 0;
@@ -1226,6 +1233,45 @@ wrap_v8_handler! {
                     let _ = list.set_string(1, Some(&CefString::from(name.as_str())));
                     let _ = list.set_string(2, Some(&CefString::from(side.as_str())));
                 }
+                "set_taskbar_component" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_taskbar_component requires output, component, and enabled");
+                    };
+                    let Some(a2) = args.get(2).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_taskbar_component requires output, component, and enabled");
+                    };
+                    let Some(a3) = args.get(3).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_taskbar_component requires output, component, and enabled");
+                    };
+                    if a1.is_string() == 0 {
+                        return_exception!("set_taskbar_component: output name must be a string");
+                    }
+                    if a2.is_string() == 0 {
+                        return_exception!("set_taskbar_component: component must be a string");
+                    }
+                    let enabled = if a3.is_bool() != 0 {
+                        a3.bool_value() != 0
+                    } else if a3.is_int() != 0 {
+                        a3.int_value() != 0
+                    } else if a3.is_uint() != 0 {
+                        a3.uint_value() != 0
+                    } else if a3.is_double() != 0 {
+                        a3.double_value() != 0.0
+                    } else {
+                        return_exception!("set_taskbar_component: enabled must be boolean or number");
+                    };
+                    let name = cef_string_userfree_to_string(&a1.string_value());
+                    let component = cef_string_userfree_to_string(&a2.string_value());
+                    match component.as_str() {
+                        "programs" | "osk" | "keyboard_layout" | "clock" => {}
+                        _ => return_exception!(
+                            "set_taskbar_component: component must be programs, osk, keyboard_layout, or clock"
+                        ),
+                    }
+                    let _ = list.set_string(1, Some(&CefString::from(name.as_str())));
+                    let _ = list.set_string(2, Some(&CefString::from(component.as_str())));
+                    let _ = list.set_int(3, if enabled { 1 } else { 0 });
+                }
                 "shell_editable_focus" => {
                     macro_rules! int_at_editable {
                         ($idx:literal, $label:literal) => {{
@@ -1419,7 +1465,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, taskbar_pin_add, taskbar_pin_remove, taskbar_pin_launch, shell_hosted_window_state, shell_hosted_window_title, command_palette_activate, request_compositor_sync, spawn, move_begin, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_output_vrr, set_taskbar_auto_hide, set_taskbar_side, set_tile_preview, set_chrome_metrics, set_desktop_background, osk_toggle_visible, shell_editable_focus, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_shell_event, e2e_snapshot_response, e2e_html_response, e2e_perf_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
+                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, taskbar_pin_add, taskbar_pin_remove, taskbar_pin_launch, shell_hosted_window_state, shell_hosted_window_title, command_palette_activate, request_compositor_sync, spawn, move_begin, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_output_vrr, set_taskbar_auto_hide, set_taskbar_side, set_taskbar_component, set_tile_preview, set_chrome_metrics, set_desktop_background, osk_toggle_visible, shell_editable_focus, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_shell_event, e2e_snapshot_response, e2e_html_response, e2e_perf_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
                     );
                 }
             }

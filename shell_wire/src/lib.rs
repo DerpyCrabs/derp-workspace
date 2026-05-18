@@ -282,6 +282,14 @@ pub fn encode_output_layout(
             .checked_add(nl as usize)?
             .checked_add(16)?;
     }
+    body_sz = body_sz.checked_add(4)?;
+    for s in screens {
+        let nl = u32::try_from(s.name.as_bytes().len()).ok()?;
+        body_sz = body_sz
+            .checked_add(4)?
+            .checked_add(nl as usize)?
+            .checked_add(4)?;
+    }
     let body_len = u32::try_from(body_sz).ok()?;
     if body_len > MAX_BODY_BYTES {
         return None;
@@ -337,6 +345,27 @@ pub fn encode_output_layout(
         v.extend_from_slice(&s.usable_y.to_le_bytes());
         v.extend_from_slice(&s.usable_w.max(1).to_le_bytes());
         v.extend_from_slice(&s.usable_h.max(1).to_le_bytes());
+    }
+    v.extend_from_slice(&n.to_le_bytes());
+    for s in screens {
+        let nb = s.name.as_bytes();
+        let nl = nb.len() as u32;
+        let mut flags = 0u32;
+        if s.taskbar_programs {
+            flags |= 1;
+        }
+        if s.taskbar_osk {
+            flags |= 2;
+        }
+        if s.taskbar_keyboard_layout {
+            flags |= 4;
+        }
+        if s.taskbar_clock {
+            flags |= 8;
+        }
+        v.extend_from_slice(&nl.to_le_bytes());
+        v.extend_from_slice(nb);
+        v.extend_from_slice(&flags.to_le_bytes());
     }
     Some(v)
 }
@@ -538,6 +567,10 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
             vrr_supported,
             vrr_enabled,
             taskbar_side: TASKBAR_SIDE_BOTTOM,
+            taskbar_programs: false,
+            taskbar_osk: false,
+            taskbar_keyboard_layout: false,
+            taskbar_clock: false,
         });
     }
     let pl = cursor
@@ -638,6 +671,39 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
                 screen.usable_y = usable_y;
                 screen.usable_w = usable_w;
                 screen.usable_h = usable_h;
+            }
+        }
+    }
+    if cursor.remaining() > 0 {
+        let component_count = cursor
+            .read_u32()
+            .ok_or(DecodeError::BadOutputLayoutPayload)? as usize;
+        if component_count > MAX_OUTPUT_LAYOUT_SCREENS as usize {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        for _ in 0..component_count {
+            let nl = cursor
+                .read_u32()
+                .ok_or(DecodeError::BadOutputLayoutPayload)? as usize;
+            if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
+                return Err(DecodeError::BadOutputLayoutPayload);
+            }
+            let name = cursor
+                .read_utf8(nl)
+                .ok_or(DecodeError::BadOutputLayoutPayload)?
+                .map_err(|_| DecodeError::BadUtf8Command)?
+                .to_string();
+            let flags = cursor
+                .read_u32()
+                .ok_or(DecodeError::BadOutputLayoutPayload)?;
+            if flags & !15 != 0 {
+                return Err(DecodeError::BadOutputLayoutPayload);
+            }
+            if let Some(screen) = screens.iter_mut().find(|screen| screen.name == name) {
+                screen.taskbar_programs = flags & 1 != 0;
+                screen.taskbar_osk = flags & 2 != 0;
+                screen.taskbar_keyboard_layout = flags & 4 != 0;
+                screen.taskbar_clock = flags & 8 != 0;
             }
         }
     }
@@ -3055,6 +3121,10 @@ mod tests {
                 vrr_supported: true,
                 vrr_enabled: false,
                 taskbar_side: TASKBAR_SIDE_LEFT,
+                taskbar_programs: true,
+                taskbar_osk: false,
+                taskbar_keyboard_layout: true,
+                taskbar_clock: true,
             }],
             Some("DP-1"),
             true,
@@ -3088,6 +3158,10 @@ mod tests {
                     vrr_supported: true,
                     vrr_enabled: false,
                     taskbar_side: TASKBAR_SIDE_LEFT,
+                    taskbar_programs: true,
+                    taskbar_osk: false,
+                    taskbar_keyboard_layout: true,
+                    taskbar_clock: true,
                 }],
                 shell_chrome_primary: Some("DP-1".to_string()),
                 taskbar_auto_hide: true,
@@ -3148,6 +3222,10 @@ mod tests {
                     vrr_supported: false,
                     vrr_enabled: false,
                     taskbar_side: TASKBAR_SIDE_BOTTOM,
+                    taskbar_programs: false,
+                    taskbar_osk: false,
+                    taskbar_keyboard_layout: false,
+                    taskbar_clock: false,
                 }],
                 shell_chrome_primary: None,
                 taskbar_auto_hide: false,
@@ -3483,6 +3561,10 @@ mod tests {
             vrr_supported: false,
             vrr_enabled: false,
             taskbar_side: TASKBAR_SIDE_BOTTOM,
+            taskbar_programs: true,
+            taskbar_osk: true,
+            taskbar_keyboard_layout: true,
+            taskbar_clock: true,
         };
         let window = ShellWindowSnapshot {
             window_id: 7,

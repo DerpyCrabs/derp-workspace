@@ -43,6 +43,11 @@ export type SettingsPanelProps = {
   setOutputVrr: (name: string, enabled: boolean) => void
   setTaskbarAutoHide: (enabled: boolean) => void
   setTaskbarSide: (name: string, side: 'bottom' | 'top' | 'left' | 'right') => void
+  setTaskbarComponent: (
+    name: string,
+    component: 'programs' | 'osk' | 'keyboard_layout' | 'clock',
+    enabled: boolean,
+  ) => void
   applyCompositorLayoutFromDraft: () => void
   monitorRefreshLabel: (milli: number) => string
   keyboardLayoutLabel: Accessor<string | null>
@@ -121,6 +126,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             setOutputVrr={props.setOutputVrr}
             setTaskbarAutoHide={props.setTaskbarAutoHide}
             setTaskbarSide={props.setTaskbarSide}
+            setTaskbarComponent={props.setTaskbarComponent}
             applyCompositorLayoutFromDraft={props.applyCompositorLayoutFromDraft}
             monitorRefreshLabel={props.monitorRefreshLabel}
           />

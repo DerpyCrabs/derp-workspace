@@ -10,6 +10,7 @@ pub(crate) struct OutputTopologyState {
     pub(crate) shell_primary_output_name: Option<String>,
     pub(crate) taskbar_auto_hide: bool,
     pub(crate) taskbar_side_by_output_name: HashMap<String, ShellTaskbarSide>,
+    pub(crate) taskbar_components_by_output_name: HashMap<String, ShellTaskbarComponents>,
     pub(crate) output_vrr_by_name: HashMap<String, (bool, bool)>,
     pub(crate) output_flip_state_by_name: HashMap<String, (String, Option<String>)>,
     pub(crate) display_config_save_pending: bool,
@@ -33,6 +34,34 @@ pub(crate) enum OutputTopologyMutation {
     Unchanged,
     ChangedSuppressed,
     ChangedNeedsSave,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ShellTaskbarComponents {
+    pub programs: bool,
+    pub osk: bool,
+    pub keyboard_layout: bool,
+    pub clock: bool,
+}
+
+impl ShellTaskbarComponents {
+    pub(crate) fn primary() -> Self {
+        Self {
+            programs: true,
+            osk: true,
+            keyboard_layout: true,
+            clock: true,
+        }
+    }
+
+    pub(crate) fn secondary() -> Self {
+        Self {
+            programs: false,
+            osk: false,
+            keyboard_layout: false,
+            clock: false,
+        }
+    }
 }
 
 impl OutputTopologyMutation {
@@ -433,6 +462,9 @@ impl OutputTopologyState {
         let (pw, ph) = shell_window_physical_px;
         let physical_w = u32::try_from(pw).unwrap_or(lw).max(1);
         let physical_h = u32::try_from(ph).unwrap_or(lh).max(1);
+        let primary_output_name = self
+            .shell_effective_primary_output()
+            .map(|output| output.name());
         let screens: Vec<shell_wire::OutputLayoutScreen> = self
             .space
             .outputs()
@@ -443,6 +475,10 @@ impl OutputTopologyState {
                 let refresh_milli_hz = u32::try_from(mode.refresh.max(1)).unwrap_or(1);
                 let (vrr_supported, vrr_enabled) = self.output_vrr_state(o.name().as_str());
                 let taskbar_side = self.taskbar_side_for_output_name(o.name().as_str());
+                let components = self.taskbar_components_for_output_name(
+                    o.name().as_str(),
+                    primary_output_name.as_deref(),
+                );
                 let usable = self
                     .layer_usable_area_global_for_output(o)
                     .map(|base| {
@@ -471,6 +507,10 @@ impl OutputTopologyState {
                     vrr_supported,
                     vrr_enabled,
                     taskbar_side: taskbar_side.to_wire(),
+                    taskbar_programs: components.programs,
+                    taskbar_osk: components.osk,
+                    taskbar_keyboard_layout: components.keyboard_layout,
+                    taskbar_clock: components.clock,
                 })
             })
             .collect();
@@ -563,6 +603,37 @@ impl OutputTopologyState {
             .unwrap_or_default()
     }
 
+    pub(crate) fn default_taskbar_components_for_output_name(
+        &self,
+        name: &str,
+    ) -> ShellTaskbarComponents {
+        let primary_name = self
+            .shell_effective_primary_output()
+            .map(|output| output.name());
+        if primary_name.as_deref() == Some(name) {
+            ShellTaskbarComponents::primary()
+        } else {
+            ShellTaskbarComponents::secondary()
+        }
+    }
+
+    pub(crate) fn taskbar_components_for_output_name(
+        &self,
+        name: &str,
+        primary_name: Option<&str>,
+    ) -> ShellTaskbarComponents {
+        self.taskbar_components_by_output_name
+            .get(name)
+            .copied()
+            .unwrap_or_else(|| {
+                if primary_name == Some(name) {
+                    ShellTaskbarComponents::primary()
+                } else {
+                    ShellTaskbarComponents::secondary()
+                }
+            })
+    }
+
     pub(crate) fn set_taskbar_auto_hide(&mut self, enabled: bool) -> OutputTopologyMutation {
         if self.taskbar_auto_hide == enabled {
             return OutputTopologyMutation::Unchanged;
@@ -600,6 +671,35 @@ impl OutputTopologyState {
         } else {
             self.taskbar_side_by_output_name.insert(output_name, side);
         }
+        if self.display_config_save_suppressed {
+            OutputTopologyMutation::ChangedSuppressed
+        } else {
+            OutputTopologyMutation::ChangedNeedsSave
+        }
+    }
+
+    pub(crate) fn set_taskbar_components(
+        &mut self,
+        output_name: String,
+        components: ShellTaskbarComponents,
+    ) -> OutputTopologyMutation {
+        if !self
+            .space
+            .outputs()
+            .any(|o| o.name() == output_name.as_str())
+        {
+            return OutputTopologyMutation::Unchanged;
+        }
+        if self
+            .taskbar_components_by_output_name
+            .get(&output_name)
+            .copied()
+            == Some(components)
+        {
+            return OutputTopologyMutation::Unchanged;
+        }
+        self.taskbar_components_by_output_name
+            .insert(output_name, components);
         if self.display_config_save_suppressed {
             OutputTopologyMutation::ChangedSuppressed
         } else {

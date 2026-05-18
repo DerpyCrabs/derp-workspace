@@ -24,6 +24,10 @@ pub struct OutputLayoutScreen {
     pub vrr_supported: bool,
     pub vrr_enabled: bool,
     pub taskbar_side: u32,
+    pub taskbar_programs: bool,
+    pub taskbar_osk: bool,
+    pub taskbar_keyboard_layout: bool,
+    pub taskbar_clock: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
