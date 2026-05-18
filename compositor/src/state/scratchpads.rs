@@ -277,7 +277,8 @@ impl CompositorState {
                     })
             })
             .collect();
-        windows.sort_by_key(|window_id| self.shell_window_stack_z(*window_id));
+        let stack_z_by_window_id = self.stack_z_by_window_id();
+        windows.sort_by_key(|window_id| stack_z_by_window_id.get(window_id).copied().unwrap_or(0));
         if let Some(visible) = windows.iter().rev().copied().find(|window_id| {
             self.windows
                 .window_registry

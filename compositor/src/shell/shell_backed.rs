@@ -111,6 +111,7 @@ impl CompositorState {
         let Some(ws) = self.workspace_logical_bounds() else {
             return Vec::new();
         };
+        let stack_z_by_window_id = self.stack_z_by_window_id();
         let mut placements = Vec::new();
         for info in self.windows.window_registry.shell_hosted_infos() {
             if info.minimized {
@@ -129,7 +130,7 @@ impl CompositorState {
             };
             placements.push(ShellUiWindowPlacement {
                 id,
-                z: self.shell_window_stack_z(id),
+                z: stack_z_by_window_id.get(&id).copied().unwrap_or(0),
                 global_rect: clamped,
                 buffer_rect: br,
             });

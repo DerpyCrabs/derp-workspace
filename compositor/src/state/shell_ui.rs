@@ -269,6 +269,7 @@ impl CompositorState {
         let Some(ws) = self.workspace_logical_bounds() else {
             return Vec::new();
         };
+        let stack_z_by_window_id = self.stack_z_by_window_id();
         let mut placements = Vec::new();
         for record in self.windows.window_registry.all_records() {
             if record.kind != WindowKind::Native {
@@ -292,7 +293,10 @@ impl CompositorState {
             };
             placements.push(ShellUiWindowPlacement {
                 id: info.window_id,
-                z: self.shell_window_stack_z(info.window_id),
+                z: stack_z_by_window_id
+                    .get(&info.window_id)
+                    .copied()
+                    .unwrap_or(0),
                 global_rect: clamped,
                 buffer_rect: br,
             });
@@ -361,12 +365,7 @@ impl CompositorState {
     }
 
     pub fn apply_shell_ui_windows_payload(&mut self, payload: &[u8]) {
-        let stack_z_by_id: HashMap<u32, u32> = self
-            .shell_window_stack_ids()
-            .into_iter()
-            .enumerate()
-            .map(|(idx, id)| (id, idx as u32 + 1))
-            .collect();
+        let stack_z_by_id = self.stack_z_by_window_id();
         let Some(applied) = self.shell_osr.apply_shell_ui_windows_payload(
             payload,
             self.output_topology.shell_output_topology_revision,

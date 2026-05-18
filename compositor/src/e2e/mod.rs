@@ -691,6 +691,7 @@ impl CompositorState {
             })
             .collect();
         outputs.sort_by(|a, b| a.name.cmp(&b.name));
+        let stack_z_by_window_id = self.stack_z_by_window_id();
         let mut windows: Vec<E2eWindowSnapshot> = self
             .windows
             .window_registry
@@ -704,7 +705,10 @@ impl CompositorState {
                 E2eWindowSnapshot {
                     window_id: record.info.window_id,
                     surface_id: record.info.surface_id,
-                    stack_z: self.shell_window_stack_z(record.info.window_id),
+                    stack_z: stack_z_by_window_id
+                        .get(&record.info.window_id)
+                        .copied()
+                        .unwrap_or(0),
                     title: record.info.title,
                     app_id: record.info.app_id,
                     icon_name: record.info.icon.name,

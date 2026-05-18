@@ -20,9 +20,63 @@ pub(crate) struct WindowManagementState {
     pub(crate) toplevel_fullscreen_return_maximized: HashSet<u32>,
     pub(crate) shell_window_stack_order: Vec<u32>,
     pub(crate) shell_window_stack_revision: u64,
+    pub(crate) shell_window_stack_cache: RefCell<ShellWindowStackCache>,
     pub(crate) shell_window_domain_revision: u64,
     pub(crate) control_windows_revision: u64,
     pub(crate) shell_window_switcher_selected_window_id: Option<u32>,
+}
+
+#[derive(Default)]
+pub(crate) struct ShellWindowStackCache {
+    window_registry_revision: u64,
+    shell_window_stack_revision: u64,
+    ordered_window_ids: Vec<u32>,
+    stack_z_by_window_id: HashMap<u32, u32>,
+}
+
+impl ShellWindowStackCache {
+    fn is_current_for(&self, registry: &WindowRegistry, shell_window_stack_revision: u64) -> bool {
+        self.window_registry_revision == registry.revision()
+            && self.shell_window_stack_revision == shell_window_stack_revision
+    }
+
+    fn rebuild_for(
+        &mut self,
+        registry: &WindowRegistry,
+        shell_window_stack_order: &[u32],
+        shell_window_stack_revision: u64,
+    ) {
+        let ordered: Vec<u32> = shell_window_stack_order
+            .iter()
+            .copied()
+            .filter(|wid| registry.window_info(*wid).is_some())
+            .collect();
+        let seen: HashSet<u32> = ordered.iter().copied().collect();
+        let mut ids: Vec<u32> = registry
+            .all_records()
+            .into_iter()
+            .map(|record| record.info.window_id)
+            .filter(|wid| !seen.contains(wid))
+            .collect();
+        ids.sort_unstable();
+        ids.extend(ordered);
+        ids.sort_by_key(|window_id| {
+            registry
+                .window_info(*window_id)
+                .map(|info| window_title_is_screen_sharing_indicator(&info.title))
+                .unwrap_or(false)
+        });
+        let stack_z_by_window_id = ids
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, window_id)| (window_id, index as u32 + 1))
+            .collect();
+        self.window_registry_revision = registry.revision();
+        self.shell_window_stack_revision = shell_window_stack_revision;
+        self.ordered_window_ids = ids;
+        self.stack_z_by_window_id = stack_z_by_window_id;
+    }
 }
 
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_X: i32 = 200;
@@ -133,37 +187,46 @@ impl WindowManagementState {
         }
     }
 
+    fn shell_window_stack_cache_is_current(&self) -> bool {
+        self.shell_window_stack_cache
+            .borrow()
+            .is_current_for(&self.window_registry, self.shell_window_stack_revision)
+    }
+
+    fn refresh_shell_window_stack_cache(&self) {
+        if self.shell_window_stack_cache_is_current() {
+            return;
+        }
+        self.shell_window_stack_cache.borrow_mut().rebuild_for(
+            &self.window_registry,
+            &self.shell_window_stack_order,
+            self.shell_window_stack_revision,
+        );
+    }
+
     pub(crate) fn shell_window_stack_ids(&self) -> Vec<u32> {
-        let ordered: Vec<u32> = self
-            .shell_window_stack_order
-            .iter()
-            .copied()
-            .filter(|wid| self.window_registry.window_info(*wid).is_some())
-            .collect();
-        let seen: HashSet<u32> = ordered.iter().copied().collect();
-        let mut missing: Vec<u32> = self
-            .window_registry
-            .all_records()
-            .into_iter()
-            .map(|record| record.info.window_id)
-            .filter(|wid| !seen.contains(wid))
-            .collect();
-        missing.sort_unstable();
-        missing.extend(ordered);
-        missing.sort_by_key(|window_id| {
-            self.window_registry
-                .window_info(*window_id)
-                .map(|info| window_title_is_screen_sharing_indicator(&info.title))
-                .unwrap_or(false)
-        });
-        missing
+        self.refresh_shell_window_stack_cache();
+        self.shell_window_stack_cache
+            .borrow()
+            .ordered_window_ids
+            .clone()
+    }
+
+    pub(crate) fn stack_z_by_window_id(&self) -> HashMap<u32, u32> {
+        self.refresh_shell_window_stack_cache();
+        self.shell_window_stack_cache
+            .borrow()
+            .stack_z_by_window_id
+            .clone()
     }
 
     pub(crate) fn shell_window_stack_z(&self, window_id: u32) -> u32 {
-        self.shell_window_stack_ids()
-            .iter()
-            .position(|wid| *wid == window_id)
-            .map(|idx| idx as u32 + 1)
+        self.refresh_shell_window_stack_cache();
+        self.shell_window_stack_cache
+            .borrow()
+            .stack_z_by_window_id
+            .get(&window_id)
+            .copied()
             .unwrap_or(0)
     }
 
@@ -505,5 +568,95 @@ impl WindowManagementState {
         let loc = space.element_location(&DerpSpaceElem::Wayland(window.clone()))?;
         let sz = window.geometry().size;
         Some((loc.x, loc.y, sz.w, sz.h))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect() -> Rectangle<i32, Logical> {
+        Rectangle::new(Point::from((0, 0)), Size::from((100, 80)))
+    }
+
+    fn add_window(registry: &mut WindowRegistry, window_id: u32, title: &str) {
+        assert_eq!(
+            registry.register_shell_hosted(
+                window_id,
+                title.to_string(),
+                "test.app".to_string(),
+                "test-output".to_string(),
+                rect(),
+            ),
+            Some(true)
+        );
+    }
+
+    fn rebuilt_cache(
+        registry: &WindowRegistry,
+        stack_order: &[u32],
+        stack_revision: u64,
+    ) -> ShellWindowStackCache {
+        let mut cache = ShellWindowStackCache::default();
+        cache.rebuild_for(registry, stack_order, stack_revision);
+        cache
+    }
+
+    #[test]
+    fn ordered_window_ids_keep_screen_sharing_indicator_topmost() {
+        let mut registry = WindowRegistry::new();
+        add_window(&mut registry, 1, "Browser is sharing your screen");
+        add_window(&mut registry, 2, "Editor");
+        add_window(&mut registry, 3, "Terminal");
+
+        let cache = rebuilt_cache(&registry, &[3, 1, 2], 4);
+
+        assert_eq!(cache.ordered_window_ids, vec![3, 2, 1]);
+        assert_eq!(cache.stack_z_by_window_id.get(&1), Some(&3));
+    }
+
+    #[test]
+    fn ordered_window_ids_remove_unknown_windows_and_append_missing_known_windows() {
+        let mut registry = WindowRegistry::new();
+        add_window(&mut registry, 1, "Editor");
+        add_window(&mut registry, 2, "Terminal");
+
+        let cache = rebuilt_cache(&registry, &[99, 2], 1);
+
+        assert_eq!(cache.ordered_window_ids, vec![1, 2]);
+        assert!(!cache.stack_z_by_window_id.contains_key(&99));
+    }
+
+    #[test]
+    fn stack_z_by_window_id_uses_one_based_z_and_zero_for_missing_lookup() {
+        let mut registry = WindowRegistry::new();
+        add_window(&mut registry, 10, "Editor");
+        add_window(&mut registry, 20, "Terminal");
+
+        let cache = rebuilt_cache(&registry, &[20, 10], 2);
+
+        assert_eq!(cache.stack_z_by_window_id.get(&20), Some(&1));
+        assert_eq!(cache.stack_z_by_window_id.get(&10), Some(&2));
+        assert_eq!(cache.stack_z_by_window_id.get(&30).copied().unwrap_or(0), 0);
+    }
+
+    #[test]
+    fn stack_cache_is_revision_keyed_by_registry_and_stack_revisions() {
+        let mut registry = WindowRegistry::new();
+        add_window(&mut registry, 1, "Editor");
+        add_window(&mut registry, 2, "Terminal");
+        let mut cache = rebuilt_cache(&registry, &[1, 2], 7);
+
+        assert!(cache.is_current_for(&registry, 7));
+        registry.update_shell_hosted(1, |info, _| info.title = "Editor renamed".to_string());
+        assert!(!cache.is_current_for(&registry, 7));
+
+        cache.rebuild_for(&registry, &[1, 2], 7);
+        assert!(cache.is_current_for(&registry, 7));
+        assert!(!cache.is_current_for(&registry, 8));
+
+        cache.rebuild_for(&registry, &[2, 1], 8);
+        assert_eq!(cache.ordered_window_ids, vec![2, 1]);
+        assert!(cache.is_current_for(&registry, 8));
     }
 }

@@ -58,13 +58,22 @@ impl CompositorState {
 
     pub(crate) fn raise_shell_status_indicators(&mut self) -> bool {
         let mut raised = false;
+        let stack_z_by_window_id = self.stack_z_by_window_id();
         let mut indicators: Vec<(u32, u32)> = self
             .windows
             .window_registry
             .all_infos()
             .into_iter()
             .filter(|info| !info.minimized && self.window_is_shell_status_indicator(info))
-            .map(|info| (self.shell_window_stack_z(info.window_id), info.window_id))
+            .map(|info| {
+                (
+                    stack_z_by_window_id
+                        .get(&info.window_id)
+                        .copied()
+                        .unwrap_or(0),
+                    info.window_id,
+                )
+            })
             .collect();
         indicators.sort_unstable();
         for (_, window_id) in indicators {

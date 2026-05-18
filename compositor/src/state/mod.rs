@@ -984,6 +984,7 @@ impl CompositorState {
                 toplevel_fullscreen_return_maximized: HashSet::new(),
                 shell_window_stack_order: Vec::new(),
                 shell_window_stack_revision: 0,
+                shell_window_stack_cache: RefCell::new(ShellWindowStackCache::default()),
                 shell_window_domain_revision: 0,
                 control_windows_revision: 0,
                 shell_window_switcher_selected_window_id: None,

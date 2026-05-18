@@ -200,16 +200,15 @@ impl CompositorState {
         self.windows.shell_window_stack_z(window_id)
     }
 
+    pub(crate) fn stack_z_by_window_id(&self) -> HashMap<u32, u32> {
+        self.windows.stack_z_by_window_id()
+    }
+
     fn space_elements_top_to_bottom_from<'a, I>(&self, elements: I) -> Vec<DerpSpaceElem>
     where
         I: Iterator<Item = &'a DerpSpaceElem>,
     {
-        let stack_z: HashMap<u32, u32> = self
-            .shell_window_stack_ids()
-            .into_iter()
-            .enumerate()
-            .map(|(index, window_id)| (window_id, index as u32 + 1))
-            .collect();
+        let stack_z = self.stack_z_by_window_id();
         let mut entries: Vec<(u32, usize, DerpSpaceElem)> = elements
             .enumerate()
             .map(|(index, elem)| {
