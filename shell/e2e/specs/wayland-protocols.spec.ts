@@ -34,7 +34,6 @@ import {
   shellWindowById,
   SHELL_UI_SETTINGS_WINDOW_ID,
   SkipError,
-  spawnCommand,
   syncTest,
   tapKey,
   touchDown,
@@ -58,9 +57,12 @@ import {
   openSettings,
   openShellTestWindow,
   postJson,
-  runKeybind,
   spawnNativeWindow,
+  spawnCommand,
 } from "../lib/setup.ts";
+import {
+  runKeybind,
+} from "../lib/user.ts";
 
 const execFileAsync = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));

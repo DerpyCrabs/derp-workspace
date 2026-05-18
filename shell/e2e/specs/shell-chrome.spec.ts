@@ -33,7 +33,6 @@ import {
   openProgramsMenu,
   openVolumeMenu,
   openSettings,
-  openShellTestWindow,
   pointerButton,
   pointerWheel,
   pointInRect,
@@ -42,7 +41,6 @@ import {
   assertRectMinSize,
   resetPerfCounters,
   shellWindowById,
-  spawnNativeWindow,
   taskbarEntry,
   taskbarForMonitor,
   waitForPowerMenuClosed,
@@ -69,7 +67,14 @@ import {
   type ShellSnapshot,
 } from "../lib/runtime.ts";
 import { openFileBrowserFromLauncher } from "../lib/fileBrowserFixtureNav.ts";
-import { postJson, runKeybind } from "../lib/setup.ts";
+import {
+  postJson,
+  openShellTestWindow,
+  spawnNativeWindow,
+} from "../lib/setup.ts";
+import {
+  runKeybind,
+} from "../lib/user.ts";
 
 function compositorFrameTitlebar(
   snapshot: CompositorSnapshot,

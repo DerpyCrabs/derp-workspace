@@ -22,7 +22,6 @@ import {
   assertWindowTiled,
   captureScreenshotRect,
   clickPoint,
-  closeWindow,
   compositorWindowById,
   defineGroup,
   doubleClickRect,
@@ -41,14 +40,10 @@ import {
   pointerButton,
   pointerWheel,
   pointInRect,
-  postJson,
   raiseTaskbarWindow,
   readPngRgba,
   resetPerfCounters,
-  runKeybind,
   shellWindowStack,
-  spawnCommand,
-  spawnNativeWindow,
   shellWindowById,
   syncTest,
   tabGroupByWindow,
@@ -71,6 +66,18 @@ import {
   type ShellSnapshot,
   type WindowSnapshot,
 } from '../lib/runtime.ts'
+import {
+  captureTestScreenshot,
+} from '../lib/oracle.ts'
+import {
+  closeWindow,
+  spawnCommand,
+  spawnNativeWindow,
+  resetTiling,
+} from '../lib/setup.ts'
+import {
+  runKeybind,
+} from '../lib/user.ts'
 
 const NATIVE_TITLEBAR_PX = 26
 const NATIVE_BORDER_PX = 4
@@ -1475,7 +1482,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         maxChannelDelta: 3,
       },
     )
-    const dragScreenshot = await postJson<{ path?: string }>(base, '/test/screenshot', {
+    const dragScreenshot = await captureTestScreenshot(base, {
       x: Math.max(0, duringDrag.expected.x - 24),
       y: Math.max(0, duringDrag.expected.y - 24),
       width: duringDrag.clipRect.width + 48,
@@ -2372,7 +2379,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       })
     } finally {
       try {
-        await postJson(base, '/test/tiling/reset', {})
+        await resetTiling(base)
       } finally {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
         if (shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID)) {

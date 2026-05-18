@@ -11,7 +11,6 @@ import {
   movePoint,
   openSettings,
   pointerWheel,
-  postJson,
   tapSuperShortcut,
   waitFor,
   waitForSpawnedWindow,
@@ -20,6 +19,9 @@ import {
   writeTextArtifact,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
+import {
+  postJson,
+} from '../lib/setup.ts'
 
 type HotkeyBinding = {
   id: string

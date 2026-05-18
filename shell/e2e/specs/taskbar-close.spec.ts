@@ -18,8 +18,6 @@ import {
   getJson,
   getShellHtml,
   movePoint,
-  openShellTestWindow,
-  prepareFileBrowserFixtures,
   rectCenter,
   rightClickRect,
   shellWindowStack,
@@ -31,6 +29,10 @@ import {
   type ShellSnapshot,
   type TextEditorWindowSnapshot,
 } from '../lib/runtime.ts'
+import {
+  openShellTestWindow,
+  prepareFileBrowserFixtures,
+} from '../lib/setup.ts'
 
 const TEXT_EDITOR_APP_ID = 'derp.text-editor'
 

@@ -10,6 +10,7 @@ export {
   pointerWheel,
   rightClickPoint,
   rightClickRect,
+  runKeybind,
   tapKey,
   touchCancel,
   touchDown,

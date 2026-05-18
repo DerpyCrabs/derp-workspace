@@ -5,7 +5,7 @@ import path from 'node:path'
 const root = process.cwd()
 const repoRoot = path.resolve(root, '..')
 const specsDir = path.join(root, 'e2e', 'specs')
-const blocked = new Set([
+const directRuntimeHelpers = new Set([
   'postJson',
   'runKeybind',
   'closeWindow',
@@ -16,24 +16,9 @@ const blocked = new Set([
   'spawnXtermCommandWindow',
   'prepareFileBrowserFixtures',
   'resetFileBrowserFixtures',
+  'spawnCommand',
 ])
-const allowedRuntimeImports = new Map([
-  ['artifacts.spec.ts', new Set(['crashWindow', 'postJson'])],
-  ['compositor-snapshot.spec.ts', new Set(['spawnNativeWindow'])],
-  ['custom-hotkeys.spec.ts', new Set(['postJson'])],
-  ['file-browser.spec.ts', new Set(['prepareFileBrowserFixtures', 'postJson', 'resetFileBrowserFixtures'])],
-  ['launcher-multimonitor.spec.ts', new Set(['closeWindow'])],
-  ['native-windows.spec.ts', new Set(['closeWindow', 'postJson', 'runKeybind', 'spawnNativeWindow'])],
-  ['restart-persistence.spec.ts', new Set(['openShellTestWindow', 'prepareFileBrowserFixtures', 'runKeybind', 'spawnNativeWindow'])],
-  ['shell-chrome-session.spec.ts', new Set(['openShellTestWindow', 'postJson'])],
-  ['shell-chrome.spec.ts', new Set(['openShellTestWindow', 'spawnNativeWindow'])],
-  ['snap-assist.spec.ts', new Set(['postJson', 'runKeybind', 'spawnNativeWindow'])],
-  ['tab-groups.spec.ts', new Set(['closeWindow', 'openShellTestWindow', 'postJson', 'runKeybind'])],
-  ['taskbar-close.spec.ts', new Set(['openShellTestWindow', 'prepareFileBrowserFixtures'])],
-  ['text-editor.spec.ts', new Set(['prepareFileBrowserFixtures'])],
-  ['wayland-protocols.spec.ts', new Set(['spawnCommand'])],
-  ['x11-windows.spec.ts', new Set(['runKeybind'])],
-])
+const userRuntimeHelpers = new Set(['runKeybind'])
 const allowedRawInputEndpoint = new Set([
   'native-windows.spec.ts',
   'snap-assist.spec.ts',
@@ -62,7 +47,7 @@ function files(dir) {
 
 function importedNames(source, from) {
   const names = new Set()
-  const re = /import\s*\{([\s\S]*?)\}\s*from\s*['"]([^'"]+)['"]/g
+  const re = /import\s*\{([^{}]*?)\}\s*from\s*['"]([^'"]+)['"]/g
   for (const match of source.matchAll(re)) {
     if (match[2] !== from) continue
     for (const raw of match[1].split(',')) {
@@ -87,10 +72,14 @@ for (const file of files(specsDir)) {
   const rel = path.relative(specsDir, file).replace(/\\/g, '/')
   const source = readFileSync(file, 'utf8')
   const names = importedNames(source, '../lib/runtime.ts')
-  const allowed = allowedRuntimeImports.get(rel) ?? new Set()
-  const bad = [...names].filter((name) => blocked.has(name) && !allowed.has(name))
+  const bad = [...names].filter((name) => directRuntimeHelpers.has(name))
   if (bad.length > 0) {
     failures.push(`${rel}: import ${bad.join(', ')} from ../lib/runtime.ts via ../lib/user.ts, ../lib/setup.ts, or ../lib/oracle.ts`)
+  }
+  const setupNames = importedNames(source, '../lib/setup.ts')
+  const setupUserActions = [...setupNames].filter((name) => userRuntimeHelpers.has(name))
+  if (setupUserActions.length > 0) {
+    failures.push(`${rel}: import ${setupUserActions.join(', ')} from ../lib/user.ts instead of ../lib/setup.ts`)
   }
   if (rawInputEndpoint.test(source) && !allowedRawInputEndpoint.has(rel)) {
     failures.push(`${rel}: use ../lib/user.ts helpers instead of direct /test/input endpoints`)

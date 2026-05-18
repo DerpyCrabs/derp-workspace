@@ -29,10 +29,7 @@ import {
   pickMonitorMove,
   pointerButton,
   pointerWheel,
-  postJson,
   readPngRgba,
-  runKeybind,
-  spawnNativeWindow,
   tapKey,
   taskbarForMonitor,
   waitFor,
@@ -46,6 +43,16 @@ import {
   type ShellSnapshot,
   type WindowSnapshot,
 } from "../lib/runtime.ts";
+import {
+  captureTestScreenshot,
+} from '../lib/oracle.ts'
+import {
+  spawnNativeWindow,
+  reloadSession,
+} from "../lib/setup.ts";
+import {
+  runKeybind,
+} from "../lib/user.ts";
 
 const TITLEBAR_PX = 26;
 const SHIFT_KEYCODE = 42;
@@ -1012,7 +1019,7 @@ async function placeNativeWindowForPickerTest(
   };
   await movePoint(base, from.x, from.y);
   await pointerButton(base, BTN_LEFT, "press");
-  await postJson(base, "/test/input/pointer_move", to);
+  await movePoint(base, to.x, to.y);
   await pointerButton(base, BTN_LEFT, "release");
   await waitFor(
     `wait for native picker placement ${windowId}`,
@@ -1360,7 +1367,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     "custom auto layout rules softly reserve slots and overflow into tabs",
     async ({ base, state }) => {
       let currentBase = base;
-      await postJson(currentBase, "/session_reload", { version: 1, shell: {} });
+      await reloadSession(currentBase, { version: 1, shell: {} });
       await waitFor(
         "wait for custom auto clean shell restart",
         async () => {
@@ -1508,7 +1515,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         completed = true;
       } finally {
         if (completed) {
-          await postJson(currentBase, "/session_reload", {
+          await reloadSession(currentBase, {
             version: 1,
             shell: {},
           });
@@ -2666,11 +2673,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         2000,
         16,
       );
-      const hoverScreenshot = await postJson<{ path?: string }>(
-        base,
-        "/test/screenshot",
-        {},
-      );
+      const hoverScreenshot = await captureTestScreenshot(base);
       const compositor = await getJson<CompositorSnapshot>(
         base,
         "/test/state/compositor",
@@ -3826,11 +3829,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       3000,
       100,
     );
-    const overlayScreenshot = await postJson<{ path?: string }>(
-      base,
-      "/test/screenshot",
-      {},
-    );
+    const overlayScreenshot = await captureTestScreenshot(base);
     await writeJsonArtifact(
       "custom-layout-overlay-dialog-screenshot.json",
       overlayScreenshot,

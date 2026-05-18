@@ -2,7 +2,6 @@ import {
   NATIVE_APP_ID,
   SHELL_TEST_APP_ID,
   defineGroup,
-  spawnCommand,
   type CompositorSnapshot,
   type TestContext,
   type WindowSnapshot,
@@ -34,7 +33,11 @@ import {
   writeJsonArtifact,
   type ShellSnapshot,
 } from '../lib/oracle.ts'
-import { openShellTestWindow, spawnNativeWindow } from '../lib/setup.ts'
+import {
+  openShellTestWindow,
+  spawnNativeWindow,
+  spawnCommand,
+} from '../lib/setup.ts'
 
 type ParityCase = {
   label: string

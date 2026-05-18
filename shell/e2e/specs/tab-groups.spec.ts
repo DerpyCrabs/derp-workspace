@@ -14,7 +14,6 @@ import {
   comparePngFixture,
   cleanupNativeWindows,
   clickRect,
-  closeWindow,
   compositorWindowById,
   compositorWindowStack,
   copyArtifactFile,
@@ -29,16 +28,12 @@ import {
   minimizeWindow,
   movePoint,
   movePoints,
-  openShellTestWindow,
   outputForWindow,
-  postJson,
   pickMonitorMove,
   pointerButton,
   pointerButtonWithoutSync,
-  spawnCommand,
   rectCenter,
   rightClickRect,
-  runKeybind,
   shellWindowById,
   tabGroupByWindow,
   taskbarForMonitor,
@@ -56,8 +51,19 @@ import {
   type Rect,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
+import {
+  captureTestScreenshot,
+} from '../lib/oracle.ts'
 import { fileBrowserRow, fileBrowserSnapshot, openFileBrowserFromLauncher } from '../lib/fileBrowserFixtureNav.ts'
-import { spawnNativeWindow } from '../lib/setup.ts'
+import {
+  spawnNativeWindow,
+  closeWindow,
+  openShellTestWindow,
+  spawnCommand,
+} from '../lib/setup.ts'
+import {
+  runKeybind,
+} from '../lib/user.ts'
 
 const execFileAsync = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -147,7 +153,7 @@ async function captureWindowContentScreenshot(base: string, windowId: number, na
     width: Math.max(64, window.width - insetX * 2),
     height: Math.max(64, window.height - insetTop - insetBottom),
   }
-  const screenshot = await postJson<{ path?: string }>(base, '/test/screenshot', {
+  const screenshot = await captureTestScreenshot(base, {
     x: capture.x,
     y: capture.y,
     width: capture.width,
@@ -162,7 +168,7 @@ async function captureWindowContentScreenshot(base: string, windowId: number, na
 }
 
 async function captureRectScreenshot(base: string, rect: Rect, name: string) {
-  const screenshot = await postJson<{ path?: string }>(base, '/test/screenshot', {
+  const screenshot = await captureTestScreenshot(base, {
     x: rect.global_x,
     y: rect.global_y,
     width: rect.width,

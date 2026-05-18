@@ -18,13 +18,9 @@ import {
   getSnapshots,
   movePoint,
   openProgramsMenu,
-  openShellTestWindow,
   outputForWindow,
-  prepareFileBrowserFixtures,
   restartSession,
-  runKeybind,
   shellWindowById,
-  spawnNativeWindow,
   tabGroupByWindow,
   taskbarForMonitor,
   typeText,
@@ -38,6 +34,14 @@ import {
   type ShellSnapshot,
   type WindowSnapshot,
 } from '../lib/runtime.ts'
+import {
+  openShellTestWindow,
+  prepareFileBrowserFixtures,
+  spawnNativeWindow,
+} from '../lib/setup.ts'
+import {
+  runKeybind,
+} from '../lib/user.ts'
 
 const FILE_BROWSER_APP_ID = 'derp.files'
 const FILE_BROWSER_COMMAND_ID = 'shell:file_browser'

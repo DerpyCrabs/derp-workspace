@@ -15,7 +15,6 @@ import {
   shellWindowById,
   tabGroupByWindow,
   NATIVE_APP_ID,
-  spawnNativeWindow,
   waitFor,
   waitForNativeFocus,
   waitForWindowGone,
@@ -27,7 +26,12 @@ import {
   type CompositorSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
-import { closeWindow, openShellTestWindow, spawnCommand } from '../lib/setup.ts'
+import {
+  closeWindow,
+  openShellTestWindow,
+  spawnCommand,
+  spawnNativeWindow,
+} from '../lib/setup.ts'
 
 function trackedStackParity(shell: ShellSnapshot, compositor: CompositorSnapshot, windowIds: number[]) {
   const tracked = new Set(windowIds)

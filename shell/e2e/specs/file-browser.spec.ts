@@ -26,12 +26,9 @@ import {
   getJson,
   getShellHtml,
   movePoint,
-  prepareFileBrowserFixtures,
   pointerButton,
-  postJson,
   rectCenter,
   resetPerfCounters,
-  resetFileBrowserFixtures,
   rightClickRect,
   shellWindowById,
   tabGroupByWindow,
@@ -43,6 +40,11 @@ import {
   type CompositorSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
+import {
+  prepareFileBrowserFixtures,
+  postJson,
+  resetFileBrowserFixtures,
+} from '../lib/setup.ts'
 
 const IMAGE_VIEWER_APP_ID = 'derp.image-viewer'
 const VIDEO_VIEWER_APP_ID = 'derp.video-viewer'

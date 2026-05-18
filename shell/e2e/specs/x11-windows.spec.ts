@@ -20,10 +20,8 @@ import {
   NATIVE_APP_ID,
   outputForWindow,
   rightClickRect,
-  runKeybind,
   shellWindowById,
   shellQuote,
-  spawnCommand,
   SkipError,
   taskbarEntry,
   tapKey,
@@ -42,8 +40,15 @@ import {
   type Rect,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
-import { spawnNativeWindow } from '../lib/setup.ts'
-import { movePoint, pointerButton } from '../lib/user.ts'
+import {
+  spawnNativeWindow,
+  spawnCommand,
+} from '../lib/setup.ts'
+import {
+  movePoint,
+  pointerButton,
+  runKeybind,
+} from '../lib/user.ts'
 
 const XTERM_TITLE = 'Derp X11 Xterm'
 const V2RAYN_BIN = '/opt/v2rayn-bin/v2rayN'

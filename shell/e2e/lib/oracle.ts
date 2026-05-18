@@ -43,6 +43,15 @@ export {
   writeTextArtifact,
 } from './runtime.ts'
 
+import { postJson } from './runtime.ts'
+
+export async function captureTestScreenshot(
+  base: string,
+  rect: { x: number; y: number; width: number; height: number } | Record<string, never> = {},
+): Promise<{ path?: string }> {
+  return postJson<{ path?: string }>(base, '/test/screenshot', rect)
+}
+
 export type {
   CompositorSnapshot,
   CompositorFloatingLayerSnapshot,

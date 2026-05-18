@@ -17,8 +17,6 @@ import {
   getSnapshots,
   openPowerMenu,
   openSettings,
-  openShellTestWindow,
-  postJson,
   rectCenter,
   shellQuote,
   SkipError,
@@ -31,7 +29,15 @@ import {
   type DesktopAppEntry,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
-import { runKeybind, spawnCommand, spawnNativeWindow } from '../lib/setup.ts'
+import {
+  spawnCommand,
+  spawnNativeWindow,
+  openShellTestWindow,
+  postJson,
+} from '../lib/setup.ts'
+import {
+  runKeybind,
+} from '../lib/user.ts'
 
 type SessionStateResponse = {
   version: number

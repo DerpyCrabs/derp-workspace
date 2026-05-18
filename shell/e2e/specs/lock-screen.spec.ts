@@ -2,10 +2,12 @@ import {
   assert,
   defineGroup,
   getJson,
-  postJson,
   waitFor,
   writeJsonArtifact,
 } from '../lib/runtime.ts'
+import {
+  postJson,
+} from '../lib/setup.ts'
 
 type LockScreenSettings = {
   enabled: boolean

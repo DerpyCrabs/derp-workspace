@@ -5,7 +5,6 @@ import {
   assert,
   assertTaskbarRowOnMonitor,
   closeTaskbarWindow,
-  closeWindow,
   clickPoint,
   clickRect,
   compositorWindowById,
@@ -41,7 +40,10 @@ import {
   type ShellSnapshot,
   type WindowSnapshot,
 } from "../lib/runtime.ts";
-import { postJson } from "../lib/setup.ts";
+import {
+  postJson,
+  closeWindow,
+} from "../lib/setup.ts";
 
 function resolveWindowOutputName(
   compositor: CompositorSnapshot,

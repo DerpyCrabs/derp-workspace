@@ -18,11 +18,13 @@ import {
   waitForCompositorQuiet,
   windowControls,
   writeJsonArtifact,
-  openShellTestWindow,
   type PerfCounterSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
-import { spawnNativeWindow } from '../lib/setup.ts'
+import {
+  spawnNativeWindow,
+  openShellTestWindow,
+} from '../lib/setup.ts'
 import { availableParallelism } from 'node:os'
 import { spawn, type ChildProcess } from 'node:child_process'
 

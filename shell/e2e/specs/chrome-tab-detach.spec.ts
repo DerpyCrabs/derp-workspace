@@ -18,7 +18,12 @@ import {
   type CompositorSnapshot,
   type DesktopAppEntry,
 } from '../lib/runtime.ts'
-import { runKeybind, spawnCommand } from '../lib/setup.ts'
+import {
+  spawnCommand,
+} from '../lib/setup.ts'
+import {
+  runKeybind,
+} from '../lib/user.ts'
 
 function chromeDesktopApp(apps: DesktopAppEntry[]): DesktopAppEntry | null {
   return apps.find((app) =>

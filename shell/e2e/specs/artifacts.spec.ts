@@ -7,12 +7,9 @@ import {
   NATIVE_APP_ID,
   assert,
   buildNativeSpawnCommand,
-  crashWindow,
   defineGroup,
   ensureNativeWindow,
   getJson,
-  postJson,
-  spawnCommand,
   taskbarEntry,
   waitFor,
   waitForTaskbarEntry,
@@ -21,12 +18,19 @@ import {
   type CompositorSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
+import {
+  captureTestScreenshot,
+} from '../lib/oracle.ts'
+import {
+  crashWindow,
+  spawnCommand,
+} from '../lib/setup.ts'
 
 const execFileAsync = promisify(execFile)
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('capture workspace screenshot', async ({ base, state }) => {
-    state.screenshot = await postJson<{ path?: string }>(base, '/test/screenshot', {})
+    state.screenshot = await captureTestScreenshot(base)
     assert(state.screenshot?.path, 'screenshot response missing path')
     await access(state.screenshot.path)
     await writeJsonArtifact('workspace-screenshot-result.json', state.screenshot)
