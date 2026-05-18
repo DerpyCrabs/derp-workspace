@@ -1,4 +1,4 @@
-import { For, Show, createSignal, onCleanup, onMount, type Component, type JSX } from 'solid-js'
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type Component, type JSX } from 'solid-js'
 import { DropdownMenuContent } from '@/components/ui/dropdown-menu'
 import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 import { FileBrowserContextMenu } from '@/apps/file-browser/FileBrowserContextMenu'
@@ -35,6 +35,28 @@ import User from 'lucide-solid/icons/user'
 import Volume2 from 'lucide-solid/icons/volume-2'
 import Wifi from 'lucide-solid/icons/wifi'
 
+const COMMAND_ROW_HEIGHT = 58
+const COMMAND_HEADING_HEIGHT = 25
+const COMMAND_LIST_OVERSCAN_PX = 180
+
+type CommandPaletteVisualRow =
+  | {
+    kind: 'heading'
+    key: string
+    category: string
+    label: string
+    top: number
+    height: number
+  }
+  | {
+    kind: 'item'
+    key: string
+    item: CommandPaletteItem
+    itemIndex: number
+    top: number
+    height: number
+  }
+
 function paletteIcon(Icon: Component<{ class?: string; 'stroke-width'?: number }>): JSX.Element {
   return (
     <span class="bg-(--shell-surface-elevated) flex h-7 w-7 shrink-0 items-center justify-center rounded text-(--shell-text-muted)">
@@ -45,6 +67,7 @@ function paletteIcon(Icon: Component<{ class?: string; 'stroke-width'?: number }
 
 function commandPaletteIcon(item: CommandPaletteItem): JSX.Element {
   if (item.icon) return item.icon
+  if (item.iconFactory) return item.iconFactory()
   if (item.id === 'apps:loading') return paletteIcon(LoaderCircle)
   if (item.id === 'apps:error') return paletteIcon(CircleAlert)
   if (item.id === 'apps:empty') return paletteIcon(SearchX)
@@ -92,7 +115,53 @@ export function ProgramsContextMenu() {
   const props = useShellContextMenus().programsMenuProps
   let searchRef: HTMLInputElement | undefined
   let panelRef: HTMLDivElement | undefined
+  let listRef: HTMLDivElement | undefined
   const [itemMenu, setItemMenu] = createSignal<{ x: number; y: number; items: ShellContextMenuItem[] } | null>(null)
+  const [listScrollTop, setListScrollTop] = createSignal(0)
+  const [listViewportHeight, setListViewportHeight] = createSignal(480)
+
+  const visualRows = createMemo(() => {
+    const items = props.items()
+    const rows: CommandPaletteVisualRow[] = []
+    let top = 0
+    let previousCategory = ''
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index] as CommandPaletteItem
+      if (index === 0 || previousCategory !== item.category) {
+        rows.push({
+          kind: 'heading',
+          key: `heading:${index}:${item.category}`,
+          category: item.category,
+          label: item.categoryLabel ?? 'Commands',
+          top,
+          height: COMMAND_HEADING_HEIGHT,
+        })
+        top += COMMAND_HEADING_HEIGHT
+        previousCategory = item.category
+      }
+      rows.push({
+        kind: 'item',
+        key: item.id,
+        item,
+        itemIndex: index,
+        top,
+        height: COMMAND_ROW_HEIGHT,
+      })
+      top += COMMAND_ROW_HEIGHT
+    }
+    return { rows, height: top }
+  })
+
+  const visibleRows = createMemo(() => {
+    const start = Math.max(0, listScrollTop() - COMMAND_LIST_OVERSCAN_PX)
+    const end = listScrollTop() + listViewportHeight() + COMMAND_LIST_OVERSCAN_PX
+    return visualRows().rows.filter((row) => row.top + row.height >= start && row.top <= end)
+  })
+
+  const syncListViewport = () => {
+    const height = listRef?.clientHeight
+    if (height && height > 0) setListViewportHeight(height)
+  }
 
   const syncSearchFocus = () => {
     queueMicrotask(() => searchRef?.focus())
@@ -118,15 +187,22 @@ export function ProgramsContextMenu() {
 
   onMount(() => {
     syncSearchFocus()
+    syncListViewport()
     requestAnimationFrame(() => {
       syncSearchFocus()
-      requestAnimationFrame(() => syncSearchFocus())
+      syncListViewport()
+      requestAnimationFrame(() => {
+        syncSearchFocus()
+        syncListViewport()
+      })
     })
     document.addEventListener('keydown', redirectLauncherTyping, true)
+    window.addEventListener('resize', syncListViewport)
   })
 
   onCleanup(() => {
     document.removeEventListener('keydown', redirectLauncherTyping, true)
+    window.removeEventListener('resize', syncListViewport)
   })
 
   function registerPanel(el: HTMLDivElement) {
@@ -135,6 +211,24 @@ export function ProgramsContextMenu() {
     const registration = registerShellExclusionElement('floating', 'floating', el)
     onCleanup(registration.unregister)
   }
+
+  createEffect(() => {
+    const list = listRef
+    if (!list) return
+    const idx = props.highlightIdx()
+    const row = visualRows().rows.find((entry) => entry.kind === 'item' && entry.itemIndex === idx)
+    if (!row) return
+    queueMicrotask(() => {
+      const currentList = listRef
+      if (!currentList) return
+      const top = row.top
+      const bottom = row.top + row.height
+      if (top < currentList.scrollTop) currentList.scrollTop = top
+      else if (bottom > currentList.scrollTop + currentList.clientHeight) {
+        currentList.scrollTop = Math.max(0, bottom - currentList.clientHeight)
+      }
+    })
+  })
 
   return (
     <DropdownMenuContent
@@ -172,57 +266,69 @@ export function ProgramsContextMenu() {
           }}
         />
       </div>
-      <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-2" data-programs-menu-scroll>
-        <For each={props.items()}>
-          {(item, idx) => {
-            const commandItem = item as CommandPaletteItem
-            const showHeading = () => {
-              const previous = props.items()[idx() - 1] as CommandPaletteItem | undefined
-              return idx() === 0 || previous?.category !== commandItem.category
-            }
-            return (
-              <>
-                <Show when={showHeading()}>
+      <div
+        class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-2"
+        data-programs-menu-scroll
+        ref={(el) => {
+          listRef = el
+          syncListViewport()
+        }}
+        onScroll={(e) => {
+          setListScrollTop(e.currentTarget.scrollTop)
+          syncListViewport()
+        }}
+      >
+        <div class="relative" style={{ height: `${visualRows().height}px` }}>
+          <For each={visibleRows()}>
+            {(row) => (
+              <div
+                class="absolute right-0 left-0"
+                style={{
+                  top: `${row.top}px`,
+                  height: `${row.height}px`,
+                }}
+              >
+                {row.kind === 'heading' ? (
                   <div
-                    class="px-3 pt-2 pb-1 text-[0.68rem] font-semibold tracking-wide text-(--shell-text-dim) uppercase"
-                    data-command-palette-category={commandItem.category}
+                    class="box-border h-full px-3 pt-2 pb-1 text-[0.68rem] font-semibold tracking-wide text-(--shell-text-dim) uppercase"
+                    data-command-palette-category={row.category}
                   >
-                    {commandItem.categoryLabel ?? 'Commands'}
+                    {row.label}
                   </div>
-                </Show>
+                ) : (
                 <button
                   type="button"
-                  class="bg-transparent hover:bg-(--shell-overlay-hover) flex w-full cursor-pointer items-center justify-between gap-3 border-0 px-4 py-2.5 text-left font-inherit text-inherit"
+                  class="bg-transparent hover:bg-(--shell-overlay-hover) flex h-full w-full cursor-pointer items-center justify-between gap-3 border-0 px-4 py-2.5 text-left font-inherit text-inherit"
                   classList={{
                     'bg-[color-mix(in_srgb,var(--shell-overlay-active)_78%,var(--shell-accent-soft)_22%)] text-inherit shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
-                      props.highlightIdx() === idx(),
-                    'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
+                      props.highlightIdx() === row.itemIndex,
+                    'cursor-not-allowed text-(--shell-text-dim)': !!row.item.disabled,
                   }}
                   tabIndex={-1}
-                  title={item.title ?? commandItem.subtitle}
-                  data-programs-menu-idx={idx()}
-                  data-command-palette-idx={idx()}
-                  data-command-palette-id={commandItem.id}
-                  data-command-palette-category-row={commandItem.category}
+                  title={row.item.title ?? row.item.subtitle}
+                  data-programs-menu-idx={row.itemIndex}
+                  data-command-palette-idx={row.itemIndex}
+                  data-command-palette-id={row.item.id}
+                  data-command-palette-category-row={row.item.category}
                   onPointerDown={(e) => {
                     if (!e.isPrimary || e.button !== 0) return
                     e.preventDefault()
                     e.stopPropagation()
-                    if (item.disabled) return
+                    if (row.item.disabled) return
                     props.closeContextMenu()
-                    item.action()
+                    row.item.action()
                   }}
                   onMouseDown={(e) => {
                     e.preventDefault()
                   }}
                   onClick={(e) => {
                     if (e.detail !== 0) return
-                    if (item.disabled) return
+                    if (row.item.disabled) return
                     props.closeContextMenu()
-                    item.action()
+                    row.item.action()
                   }}
                   onContextMenu={(e) => {
-                    const contextItems = item.contextItems?.() ?? []
+                    const contextItems = row.item.contextItems?.() ?? []
                     if (contextItems.length === 0) return
                     e.preventDefault()
                     e.stopPropagation()
@@ -231,20 +337,20 @@ export function ProgramsContextMenu() {
                 >
                   <span class="flex min-w-0 flex-1 items-center gap-3">
                     <span class="shrink-0" data-command-palette-icon>
-                      {commandPaletteIcon(commandItem)}
+                      {commandPaletteIcon(row.item)}
                     </span>
                     <span class="min-w-0 flex flex-1 flex-col gap-0.5">
                       <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[0.96rem]">
-                        {item.label}
+                        {row.item.label}
                       </span>
-                      <Show when={commandItem.subtitle}>
+                      <Show when={row.item.subtitle}>
                         <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[0.76rem] text-(--shell-text-dim)">
-                          {commandItem.subtitle}
+                          {row.item.subtitle}
                         </span>
                       </Show>
                     </span>
                   </span>
-                  <Show when={item.badge} keyed>
+                  <Show when={row.item.badge} keyed>
                     {(badge) => (
                       <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase">
                         {badge}
@@ -252,10 +358,11 @@ export function ProgramsContextMenu() {
                     )}
                   </Show>
                 </button>
-              </>
-            )
-          }}
-        </For>
+                )}
+              </div>
+            )}
+          </For>
+        </div>
       </div>
       <FileBrowserContextMenu
         open={() => itemMenu() !== null}

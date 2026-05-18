@@ -238,9 +238,23 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   const [menuLayerHost, setMenuLayerHost] = createSignal<HTMLElement | undefined>(undefined)
   let menuPanelRef: HTMLElement | undefined
   let programsMenuSearchRef: HTMLInputElement | undefined
+  let programsMenuRefreshFrame = 0
   function scheduleOverlayExclusionSync() {
     args.scheduleOverlayExclusionSync?.()
   }
+
+  function scheduleProgramsMenuRefresh() {
+    if (programsMenuRefreshFrame !== 0) return
+    programsMenuRefreshFrame = window.requestAnimationFrame(() => {
+      programsMenuRefreshFrame = 0
+      void desktopApps.refresh()
+      void refreshDesktopAppUsageFromRemote().then((counts) => setProgramsUsageCounts(counts))
+    })
+  }
+
+  onCleanup(() => {
+    if (programsMenuRefreshFrame !== 0) window.cancelAnimationFrame(programsMenuRefreshFrame)
+  })
 
   function setMenuPanelRef(el: HTMLDivElement) {
     menuPanelRef = el
@@ -500,6 +514,8 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   async function warmProgramsMenuItems() {
     await desktopApps.warm()
     setProgramsUsageCounts(await refreshDesktopAppUsageFromRemote())
+    void commandPaletteSourceItems().length
+    void programsMenuDefaultItems().length
   }
 
   function anchorProgramsMenuToCenter(outputName?: string | null) {
@@ -555,8 +571,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     setProgramsMenuQuery('')
     setProgramsMenuHighlightIdx(0)
     focusProgramsMenuSearch(touchInitiated)
-    void desktopApps.refresh()
-    void refreshDesktopAppUsageFromRemote().then((counts) => setProgramsUsageCounts(counts))
+    scheduleProgramsMenuRefresh()
   }
 
   function programsPinMonitor() {
@@ -814,7 +829,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   })
 
   const commandPaletteSourceItems = createMemo((): CommandPaletteItem[] => {
-    if (!programsMenuOpen()) return []
     const items: CommandPaletteItem[] = []
     for (const def of shellHostedProgramsMenuDefinitions()) {
       items.push({
@@ -876,12 +890,13 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
         categoryLabel: 'Apps',
         label: app.name,
         subtitle: app.generic_name || app.executable || app.exec,
-        icon: DesktopAppIcon({
-          icon: app.icon,
-          label: app.name,
-          class: 'bg-(--shell-surface-elevated) flex h-7 w-7 shrink-0 items-center justify-center rounded',
-          imageClass: 'h-6 w-6 object-contain',
-        }),
+        iconFactory: () =>
+          DesktopAppIcon({
+            icon: app.icon,
+            label: app.name,
+            class: 'bg-(--shell-surface-elevated) flex h-7 w-7 shrink-0 items-center justify-center rounded',
+            imageClass: 'h-6 w-6 object-contain',
+          }),
         badge: app.terminal ? 'tty' : undefined,
         title: app.exec,
         keywords: [
@@ -1235,9 +1250,14 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     return items
   })
 
+  const programsMenuDefaultItems = createMemo((): CommandPaletteItem[] =>
+    filterCommandPaletteItems(commandPaletteSourceItems(), ''),
+  )
+
   const programsMenuListItems = createMemo((): CommandPaletteItem[] => {
     if (!programsMenuOpen()) return []
-    return filterCommandPaletteItems(commandPaletteSourceItems(), programsMenuQuery())
+    const query = programsMenuQuery()
+    return query.trim() === '' ? programsMenuDefaultItems() : filterCommandPaletteItems(commandPaletteSourceItems(), query)
   })
 
   const windowSwitcherListItems = createMemo((): ShellContextMenuItem[] => {

@@ -3,6 +3,7 @@ import {
   KEY,
   assert,
   clickRect,
+  clickRectWithoutSync,
   defineGroup,
   getJson,
   getPerfCounters,
@@ -478,6 +479,43 @@ async function captureShellHostedDragPerf(
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
+  test('captures first programs menu open latency', async ({ base }) => {
+    const closed = await closeProgramsMenuIfOpen(base)
+    assert(closed.controls.taskbar_programs_toggle, 'missing programs toggle')
+    await resetPerfCounters(base)
+    await setShellFrameSampling(base, true)
+    const startedAt = performance.now()
+    await clickRectWithoutSync(base, closed.controls.taskbar_programs_toggle)
+    const opened = await waitFor(
+      'wait for first programs menu open perf sample',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return shell.programs_menu_open && shell.controls?.programs_menu_panel && shell.controls?.programs_menu_search
+          ? shell
+          : null
+      },
+      2000,
+      10,
+    )
+    const visibleAtMs = Math.round((performance.now() - startedAt) * 1000) / 1000
+    await setShellFrameSampling(base, false)
+    const perf = await getPerfCounters(base)
+    const summary = summarizePerf(perf)
+    await writeJsonArtifact('programs-menu-first-open-perf.json', {
+      visible_at_ms: visibleAtMs,
+      rendered_items: opened.programs_menu_items?.length ?? 0,
+      list_scroll: opened.programs_menu_list_scroll ?? null,
+      summary,
+      perf,
+    })
+    assert(visibleAtMs <= 160, `programs menu first open took ${visibleAtMs}ms`)
+    assert(
+      (opened.programs_menu_items?.length ?? 0) > 0,
+      'programs menu first open should render visible rows',
+    )
+    await tapKey(base, KEY.escape)
+  })
+
   test('idle compositor does not redraw at refresh cadence', async ({ base }) => {
     const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     assert(shell.controls.taskbar_programs_toggle, 'expected idle shell taskbar controls')

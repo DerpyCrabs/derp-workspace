@@ -1,4 +1,5 @@
 import type { ShellContextMenuItem } from '@/host/contextMenu'
+import type { JSX } from 'solid-js'
 
 export type CommandPaletteCategoryId = 'apps' | 'windows' | 'settings' | 'workspace' | string
 
@@ -6,6 +7,7 @@ export type CommandPaletteItem = ShellContextMenuItem & {
   id: string
   category: CommandPaletteCategoryId
   categoryLabel: string
+  iconFactory?: () => JSX.Element
   categoryOrder?: number
   subtitle?: string
   keywords?: string[]
