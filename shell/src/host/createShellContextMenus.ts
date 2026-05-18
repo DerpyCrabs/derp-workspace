@@ -78,6 +78,8 @@ type CreateShellContextMenusArgs = {
   canSaveSessionSnapshot: () => boolean
   canRestoreSessionSnapshot: () => boolean
   postSessionPower: (action: string) => Promise<void>
+  postLockScreen: () => Promise<void>
+  lockScreenEnabled: Accessor<boolean>
   canSessionControl: () => boolean
   exitSession: () => void
   windows: Accessor<readonly ShellUiWindowView[]>
@@ -694,6 +696,17 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     const http = shellHttpBase() !== null
     const sysTitle = http ? undefined : 'Needs shell HTTP (cef_host control server) for system power'
     return [
+      ...(args.lockScreenEnabled()
+        ? [
+            {
+              actionId: 'lock',
+              label: 'Lock',
+              disabled: !http,
+              title: http ? undefined : 'Needs shell HTTP (cef_host control server) for lock screen',
+              action: () => void args.postLockScreen(),
+            },
+          ]
+        : []),
       {
         actionId: 'save-session',
         label: 'Save workspace',
@@ -1063,6 +1076,21 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     }
     const http = shellHttpBase() !== null
     const sysTitle = http ? undefined : 'Needs shell HTTP (cef_host control server) for system power'
+    if (args.lockScreenEnabled()) {
+      items.push({
+        id: 'workspace:lock',
+        category: 'workspace',
+        categoryLabel: 'Workspace',
+        actionId: 'lock',
+        label: 'Lock',
+        subtitle: 'Session',
+        disabled: !http,
+        title: http ? undefined : 'Needs shell HTTP (cef_host control server) for lock screen',
+        keywords: ['lock', 'screen', 'session'],
+        defaultRank: 53,
+        action: () => void args.postLockScreen(),
+      })
+    }
     items.push(
       {
         id: 'workspace:save-session',

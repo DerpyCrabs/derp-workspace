@@ -217,6 +217,8 @@ function coalescedDetailKey(detail: DerpShellDetail): string | null {
       return 'shell_hosted_app_state'
     case 'command_palette_state':
       return 'command_palette_state'
+    case 'lock_state':
+      return 'lock_state'
     case 'output_geometry':
       return 'output_geometry'
     case 'output_layout':
@@ -263,6 +265,7 @@ function coalesceCompositorDetails(details: readonly DerpShellDetail[]): readonl
 
 type CompositorBridgeRuntimeOptions = {
   setKeyboardLayoutLabel: (label: string | null) => void
+  setLockScreenState?: (value: unknown) => void
   setVolumeOverlay: (value: { linear: number; muted: boolean; stateKnown: boolean } | null) => void
   setTrayVolumeState: (value: { muted: boolean; volumePercent: number | null }) => void
   setTrayReservedPx: (value: number) => void
@@ -1000,6 +1003,10 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     }
     if (d.type === 'notifications_state') {
       applyNotificationsStateDetail(d)
+      return
+    }
+    if (d.type === 'lock_state') {
+      options.setLockScreenState?.(d.state)
       return
     }
     if (d.type === 'notification_event') {

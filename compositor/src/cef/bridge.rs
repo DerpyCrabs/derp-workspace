@@ -49,6 +49,7 @@ enum PendingCompositorMessageStaticKey {
     CommandPaletteState,
     InteractionState,
     NotificationsState,
+    LockState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -165,6 +166,11 @@ fn pending_message_dedup_key(
         shell_wire::DecodedCompositorToShellMessage::CommandPaletteState { .. } => {
             Some(PendingCompositorMessageDedupKey::Static(
                 PendingCompositorMessageStaticKey::CommandPaletteState,
+            ))
+        }
+        shell_wire::DecodedCompositorToShellMessage::LockState { .. } => {
+            Some(PendingCompositorMessageDedupKey::Static(
+                PendingCompositorMessageStaticKey::LockState,
             ))
         }
         shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {

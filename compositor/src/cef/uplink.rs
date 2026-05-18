@@ -103,6 +103,25 @@ impl UplinkToCompositor {
         self.run_result(move |s| s.apply_osk_settings(settings))
     }
 
+    pub fn settings_lock_screen_apply(
+        &self,
+        settings: crate::session::settings_config::LockScreenSettingsFile,
+    ) -> Result<(), String> {
+        self.run_result(move |s| s.apply_lock_screen_settings(settings))
+    }
+
+    pub fn lock_screen_state_json(&self) -> Result<String, String> {
+        self.run_result(move |s| s.lock_screen_snapshot_json())
+    }
+
+    pub fn lock_screen_request(&self) -> Result<(), String> {
+        self.run_result(move |s| s.lock_screen_request_builtin())
+    }
+
+    pub fn lock_screen_submit_password(&self, password: String) -> Result<(), String> {
+        self.run_result(move |s| s.lock_screen_submit_password(password))
+    }
+
     pub fn settings_cursor_apply(
         &self,
         settings: crate::session::settings_config::CursorSettingsFile,

@@ -15,6 +15,11 @@ import {
   saveShellOskSettings,
 } from './keyboardSettings'
 import {
+  DEFAULT_SHELL_LOCK_SCREEN_SETTINGS,
+  loadShellLockScreenSettings,
+  saveShellLockScreenSettings,
+} from './lockScreenSettings'
+import {
   BUILTIN_HOTKEY_ACTIONS,
   hotkeyBindingFromDesktopApp,
   hotkeyConflict,
@@ -108,6 +113,10 @@ export function SettingsKeyboardPage(props: {
   const [oskSaveBusy, setOskSaveBusy] = createSignal(false)
   const [oskErr, setOskErr] = createSignal<string | null>(null)
   const [oskSavedAt, setOskSavedAt] = createSignal<number | null>(null)
+  const [lockScreenEnabled, setLockScreenEnabled] = createSignal(DEFAULT_SHELL_LOCK_SCREEN_SETTINGS.enabled)
+  const [lockScreenSaveBusy, setLockScreenSaveBusy] = createSignal(false)
+  const [lockScreenErr, setLockScreenErr] = createSignal<string | null>(null)
+  const [lockScreenSavedAt, setLockScreenSavedAt] = createSignal<number | null>(null)
   const [hotkeys, setHotkeys] = createSignal<HotkeySettings>({ bindings: [] })
   const [hotkeysBusy, setHotkeysBusy] = createSignal(false)
   const [hotkeysSaveBusy, setHotkeysSaveBusy] = createSignal(false)
@@ -132,6 +141,8 @@ export function SettingsKeyboardPage(props: {
       const osk = await loadShellOskSettings(base)
       setOskEnabled(osk.enabled)
       setOskProvider(osk.provider)
+      const lockScreen = await loadShellLockScreenSettings(base)
+      setLockScreenEnabled(lockScreen.enabled)
     } catch (error) {
       setErr(error instanceof Error ? error.message : String(error))
     } finally {
@@ -245,6 +256,27 @@ export function SettingsKeyboardPage(props: {
       setOskErr(error instanceof Error ? error.message : String(error))
     } finally {
       setOskSaveBusy(false)
+    }
+  }
+
+  async function saveLockScreen() {
+    const base = shellHttpBase()
+    if (!base) {
+      setLockScreenErr('Needs cef_host control server to save lock screen settings.')
+      return
+    }
+    setLockScreenSaveBusy(true)
+    setLockScreenErr(null)
+    setLockScreenSavedAt(null)
+    try {
+      await saveShellLockScreenSettings({ enabled: lockScreenEnabled() }, base)
+      setLockScreenSavedAt(Date.now())
+      const settings = await loadShellLockScreenSettings(base)
+      setLockScreenEnabled(settings.enabled)
+    } catch (error) {
+      setLockScreenErr(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLockScreenSaveBusy(false)
     }
   }
 
@@ -435,6 +467,48 @@ export function SettingsKeyboardPage(props: {
         </div>
         <Show when={oskErr()}>
           <p class="mt-3 text-[0.8rem] text-(--shell-warning-text)">{oskErr()}</p>
+        </Show>
+      </div>
+      <div class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded-lg px-3 py-3" data-settings-lock-screen>
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p class="text-[0.72rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">
+              Lock screen
+            </p>
+            <p class="mt-1 text-[0.75rem] text-(--shell-text-dim)">
+              Enables the shell lock command and session lock protocol.
+            </p>
+          </div>
+        </div>
+        <div class="max-w-[10rem] space-y-1 text-xs text-(--shell-text-muted)">
+          <span>Enabled</span>
+          <Select
+            options={ENABLED_OPTIONS}
+            value={lockScreenEnabled() ? 'yes' : 'no'}
+            onChange={(value) => setLockScreenEnabled(value === 'yes')}
+            itemLabel={(value) => (value === 'yes' ? 'On' : 'Off')}
+            equals={(a, b) => a === b}
+            triggerClass={HOTKEY_SELECT_TRIGGER_CLASS}
+            triggerAttrs={{ 'data-settings-lock-screen-enabled': '' }}
+            optionAttrs={(value) => ({ 'data-settings-lock-screen-enabled-option': String(value) })}
+          />
+        </div>
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            data-settings-lock-screen-save
+            class="border border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default"
+            disabled={lockScreenSaveBusy() || !shellHttpBase()}
+            onClick={() => void saveLockScreen()}
+          >
+            {lockScreenSaveBusy() ? 'Saving…' : 'Apply lock screen'}
+          </button>
+          <Show when={lockScreenSavedAt()}>
+            <span class="text-[0.76rem] text-(--shell-text-dim)">Applied just now.</span>
+          </Show>
+        </div>
+        <Show when={lockScreenErr()}>
+          <p class="mt-3 text-[0.8rem] text-(--shell-warning-text)">{lockScreenErr()}</p>
         </Show>
       </div>
       <div class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded-lg px-3 py-3" data-settings-hotkeys>

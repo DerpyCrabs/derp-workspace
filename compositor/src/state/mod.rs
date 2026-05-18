@@ -73,6 +73,7 @@ use smithay::{
         presentation::{
             PresentationFeedbackCachedState, PresentationFeedbackCallback, PresentationState,
         },
+        session_lock::{LockSurface, SessionLockManagerState, SessionLocker},
         selection::{
             data_device::{
                 clear_data_device_selection, current_data_device_selection_userdata,
@@ -225,6 +226,48 @@ pub(crate) struct PendingNativeConfigureFrame {
     output_name: String,
     maximized: bool,
     fullscreen: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LockScreenPhase {
+    Unlocked,
+    Locking,
+    Locked,
+    Unlocking,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LockScreenOrigin {
+    BuiltinShell,
+    ExternalProtocol,
+}
+
+pub(crate) struct LockScreenState {
+    pub(crate) settings: crate::session::settings_config::LockScreenSettingsFile,
+    pub(crate) phase: LockScreenPhase,
+    pub(crate) origin: Option<LockScreenOrigin>,
+    pub(crate) authenticating: bool,
+    pub(crate) failed_attempts: u32,
+    pub(crate) error: String,
+    pub(crate) external_locker: Option<SessionLocker>,
+    pub(crate) external_surfaces: HashMap<String, LockSurface>,
+    pub(crate) solid: SolidColorBuffer,
+}
+
+impl LockScreenState {
+    fn new() -> Self {
+        Self {
+            settings: crate::session::settings_config::read_lock_screen_settings(),
+            phase: LockScreenPhase::Unlocked,
+            origin: None,
+            authenticating: false,
+            failed_attempts: 0,
+            error: String::new(),
+            external_locker: None,
+            external_surfaces: HashMap::new(),
+            solid: SolidColorBuffer::new((1, 1), Color32F::new(0.0, 0.0, 0.0, 1.0)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -487,6 +530,8 @@ pub struct CompositorState {
     pub(crate) shell_osr: ShellOsrState,
     pub(crate) workspace_layout: WorkspaceLayoutState,
     pub(crate) input_routing: InputRoutingState,
+    pub(crate) session_lock_state: SessionLockManagerState,
+    pub(crate) lock_screen: LockScreenState,
     pub(crate) session_services: SessionServicesState,
 
     pub(crate) desktop_background_config: crate::controls::display_config::DesktopBackgroundConfig,
@@ -703,6 +748,9 @@ impl CompositorState {
         let foreign_toplevel_list_state = ForeignToplevelListState::new::<Self>(&dh);
         let idle_inhibit_manager_state = IdleInhibitManagerState::new::<Self>(&dh);
         let keyboard_shortcuts_inhibit_state = KeyboardShortcutsInhibitState::new::<Self>(&dh);
+        let session_lock_state = SessionLockManagerState::new::<Self, _>(&dh, |_| {
+            crate::session::settings_config::read_lock_screen_settings().enabled
+        });
         smithay::wayland::relative_pointer::RelativePointerManagerState::new::<Self>(&dh);
         smithay::wayland::pointer_gestures::PointerGesturesState::new::<Self>(&dh);
         smithay::wayland::pointer_constraints::PointerConstraintsState::new::<Self>(&dh);
@@ -1000,6 +1048,8 @@ impl CompositorState {
                 keyboard_shortcuts_inhibit_state,
                 cursor_theme,
             ),
+            session_lock_state,
+            lock_screen: LockScreenState::new(),
             session_services: SessionServicesState::new(),
             desktop_background_config:
                 crate::controls::display_config::DesktopBackgroundConfig::default(),
@@ -1357,6 +1407,11 @@ impl CompositorState {
             "launch_terminal" => {
                 if let Err(error) = self.try_spawn_wayland_client_sh("foot") {
                     tracing::warn!(%error, "launch terminal hotkey failed");
+                }
+            }
+            "lock_screen" => {
+                if let Err(error) = self.lock_screen_request_builtin() {
+                    tracing::warn!(%error, "lock screen hotkey failed");
                 }
             }
             "open_settings" | "tab_next" | "tab_previous" => self.shell_send_keybind(action),
@@ -3642,6 +3697,9 @@ impl CompositorState {
 
     /// True if the pointer is over the Solid shell layer (desktop), not the native Wayland client beneath.
     pub fn shell_pointer_route_to_cef(&self, pos: Point<f64, Logical>) -> bool {
+        if self.lock_screen_locked() {
+            return true;
+        }
         if self.point_in_shell_exclusion_zones(pos) {
             return true;
         }
@@ -3659,6 +3717,9 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_pointer_should_ipc_to_cef(&self, pos: Point<f64, Logical>) -> bool {
+        if self.lock_screen_locked() {
+            return self.lock_screen.origin == Some(LockScreenOrigin::BuiltinShell);
+        }
         if self.shell_pointer_route_to_cef(pos) {
             return true;
         }
@@ -3756,6 +3817,7 @@ pub(crate) use workspace::*;
 mod input_routing;
 mod keyboard_session_input;
 pub(crate) use input_routing::*;
+mod lock_screen;
 mod tray_notifications;
 pub(crate) use tray_notifications::*;
 mod session_services;

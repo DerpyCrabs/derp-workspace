@@ -1077,6 +1077,18 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/settings_lock_screen" {
+        let json = crate::session::settings_config::read_lock_screen_settings_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/lock_state" {
+        let json = uplink.lock_screen_state_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/settings_default_applications" {
         let json = crate::session::settings_config::read_default_applications_settings_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
@@ -1590,7 +1602,8 @@ fn handle_one(
                 | "tab_next"
                 | "tab_previous"
                 | "move_monitor_left"
-                | "move_monitor_right" => {}
+                | "move_monitor_right"
+                | "lock_screen" => {}
                 _ => return Err("keybind: unsupported action".into()),
             }
         }
@@ -1781,6 +1794,21 @@ fn handle_one(
             let osk = serde_json::from_value::<crate::session::settings_config::OskSettingsFile>(v)
                 .map_err(|e| format!("invalid osk settings: {e}"))?;
             uplink.settings_osk_apply(osk)?;
+        }
+        "/settings_lock_screen" => {
+            let lock_screen =
+                serde_json::from_value::<crate::session::settings_config::LockScreenSettingsFile>(
+                    v,
+                )
+                .map_err(|e| format!("invalid lock screen settings: {e}"))?;
+            uplink.settings_lock_screen_apply(lock_screen)?;
+        }
+        "/lock" => {
+            uplink.lock_screen_request()?;
+        }
+        "/unlock" => {
+            let password = json_string_field(&v, "password")?;
+            uplink.lock_screen_submit_password(password)?;
         }
         "/settings_default_applications" => {
             let default_applications = serde_json::from_value::<

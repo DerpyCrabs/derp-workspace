@@ -16,9 +16,9 @@ use smithay::backend::{
     libinput::{LibinputInputBackend, LibinputSessionInterface},
     renderer::{
         damage::{Error as OutputDamageError, OutputDamageTracker, RenderOutputResult},
-        element::AsRenderElements,
+        element::{solid::SolidColorRenderElement, AsRenderElements, Kind},
         gles::{GlesError, GlesRenderer},
-        Bind, Renderer,
+        Bind, Color32F, Renderer,
     },
     session::{libseat::LibSeatSession, Event as SessionEvent, Session},
     udev::primary_gpu,
@@ -47,7 +47,7 @@ use smithay::reexports::{
     input::Libinput,
     rustix::fs::OFlags,
 };
-use smithay::utils::{DeviceFd, Physical, Rectangle, Transform};
+use smithay::utils::{DeviceFd, Physical, Point, Rectangle, Transform};
 use smithay::wayland::presentation::{PresentationFeedbackCallback, Refresh};
 use tracing::{debug, error, info, warn};
 
@@ -220,6 +220,44 @@ impl DrmHead {
             let cc = state.desktop_background_config.solid_rgba;
 
             let render_res: Result<RenderOutputResult<'_>, OutputDamageError<GlesError>> = if state
+                .lock_screen_locked()
+            {
+                if state.lock_screen.origin == Some(crate::state::LockScreenOrigin::BuiltinShell) {
+                    if let Some(ref el) = shell_render.dmabuf {
+                        render_elements.push(DesktopStack::ShellDma(el));
+                    }
+                }
+                let size = state
+                    .output_topology
+                    .space
+                    .output_geometry(output)
+                    .map(|geo| geo.size)
+                    .unwrap_or_else(|| smithay::utils::Size::from((1, 1)));
+                state
+                    .lock_screen
+                    .solid
+                    .update(size, Color32F::new(0.0, 0.0, 0.0, 1.0));
+                let solid = SolidColorRenderElement::from_buffer(
+                    &state.lock_screen.solid,
+                    Point::<i32, Physical>::from((0, 0)),
+                    output_scale,
+                    1.0,
+                    Kind::Unspecified,
+                );
+                render_elements.push(DesktopStack::BackdropSolid(solid));
+                let out = self.damage_tracker.render_output(
+                    renderer,
+                    &mut fb_target,
+                    0usize,
+                    &render_elements,
+                    [0.0, 0.0, 0.0, 1.0],
+                );
+                if out.is_ok() {
+                    state.shell_osr.shell_exclusion_zones_need_full_damage = false;
+                    state.capture.mark_rendered_frame();
+                }
+                out
+            } else if state
                 .shell_osr
                 .shell_presentation_fullscreen
             {

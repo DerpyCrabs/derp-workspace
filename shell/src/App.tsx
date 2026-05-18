@@ -52,7 +52,7 @@ import {
 } from "@/features/floating/ShellFloatingContext";
 import { createFloatingLayerStore } from "@/features/floating/floatingLayers";
 import { createShellOverlayRegistry } from "@/features/floating/shellOverlay";
-import { spawnViaShellHttp } from "@/features/bridge/shellBridge";
+import { getShellJson, spawnViaShellHttp } from "@/features/bridge/shellBridge";
 import { shellHttpBase } from "@/features/bridge/shellHttp";
 import { loadShellOskSettings } from "@/apps/settings/keyboardSettings";
 import {
@@ -65,6 +65,11 @@ import { ShellContextMenusProvider } from "@/host/ShellContextMenusContext";
 import { createShellContextMenus } from "@/host/createShellContextMenus";
 import { ShellContextMenuLayer } from "@/host/ShellContextMenuLayer";
 import { WindowSwitcherContextMenu } from "@/host/WindowSwitcherContextMenu";
+import { LockScreenOverlay } from "@/features/lock-screen/LockScreenOverlay";
+import {
+  DEFAULT_SHELL_LOCK_SCREEN_STATE,
+  sanitizeShellLockScreenState,
+} from "@/features/lock-screen/lockScreenState";
 import { createDebugHudRuntime } from "@/apps/debug/debugHudRuntime";
 import {
   layoutScreenCssRect,
@@ -295,6 +300,9 @@ function App() {
   const [keyboardLayoutLabel, setKeyboardLayoutLabel] = createSignal<
     string | null
   >(null);
+  const [lockScreenState, setLockScreenState] = createSignal(
+    DEFAULT_SHELL_LOCK_SCREEN_STATE,
+  );
   const [oskEnabled, setOskEnabled] = createSignal(false);
   const [volumeOverlay, setVolumeOverlay] = createSignal<{
     linear: number;
@@ -331,7 +339,9 @@ function App() {
       try {
         const next = await loadShellOskSettings(base);
         if (!cancelled) setOskEnabled(next.enabled);
-      } catch {}
+      } catch (error) {
+        void error;
+      }
     };
     void refresh();
     const interval = window.setInterval(() => {
@@ -621,7 +631,9 @@ function App() {
     canSessionControl,
     clearShellActionIssue,
     describeError,
+    postLockScreen,
     postSessionPower,
+    postUnlock,
     postShell,
     reportShellActionIssue,
     requestCompositorSync,
@@ -883,6 +895,8 @@ function App() {
       sessionPersistenceRuntime.savedSessionAvailable() &&
       !sessionRestoreSnapshot(),
     postSessionPower,
+    postLockScreen,
+    lockScreenEnabled: () => lockScreenState().enabled,
     canSessionControl,
     scheduleOverlayExclusionSync: () =>
       shellSharedStateSync.scheduleOverlayExclusionSync(),
@@ -2041,6 +2055,15 @@ function App() {
   }
 
   onMount(() => {
+    queueMicrotask(async () => {
+      const base = shellHttpBase();
+      if (!base) return;
+      try {
+        setLockScreenState(
+          sanitizeShellLockScreenState(await getShellJson("/lock_state", base)),
+        );
+      } catch {}
+    });
     const disposeNotificationsApi = installShellNotificationsApi();
     const disposeAppRuntimeBootstrap = registerAppRuntimeBootstrap({
       startThemeDomSync,
@@ -2133,6 +2156,8 @@ function App() {
       },
       registerCompositorBridgeRuntime: {
         setKeyboardLayoutLabel,
+        setLockScreenState: (value) =>
+          setLockScreenState(sanitizeShellLockScreenState(value)),
         setVolumeOverlay,
         setTrayVolumeState,
         setTrayReservedPx,
@@ -2350,6 +2375,13 @@ function App() {
           <Show when={portalPickerVisible()}>
             <PortalPickerOverlay />
           </Show>
+
+          <LockScreenOverlay
+            state={lockScreenState}
+            screens={liveScreenRows}
+            canvasOrigin={layoutCanvasOrigin}
+            submitPassword={postUnlock}
+          />
 
           <CustomLayoutOverlay
             state={customLayoutOverlay}

@@ -21,6 +21,7 @@ export type HotkeySettings = {
 export const BUILTIN_HOTKEY_ACTIONS = [
   { value: 'cycle_keyboard_layout', label: 'Cycle keyboard layout' },
   { value: 'open_settings', label: 'Open settings' },
+  { value: 'lock_screen', label: 'Lock screen' },
   { value: 'close_focused', label: 'Close focused window' },
   { value: 'toggle_programs_menu', label: 'Toggle programs menu' },
   { value: 'toggle_fullscreen', label: 'Toggle fullscreen' },

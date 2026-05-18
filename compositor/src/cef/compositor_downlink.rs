@@ -1021,6 +1021,15 @@ fn apply_message(
                 message_snapshot_epoch,
             ));
         }
+        shell_wire::DecodedCompositorToShellMessage::LockState { state_json } => {
+            let Ok(state) = serde_json::from_str::<Value>(&state_json) else {
+                return;
+            };
+            pending_details.push(json!({
+                "type": "lock_state",
+                "state": state,
+            }));
+        }
         shell_wire::DecodedCompositorToShellMessage::InteractionState {
             revision,
             interaction_serial,

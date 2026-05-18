@@ -455,6 +455,9 @@ pub enum DecodedCompositorToShellMessage {
     TraySniMenu {
         menu: TraySniMenuWire,
     },
+    LockState {
+        state_json: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -512,6 +515,7 @@ pub enum ShellWireMessage {
     WindowOrder = 63,
     CompositorCommandPaletteState = 64,
     CompositorImeCommitText = 65,
+    CompositorLockState = 66,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -596,6 +600,7 @@ pub const MSG_COMPOSITOR_WORKSPACE_STATE_BINARY: u32 = 62;
 pub const MSG_WINDOW_ORDER: u32 = 63;
 pub const MSG_COMPOSITOR_COMMAND_PALETTE_STATE: u32 = 64;
 pub const MSG_COMPOSITOR_IME_COMMIT_TEXT: u32 = 65;
+pub const MSG_COMPOSITOR_LOCK_STATE: u32 = 66;
 
 pub const SHELL_SNAPSHOT_DOMAIN_OUTPUTS: u32 = 1;
 pub const SHELL_SNAPSHOT_DOMAIN_WINDOWS: u32 = 2;
@@ -689,6 +694,7 @@ pub const MAX_WORKSPACE_BINARY_BYTES: u32 = 262144;
 pub const MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES: u32 = 65536;
 pub const MAX_COMMAND_PALETTE_STATE_JSON_BYTES: u32 = 65536;
 pub const MAX_IME_COMMIT_TEXT_BYTES: u32 = 4096;
+pub const MAX_LOCK_STATE_JSON_BYTES: u32 = 8192;
 
 pub const SHELL_WIRE_MESSAGE_VALUES: &[u32] = &[
     MSG_SPAWN_WAYLAND_CLIENT,
@@ -743,6 +749,7 @@ pub const SHELL_WIRE_MESSAGE_VALUES: &[u32] = &[
     MSG_WINDOW_ORDER,
     MSG_COMPOSITOR_COMMAND_PALETTE_STATE,
     MSG_COMPOSITOR_IME_COMMIT_TEXT,
+    MSG_COMPOSITOR_LOCK_STATE,
 ];
 pub const SHELL_SNAPSHOT_DOMAIN_VALUES: &[u32] = &[
     SHELL_SNAPSHOT_DOMAIN_OUTPUTS,

@@ -5,6 +5,7 @@ import customHotkeysGroup from './custom-hotkeys.spec.ts'
 import externalControlGroup from './external-control.spec.ts'
 import fileBrowserGroup from './file-browser.spec.ts'
 import launcherMultimonitorGroup from './launcher-multimonitor.spec.ts'
+import lockScreenGroup from './lock-screen.spec.ts'
 import nativeWindowsGroup from './native-windows.spec.ts'
 import notificationsGroup from './notifications.spec.ts'
 import oskThemeGroup from './osk-theme.spec.ts'
@@ -32,6 +33,7 @@ export const defaultGroups = [
   chromeTabDetachGroup,
   shellChromeGroup,
   compositorSnapshotGroup,
+  lockScreenGroup,
   nativeWindowsGroup,
   waylandProtocolsGroup,
   wleirdGroup,

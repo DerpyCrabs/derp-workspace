@@ -53,6 +53,7 @@ export const MSG_COMPOSITOR_WORKSPACE_STATE_BINARY = 62 as const
 export const MSG_WINDOW_ORDER = 63 as const
 export const MSG_COMPOSITOR_COMMAND_PALETTE_STATE = 64 as const
 export const MSG_COMPOSITOR_IME_COMMIT_TEXT = 65 as const
+export const MSG_COMPOSITOR_LOCK_STATE = 66 as const
 export const SHELL_SHARED_SNAPSHOT_MAGIC = 1146245203 as const
 export const SHELL_SNAPSHOT_DOMAIN_CHUNKS_MAGIC = 1146242125 as const
 export const SHELL_SNAPSHOT_DOMAIN_OUTPUTS = 1 as const
@@ -118,6 +119,7 @@ export const MAX_WORKSPACE_BINARY_BYTES = 262144 as const
 export const MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES = 65536 as const
 export const MAX_COMMAND_PALETTE_STATE_JSON_BYTES = 65536 as const
 export const MAX_IME_COMMIT_TEXT_BYTES = 4096 as const
+export const MAX_LOCK_STATE_JSON_BYTES = 8192 as const
 export const HOT_DETAIL_WINDOW_GEOMETRY = 1 as const
 export const HOT_DETAIL_WINDOW_STATE = 2 as const
 export const HOT_DETAIL_WINDOW_UNMAPPED = 3 as const
@@ -195,6 +197,7 @@ export const SHELL_WIRE_MESSAGES = {
   MSG_WINDOW_ORDER: MSG_WINDOW_ORDER,
   MSG_COMPOSITOR_COMMAND_PALETTE_STATE: MSG_COMPOSITOR_COMMAND_PALETTE_STATE,
   MSG_COMPOSITOR_IME_COMMIT_TEXT: MSG_COMPOSITOR_IME_COMMIT_TEXT,
+  MSG_COMPOSITOR_LOCK_STATE: MSG_COMPOSITOR_LOCK_STATE,
 } as const
 export type ShellWireMessage = (typeof SHELL_WIRE_MESSAGES)[keyof typeof SHELL_WIRE_MESSAGES]
 
@@ -276,6 +279,7 @@ export const WIRE_BYTE_SIZES = {
   MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES: MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES,
   MAX_COMMAND_PALETTE_STATE_JSON_BYTES: MAX_COMMAND_PALETTE_STATE_JSON_BYTES,
   MAX_IME_COMMIT_TEXT_BYTES: MAX_IME_COMMIT_TEXT_BYTES,
+  MAX_LOCK_STATE_JSON_BYTES: MAX_LOCK_STATE_JSON_BYTES,
 } as const
 export type WireByteSize = (typeof WIRE_BYTE_SIZES)[keyof typeof WIRE_BYTE_SIZES]
 
@@ -359,5 +363,6 @@ export type DerpShellDetail = { snapshot_epoch?: number } & (
   | { type: 'tray_sni_menu'; request_serial: number; notifier_id: string; menu_path: string; entries: TraySniMenuEntryDetail[] }
   | { type: 'notifications_state'; state: unknown }
   | { type: 'notification_event'; notification_id: number; event_type: string; action_key?: string | null; close_reason?: number | null; source: string }
+  | { type: 'lock_state'; state: { enabled: boolean; locked: boolean; phase: string; origin?: string | null; authenticating: boolean; failed_attempts: number; error: string } }
   | { type: 'mutation_ack'; domain: string; client_mutation_id: number; status: string; snapshot_epoch?: number }
 )

@@ -348,8 +348,9 @@ if [[ -f "\$env_file" ]]; then
   : >"\$had_file"
 fi
 {
-  [[ -f "\$env_file" ]] && grep -v '^export DERP_VALIDATE_STATE=' "\$env_file" || true
+  [[ -f "\$env_file" ]] && grep -v -e '^export DERP_VALIDATE_STATE=' -e '^export DERP_E2E_LOCK_PASSWORD=' "\$env_file" || true
   printf '\\nexport DERP_VALIDATE_STATE=1\\n'
+  printf 'export DERP_E2E_LOCK_PASSWORD=derp-e2e-lock\\n'
   if [[ $(printf '%q' "${DERP_E2E_PERF_METRICS:-0}") == "1" ]]; then
     printf 'export DERP_PERF_METRICS=1\\n'
   else

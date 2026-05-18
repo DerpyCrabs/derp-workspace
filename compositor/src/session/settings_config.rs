@@ -119,6 +119,12 @@ pub struct OskSettingsFile {
     pub provider: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct LockScreenSettingsFile {
+    pub enabled: bool,
+}
+
 impl Default for DefaultApplicationsFile {
     fn default() -> Self {
         Self {
@@ -154,6 +160,12 @@ impl Default for OskSettingsFile {
             enabled: true,
             provider: "squeekboard".into(),
         }
+    }
+}
+
+impl Default for LockScreenSettingsFile {
+    fn default() -> Self {
+        Self { enabled: false }
     }
 }
 
@@ -294,6 +306,7 @@ pub struct SettingsFile {
     pub files: FilesSettingsFile,
     pub notifications: NotificationsSettingsFile,
     pub osk: OskSettingsFile,
+    pub lock_screen: LockScreenSettingsFile,
     pub scratchpads: ScratchpadSettingsFile,
 }
 
@@ -309,6 +322,7 @@ impl Default for SettingsFile {
             files: FilesSettingsFile::default(),
             notifications: NotificationsSettingsFile::default(),
             osk: OskSettingsFile::default(),
+            lock_screen: LockScreenSettingsFile::default(),
             scratchpads: ScratchpadSettingsFile::default(),
         }
     }
@@ -470,6 +484,12 @@ pub fn sanitize_osk_settings(osk: OskSettingsFile) -> OskSettingsFile {
         } else {
             OskSettingsFile::default().provider
         },
+    }
+}
+
+pub fn sanitize_lock_screen_settings(settings: LockScreenSettingsFile) -> LockScreenSettingsFile {
+    LockScreenSettingsFile {
+        enabled: settings.enabled,
     }
 }
 
@@ -683,6 +703,7 @@ fn valid_builtin_hotkey_action(value: &str) -> bool {
             | "screenshot_current_output"
             | "screenshot_region"
             | "launch_terminal"
+            | "lock_screen"
     )
 }
 
@@ -1105,6 +1126,7 @@ fn read_settings_file_from_path(path: &Path) -> SettingsFile {
             cfg.files = sanitize_files_settings(cfg.files);
             cfg.notifications = sanitize_notifications_settings(cfg.notifications);
             cfg.osk = sanitize_osk_settings(cfg.osk);
+            cfg.lock_screen = sanitize_lock_screen_settings(cfg.lock_screen);
             cfg.scratchpads = sanitize_scratchpad_settings(cfg.scratchpads);
             if cfg.version == 0 {
                 cfg.version = 1;
@@ -1219,6 +1241,41 @@ pub fn write_osk_settings(settings: OskSettingsFile) -> Result<(), String> {
     }
     cfg.version = 1;
     cfg.osk = osk;
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&path, format!("{json}\n")).map_err(|e| {
+        tracing::warn!(
+            target: "derp_settings_config",
+            ?e,
+            path = %path.display(),
+            "write settings config"
+        );
+        e.to_string()
+    })
+}
+
+pub fn read_lock_screen_settings() -> LockScreenSettingsFile {
+    let Some(path) = settings_config_path() else {
+        return LockScreenSettingsFile::default();
+    };
+    read_settings_file_from_path(&path).lock_screen
+}
+
+pub fn read_lock_screen_settings_json() -> Result<String, String> {
+    serde_json::to_string(&read_lock_screen_settings()).map_err(|e| e.to_string())
+}
+
+pub fn write_lock_screen_settings(settings: LockScreenSettingsFile) -> Result<(), String> {
+    let Some(path) = settings_config_path() else {
+        return Err("missing config dir".into());
+    };
+    ensure_parent_dir(&path)?;
+    let mut cfg = read_settings_file_from_path(&path);
+    let lock_screen = sanitize_lock_screen_settings(settings);
+    if cfg.version == 1 && cfg.lock_screen == lock_screen {
+        return Ok(());
+    }
+    cfg.version = 1;
+    cfg.lock_screen = lock_screen;
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     std::fs::write(&path, format!("{json}\n")).map_err(|e| {
         tracing::warn!(

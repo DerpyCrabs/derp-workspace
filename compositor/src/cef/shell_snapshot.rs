@@ -1060,6 +1060,13 @@ fn append_snapshot_message(
                 "command palette state",
             )?;
         }
+        shell_wire::DecodedCompositorToShellMessage::LockState { state_json } => {
+            extend_snapshot_packet(
+                payload,
+                shell_wire::encode_compositor_lock_state(state_json),
+                "lock state",
+            )?;
+        }
         shell_wire::DecodedCompositorToShellMessage::InteractionState {
             revision,
             interaction_serial,

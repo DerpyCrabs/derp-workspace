@@ -1550,6 +1550,27 @@ pub fn encode_compositor_command_palette_state(revision: u64, state_json: &str) 
     Some(v)
 }
 
+pub fn encode_compositor_lock_state(state_json: &str) -> Option<Vec<u8>> {
+    let b = state_json.as_bytes();
+    if b.is_empty() {
+        return None;
+    }
+    let len = u32::try_from(b.len()).ok()?;
+    if len > MAX_LOCK_STATE_JSON_BYTES {
+        return None;
+    }
+    let body_len = 8u32.checked_add(len)?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_LOCK_STATE.to_le_bytes());
+    v.extend_from_slice(&len.to_le_bytes());
+    v.extend_from_slice(b);
+    Some(v)
+}
+
 pub fn encode_shell_workspace_mutation(mutation_json: &str) -> Option<Vec<u8>> {
     let b = mutation_json.as_bytes();
     if b.is_empty() {
@@ -2409,6 +2430,31 @@ fn decode_compositor_to_shell_body(
                 revision,
                 state_json,
             })
+        }
+        MSG_COMPOSITOR_LOCK_STATE => {
+            if body.len() < 8 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let len = cursor
+                .read_u32()
+                .ok_or(DecodeError::BadCompositorToShellPayload)? as usize;
+            if len == 0 || len > MAX_LOCK_STATE_JSON_BYTES as usize {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let end = 8usize
+                .checked_add(len)
+                .ok_or(DecodeError::BadCompositorToShellPayload)?;
+            if body.len() != end {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let state_json = std::str::from_utf8(
+                cursor
+                    .read_bytes(len)
+                    .ok_or(DecodeError::BadCompositorToShellPayload)?,
+            )
+            .map_err(|_| DecodeError::BadUtf8Command)?
+            .to_string();
+            Ok(DecodedCompositorToShellMessage::LockState { state_json })
         }
         MSG_COMPOSITOR_INTERACTION_STATE => {
             if body.len() != COMPOSITOR_INTERACTION_STATE_BYTES_V1

@@ -67,6 +67,26 @@ export function createShellTransportBridge(options: ShellTransportBridgeOptions)
     }
   }
 
+  async function postLockScreen(): Promise<void> {
+    try {
+      await postShell('/lock', {})
+      clearShellActionIssue()
+    } catch (error) {
+      reportShellActionIssue(`Lock failed: ${describeError(error)}`)
+      throw error
+    }
+  }
+
+  async function postUnlock(password: string): Promise<void> {
+    try {
+      await postShell('/unlock', { password })
+      clearShellActionIssue()
+    } catch (error) {
+      reportShellActionIssue(`Unlock failed: ${describeError(error)}`)
+      throw error
+    }
+  }
+
   function canSessionControl(): boolean {
     return typeof window.__derpShellWireSend === 'function' || shellHttpBase() !== null
   }
@@ -111,7 +131,9 @@ export function createShellTransportBridge(options: ShellTransportBridgeOptions)
     clearShellActionIssue,
     clearShellWireIssue,
     describeError,
+    postLockScreen,
     postSessionPower,
+    postUnlock,
     postShell,
     reportShellActionIssue,
     reportShellWireIssue,

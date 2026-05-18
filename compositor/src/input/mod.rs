@@ -37,7 +37,7 @@ use smithay::{
 
 use crate::{
     derp_space::DerpSpaceElem,
-    state::{CompositorState, TouchRoute},
+    state::{CompositorState, LockScreenOrigin, TouchRoute},
     CalloopData,
 };
 
@@ -197,6 +197,34 @@ impl CompositorState {
                         );
                         return FilterResult::Intercept(());
                     }
+                }
+                if state.lock_screen_locked() {
+                    if key_state == KeyState::Released && is_super {
+                        state.input_routing.programs_menu_super_armed = false;
+                        state.input_routing.programs_menu_super_chord = false;
+                    }
+                    if state.lock_screen.origin == Some(LockScreenOrigin::BuiltinShell)
+                        && state.shell_cef_active()
+                        && state.shell_osr.shell_has_frame
+                    {
+                        if key_state == KeyState::Pressed && is_autorepeat {
+                            return FilterResult::Intercept(());
+                        }
+                        if key_state == KeyState::Released
+                            && state.input_routing.shell_cef_repeat_keycode == Some(keycode)
+                        {
+                            state.shell_cef_repeat_clear(&lh_kbd);
+                        }
+                        state.shell_ipc_forward_keyboard_to_cef(key_state, mods, &keysym, false);
+                        state.shell_ipc_refresh_pointer_modifiers();
+                        if key_state == KeyState::Pressed
+                            && CompositorState::shell_cef_sym_should_autorepeat(raw_sym)
+                        {
+                            let sr = keysym.modified_sym().raw();
+                            state.shell_cef_repeat_arm(&lh_kbd, keycode, sr);
+                        }
+                    }
+                    return FilterResult::Intercept(());
                 }
                 if key_state == KeyState::Pressed
                     && matches!(raw_sym, keysyms::KEY_Escape)
