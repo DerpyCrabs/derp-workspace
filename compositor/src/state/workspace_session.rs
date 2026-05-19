@@ -73,6 +73,29 @@ impl CompositorState {
         );
     }
 
+    pub(crate) fn workspace_select_window_tab_for_focus(
+        &mut self,
+        window_id: u32,
+    ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
+        self.workspace_sync_from_registry();
+        let previous_state = self.workspace_layout.workspace_state.clone();
+        let group_id = group_id_for_window(&previous_state, window_id)?.to_string();
+        let previous_visible = previous_state.visible_window_id_for_group(&group_id);
+        if previous_visible == Some(window_id) {
+            return None;
+        }
+        let next_state =
+            previous_state.apply_mutation(&WorkspaceMutation::SelectWindowTab { window_id })?;
+        if let Some(previous_visible) = previous_visible {
+            self.workspace_copy_window_geometry(window_id, previous_visible);
+        }
+        self.workspace_layout.workspace_state =
+            reconcile_workspace_state(&next_state, &self.workspace_live_window_ids());
+        self.workspace_warn_invariants("select_window_tab_for_focus");
+        self.next_shell_workspace_revision();
+        self.workspace_state_message()
+    }
+
     fn workspace_detached_window_shell_chrome_titlebar_h(
         &self,
         window_id: u32,

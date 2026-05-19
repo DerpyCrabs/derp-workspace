@@ -1116,7 +1116,10 @@ impl CompositorState {
             .into_iter()
             .filter(|record| {
                 record.kind == WindowKind::Native
-                    && record.backend == WindowBackend::WaylandXdg
+                    && matches!(
+                        record.backend,
+                        WindowBackend::WaylandXdg | WindowBackend::X11
+                    )
                     && record.info.wayland_client_pid.is_some_and(|pid| {
                         pid > 0 && std::fs::metadata(format!("/proc/{pid}")).is_err()
                     })
@@ -1133,6 +1136,11 @@ impl CompositorState {
             self.output_topology
                 .space
                 .unmap_elem(&DerpSpaceElem::Wayland(window));
+        }
+        if let Some(window) = self.find_x11_window_by_surface_id(info.surface_id) {
+            self.output_topology
+                .space
+                .unmap_elem(&DerpSpaceElem::X11(window));
         }
         if let Some(key) = self
             .windows
@@ -3467,7 +3475,15 @@ impl CompositorState {
     ///
     /// The embedded Solid CEF toplevel is omitted on the shell wire so the HUD does not wrap its own content.
     pub fn shell_emit_chrome_event(&mut self, event: ChromeEvent) {
-        self.shell_emit_chrome_event_inner(event, None);
+        self.shell_emit_chrome_event_inner(event, None, Vec::new());
+    }
+
+    pub fn shell_emit_chrome_event_with_snapshot_extras(
+        &mut self,
+        event: ChromeEvent,
+        extra_snapshot_messages: Vec<shell_wire::DecodedCompositorToShellMessage>,
+    ) {
+        self.shell_emit_chrome_event_inner(event, None, extra_snapshot_messages);
     }
 
     /// Like [`Self::shell_emit_chrome_event`] for unmap after the window row was removed from [`WindowRegistry`].
@@ -3489,7 +3505,11 @@ impl CompositorState {
         }
         self.scratchpad_forget_window(window_id);
         let hint = removed_info.as_ref();
-        self.shell_emit_chrome_event_inner(ChromeEvent::WindowUnmapped { window_id }, hint);
+        self.shell_emit_chrome_event_inner(
+            ChromeEvent::WindowUnmapped { window_id },
+            hint,
+            Vec::new(),
+        );
         self.shell_reply_window_list();
         if let Some(output_name) = removed_info
             .as_ref()
@@ -3520,6 +3540,7 @@ impl CompositorState {
         &mut self,
         event: ChromeEvent,
         unmap_removed_info: Option<&WindowInfo>,
+        extra_snapshot_messages: Vec<shell_wire::DecodedCompositorToShellMessage>,
     ) {
         if let ChromeEvent::WindowMapped { info } = &event {
             self.shell_prepare_spawned_toplevel_stack(info.window_id);
@@ -3688,7 +3709,7 @@ impl CompositorState {
                     _ => None,
                 };
                 let msg = self.enrich_shell_live_message(msg);
-                self.shell_send_to_cef(msg);
+                self.shell_send_to_cef_with_snapshot_extras(msg, extra_snapshot_messages);
                 if let Some(window_id) = mapped_window_id {
                     self.shell_send_window_geometry_snapshot_for_window(window_id);
                 }

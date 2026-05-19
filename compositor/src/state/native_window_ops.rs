@@ -1351,7 +1351,7 @@ impl CompositorState {
             self.output_topology
                 .space
                 .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
-            self.shell_window_stack_touch(window_id);
+            let stack_changed = self.shell_window_stack_touch(window_id);
             let wl_surface = window.toplevel().unwrap().wl_surface().clone();
             let k_serial = SERIAL_COUNTER.next_serial();
             self.input_routing.seat.get_keyboard().unwrap().set_focus(
@@ -1359,11 +1359,22 @@ impl CompositorState {
                 Some(wl_surface),
                 k_serial,
             );
-            self.shell_emit_chrome_event(ChromeEvent::FocusChanged {
-                surface_id: Some(sid),
-                window_id: Some(window_id),
-            });
             self.raise_shell_status_indicators();
+            let mut extra_snapshot_messages = if stack_changed {
+                vec![self.shell_window_order_message()]
+            } else {
+                Vec::new()
+            };
+            if let Some(workspace_state) = self.workspace_select_window_tab_for_focus(window_id) {
+                extra_snapshot_messages.push(workspace_state);
+            }
+            self.shell_emit_chrome_event_with_snapshot_extras(
+                ChromeEvent::FocusChanged {
+                    surface_id: Some(sid),
+                    window_id: Some(window_id),
+                },
+                extra_snapshot_messages,
+            );
             self.output_topology.space.elements().for_each(|e| {
                 if let DerpSpaceElem::Wayland(w) = e {
                     self.send_xdg_toplevel_configure(&w.toplevel().unwrap(), None);
@@ -1380,7 +1391,7 @@ impl CompositorState {
         self.output_topology
             .space
             .raise_element(&DerpSpaceElem::X11(x11.clone()), true);
-        self.shell_window_stack_touch(window_id);
+        let stack_changed = self.shell_window_stack_touch(window_id);
         if let Some(wl_surface) = x11.wl_surface() {
             self.windows.shell_pending_native_focus_window_id = None;
             let k_serial = SERIAL_COUNTER.next_serial();
@@ -1389,15 +1400,30 @@ impl CompositorState {
                 Some(wl_surface),
                 k_serial,
             );
-            self.shell_emit_chrome_event(ChromeEvent::FocusChanged {
-                surface_id: Some(sid),
-                window_id: Some(window_id),
-            });
+            let mut extra_snapshot_messages = if stack_changed {
+                vec![self.shell_window_order_message()]
+            } else {
+                Vec::new()
+            };
+            if let Some(workspace_state) = self.workspace_select_window_tab_for_focus(window_id) {
+                extra_snapshot_messages.push(workspace_state);
+            }
+            self.shell_emit_chrome_event_with_snapshot_extras(
+                ChromeEvent::FocusChanged {
+                    surface_id: Some(sid),
+                    window_id: Some(window_id),
+                },
+                extra_snapshot_messages,
+            );
         } else {
             self.windows.shell_pending_native_focus_window_id = Some(window_id);
         }
         self.emit_x11_window_updates(&x11, false, false);
-        self.raise_shell_status_indicators();
+        let indicators_changed = self.raise_shell_status_indicators();
+        if indicators_changed {
+            let msg = self.shell_window_order_message();
+            self.shell_send_to_cef(msg);
+        }
     }
 
     pub(super) fn shell_emit_window_state(&mut self, window_id: u32, minimized: bool) {
@@ -1667,7 +1693,18 @@ impl CompositorState {
             self.shell_minimize_window(window_id);
         } else {
             self.shell_raise_and_focus_window(window_id);
-            self.shell_reply_window_list();
+            let surface_id = self
+                .windows
+                .window_registry
+                .surface_id_for_window(window_id);
+            let window_order = self.shell_window_order_message();
+            self.shell_send_to_cef_with_snapshot_extras(
+                shell_wire::DecodedCompositorToShellMessage::FocusChanged {
+                    surface_id,
+                    window_id: Some(window_id),
+                },
+                vec![window_order],
+            );
         }
     }
 
@@ -1693,6 +1730,5 @@ impl CompositorState {
             return;
         }
         self.shell_raise_and_focus_window(window_id);
-        self.shell_reply_window_list();
     }
 }

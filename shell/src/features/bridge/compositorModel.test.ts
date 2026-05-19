@@ -81,7 +81,7 @@ describe('createCompositorModel', () => {
     })
   })
 
-  it('ignores partial snapshot window details when no authoritative window list is present', () => {
+  it('applies partial snapshot window details to existing authoritative rows', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()
       model.applyAuthoritativeSnapshotDetails([{ type: 'window_list', revision: 1, windows: [nativeWindow(7, 'Old')] }])
@@ -112,18 +112,22 @@ describe('createCompositorModel', () => {
       ])
 
       expect(model.windows().get(7)).toMatchObject({
-        title: 'Old',
-        x: 10,
-        y: 20,
-        width: 300,
-        height: 200,
-        minimized: false,
+        title: 'New',
+        app_id: 'new.app',
+        x: 40,
+        y: 50,
+        width: 640,
+        height: 480,
+        output_id: 'output-b',
+        output_name: 'DP-2',
+        minimized: true,
+        maximized: true,
       })
       dispose()
     })
   })
 
-  it('uses snapshot window order for list order without overwriting authoritative window rows', () => {
+  it('uses snapshot window order for list order and row stack z', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()
 
@@ -146,7 +150,7 @@ describe('createCompositorModel', () => {
         },
       ])
 
-      expect(model.windows().get(51)?.stack_z).toBe(1)
+      expect(model.windows().get(51)?.stack_z).toBe(9)
       expect(model.windowsListIds()).toEqual([51, 50])
       dispose()
     })

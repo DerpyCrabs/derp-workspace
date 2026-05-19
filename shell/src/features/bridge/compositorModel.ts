@@ -58,6 +58,7 @@ type SnapshotAuthoritativeState = {
   focusedWindowId?: number | null
   windows?: { revision: number; rows: unknown[] }
   windowOrder?: { revision: number; rows: unknown[] }
+  windowDetails: DerpShellDetail[]
   workspaceSnapshot?: { revision: number; state: WorkspaceSnapshot }
   shellHostedAppByWindow?: { revision: number; byWindowId: Record<number, unknown> }
   commandPalette?: { revision: number; state: ExternalCommandPaletteState }
@@ -84,6 +85,21 @@ function collectWindowOrderIds(raw: unknown): number[] {
   return entries
     .sort((left, right) => right.stack - left.stack || right.id - left.id || left.index - right.index)
     .map((entry) => entry.id)
+}
+
+function collectWindowOrderStackZ(raw: unknown): Map<number, number> {
+  const stackZByWindow = new Map<number, number>()
+  if (!Array.isArray(raw)) return stackZByWindow
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue
+    const record = row as Record<string, unknown>
+    const id = coerceShellWindowId(record.window_id)
+    if (id === null) continue
+    const rawStack = record.stack_z
+    const stack_z = typeof rawStack === 'number' && Number.isFinite(rawStack) ? Math.trunc(rawStack) : 0
+    stackZByWindow.set(id, stack_z)
+  }
+  return stackZByWindow
 }
 
 function filterWindowOrderIds(ids: readonly number[], windows: ReadonlyMap<number, DerpWindow>): number[] {
@@ -125,8 +141,35 @@ function shellHostedAppByWindowFromState(state: { byWindowId?: Record<string, un
   return byWindowId
 }
 
+function workspaceVisibleWindowIds(state: WorkspaceSnapshot): { grouped: Set<number>; visible: Set<number> } {
+  const grouped = new Set<number>()
+  const visible = new Set<number>()
+  for (const group of state.groups) {
+    for (const windowId of group.windowIds) grouped.add(windowId)
+    const active = state.activeTabByGroupId[group.id]
+    const right = group.windowIds.includes(active) ? active : group.windowIds[0]
+    if (right !== undefined) visible.add(right)
+    const split = state.splitByGroupId[group.id]
+    if (split && group.windowIds.includes(split.leftWindowId)) visible.add(split.leftWindowId)
+  }
+  return { grouped, visible }
+}
+
+function applyWorkspaceVisibilityToMap(windows: Map<number, DerpWindow>, state: WorkspaceSnapshot): Map<number, DerpWindow> {
+  const { grouped, visible } = workspaceVisibleWindowIds(state)
+  let next: Map<number, DerpWindow> | null = null
+  for (const [windowId, window] of windows) {
+    if (!grouped.has(windowId)) continue
+    const workspaceVisible = visible.has(windowId)
+    if (window.workspace_visible === workspaceVisible) continue
+    if (!next) next = new Map(windows)
+    next.set(windowId, { ...window, workspace_visible: workspaceVisible })
+  }
+  return next ?? windows
+}
+
 function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]): SnapshotAuthoritativeState {
-  const next: SnapshotAuthoritativeState = {}
+  const next: SnapshotAuthoritativeState = { windowDetails: [] }
   for (const detail of details) {
     if (detail.type === 'window_list') {
       next.windows = {
@@ -165,9 +208,127 @@ function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]):
     }
     if (detail.type === 'focus_changed') {
       next.focusedWindowId = coerceShellWindowId(detail.window_id)
+      continue
+    }
+    if (detail.type === 'window_geometry' || detail.type === 'window_metadata' || detail.type === 'window_state') {
+      next.windowDetails.push(detail)
     }
   }
   return next
+}
+
+function applyWindowDetail(window: DerpWindow, detail: DerpShellDetail): DerpWindow {
+  if (detail.type === 'window_geometry') {
+    const clientX = typeof detail.client_x === 'number' ? detail.client_x : window.client_x
+    const clientY = typeof detail.client_y === 'number' ? detail.client_y : window.client_y
+    const clientWidth = typeof detail.client_width === 'number' ? detail.client_width : window.client_width
+    const clientHeight = typeof detail.client_height === 'number' ? detail.client_height : window.client_height
+    const frameX = typeof detail.frame_x === 'number' ? detail.frame_x : window.frame_x
+    const frameY = typeof detail.frame_y === 'number' ? detail.frame_y : window.frame_y
+    const frameWidth = typeof detail.frame_width === 'number' ? detail.frame_width : window.frame_width
+    const frameHeight = typeof detail.frame_height === 'number' ? detail.frame_height : window.frame_height
+    const outputId = typeof detail.output_id === 'string' ? detail.output_id : window.output_id
+    const outputName = typeof detail.output_name === 'string' ? detail.output_name : window.output_name
+    const clientSideDecoration =
+      typeof detail.client_side_decoration === 'boolean' ? detail.client_side_decoration : window.client_side_decoration
+    if (
+      window.x === (Number(detail.x) || 0) &&
+      window.y === (Number(detail.y) || 0) &&
+      window.width === (Number(detail.width) || 0) &&
+      window.height === (Number(detail.height) || 0) &&
+      window.client_x === clientX &&
+      window.client_y === clientY &&
+      window.client_width === clientWidth &&
+      window.client_height === clientHeight &&
+      window.frame_x === frameX &&
+      window.frame_y === frameY &&
+      window.frame_width === frameWidth &&
+      window.frame_height === frameHeight &&
+      window.output_id === outputId &&
+      window.output_name === outputName &&
+      window.maximized === !!detail.maximized &&
+      window.fullscreen === !!detail.fullscreen &&
+      window.client_side_decoration === clientSideDecoration
+    ) {
+      return window
+    }
+    const next = {
+      ...window,
+      x: Number(detail.x) || 0,
+      y: Number(detail.y) || 0,
+      width: Number(detail.width) || 0,
+      height: Number(detail.height) || 0,
+      client_x: clientX,
+      client_y: clientY,
+      client_width: clientWidth,
+      client_height: clientHeight,
+      frame_x: frameX,
+      frame_y: frameY,
+      frame_width: frameWidth,
+      frame_height: frameHeight,
+      output_id: outputId,
+      output_name: outputName,
+      maximized: !!detail.maximized,
+      fullscreen: !!detail.fullscreen,
+      client_side_decoration: clientSideDecoration,
+    }
+    return next
+  }
+  if (detail.type === 'window_metadata') {
+    const title = typeof detail.title === 'string' ? detail.title : window.title
+    const appId = typeof detail.app_id === 'string' ? detail.app_id : window.app_id
+    const iconName = typeof detail.icon_name === 'string' ? detail.icon_name : window.icon_name
+    if (window.title === title && window.app_id === appId && window.icon_name === iconName) return window
+    const next = {
+      ...window,
+      title,
+      app_id: appId,
+      icon_name: iconName,
+    }
+    return next
+  }
+  if (detail.type === 'window_state') {
+    const record = detail as Record<string, unknown>
+    const minimized = !!detail.minimized
+    const maximized = typeof record.maximized === 'boolean' ? record.maximized : window.maximized
+    const fullscreen = typeof record.fullscreen === 'boolean' ? record.fullscreen : window.fullscreen
+    if (window.minimized === minimized && window.maximized === maximized && window.fullscreen === fullscreen) return window
+    const next = {
+      ...window,
+      minimized,
+      maximized,
+      fullscreen,
+    }
+    return next
+  }
+  return window
+}
+
+function applyWindowDetailsToMap(source: Map<number, DerpWindow>, details: readonly DerpShellDetail[]) {
+  let next: Map<number, DerpWindow> | null = null
+  for (const detail of details) {
+    const id = 'window_id' in detail ? coerceShellWindowId(detail.window_id) : null
+    if (id === null) continue
+    const current = (next ?? source).get(id)
+    if (!current) continue
+    const updated = applyWindowDetail(current, detail)
+    if (updated === current) continue
+    if (!next) next = new Map(source)
+    next.set(id, updated)
+  }
+  return next ?? source
+}
+
+function applyWindowOrderToMap(source: Map<number, DerpWindow>, rows: unknown[]) {
+  const stackZByWindow = collectWindowOrderStackZ(rows)
+  let next: Map<number, DerpWindow> | null = null
+  for (const [id, stack_z] of stackZByWindow) {
+    const current = (next ?? source).get(id)
+    if (!current || current.stack_z === stack_z) continue
+    if (!next) next = new Map(source)
+    next.set(id, { ...current, stack_z })
+  }
+  return next ?? source
 }
 
 export function createCompositorModel(options: CreateCompositorModelOptions = {}) {
@@ -293,7 +454,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   const applyAuthoritativeSnapshotDetails = (details: readonly DerpShellDetail[]) => {
     batch(() => {
       const authoritative = collectSnapshotAuthoritativeState(details)
-      let nextWindowsForOrder = windows()
+      let nextWindowsForOrder: Map<number, DerpWindow> = windows()
       let windowsChanged = false
       if (authoritative.windows !== undefined) {
         windowsChanged = authoritative.windows.revision !== windowsRevision()
@@ -313,6 +474,11 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       }
       if (authoritative.windowOrder !== undefined) {
         if (authoritative.windowOrder.revision !== windowOrderRevision() || windowsChanged) {
+          const nextWindows = applyWindowOrderToMap(nextWindowsForOrder, authoritative.windowOrder.rows)
+          if (nextWindows !== nextWindowsForOrder) {
+            nextWindowsForOrder = nextWindows
+            commitWindows((prev) => (prev === nextWindows ? prev : nextWindows))
+          }
           const nextOrderIds = filterWindowOrderIds(
             collectWindowOrderIds(authoritative.windowOrder.rows),
             nextWindowsForOrder,
@@ -321,10 +487,28 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
           setWindowOrderRevision(authoritative.windowOrder.revision)
         }
       }
+      if (authoritative.windowDetails.length > 0) {
+        const nextWindows = applyWindowDetailsToMap(nextWindowsForOrder, authoritative.windowDetails)
+        if (nextWindows !== nextWindowsForOrder) {
+          nextWindowsForOrder = nextWindows
+          commitWindows((prev) => (prev === nextWindows ? prev : nextWindows))
+          if (authoritative.windowOrder !== undefined || windowsChanged) {
+            setWindowOrderIds((prev) => {
+              const nextOrderIds = filterWindowOrderIds(prev, nextWindows)
+              return sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds
+            })
+          }
+        }
+      }
       if (authoritative.workspaceSnapshot !== undefined) {
         if (authoritative.workspaceSnapshot.revision !== workspaceRevision()) {
           const nextState = normalizeWorkspaceSnapshot(authoritative.workspaceSnapshot.state)
           setWorkspaceSnapshot((prev) => (workspaceSnapshotsEqual(prev, nextState) ? prev : nextState))
+          const visibilityWindows = applyWorkspaceVisibilityToMap(nextWindowsForOrder, nextState)
+          if (visibilityWindows !== nextWindowsForOrder) {
+            nextWindowsForOrder = visibilityWindows
+            commitWindows((prev) => (prev === visibilityWindows ? prev : visibilityWindows))
+          }
           setWorkspaceRevision(authoritative.workspaceSnapshot.revision)
         }
       }

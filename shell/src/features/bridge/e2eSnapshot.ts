@@ -700,15 +700,18 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       cache.queryAttr('data-workspace-split-divider', group.id),
       args.origin,
     ),
-    tabs: group.members.map((member) => ({
-      window_id: member.window_id,
-      rect: snapshotRect(cache.queryAttr('data-workspace-tab', member.window_id), args.origin),
-      handle: snapshotRect(cache.queryAttr('data-workspace-tab-handle', member.window_id), args.origin),
-      close: snapshotRect(cache.queryAttr('data-workspace-tab-close', member.window_id), args.origin),
-      active: member.window_id === group.visibleWindowId,
-      pinned: args.isWorkspaceWindowPinned(member.window_id),
-      split_left: member.window_id === group.splitLeftWindowId,
-    })),
+    tabs: group.members.map((member) => {
+      const tab = cache.queryAttr('data-workspace-tab', member.window_id)
+      return {
+        window_id: member.window_id,
+        rect: snapshotRect(tab, args.origin),
+        handle: snapshotRect(cache.queryAttr('data-workspace-tab-handle', member.window_id), args.origin),
+        close: snapshotRect(cache.queryAttr('data-workspace-tab-close', member.window_id), args.origin),
+        active: member.window_id === group.visibleWindowId,
+        pinned: args.isWorkspaceWindowPinned(member.window_id),
+        split_left: tab?.hasAttribute('data-workspace-split-left-tab') ?? false,
+      }
+    }),
     drop_slots: cache
       .queryAllAttr('data-tab-drop-slot')
       .filter((el) => (el.getAttribute('data-tab-drop-slot') ?? '').startsWith(`${group.id}:`))

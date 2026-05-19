@@ -66,7 +66,7 @@ function utf8Bytes(text: string): number[] {
 }
 
 function keyboardLayoutSnapshot(sequence: bigint, label: string, revision: bigint): ArrayBuffer {
-  const body = [...u64(revision), ...u32(label.length), ...utf8Bytes(label)]
+  const body = [...u32(label.length), ...utf8Bytes(label)]
   return snapshot(sequence, SNAPSHOT_DOMAIN_KEYBOARD, { 3: revision }, [ ...packet(52, body) ])
 }
 
@@ -181,6 +181,7 @@ describe('registerCompositorBridgeRuntime', () => {
     vi.stubGlobal('window', {
       __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
       __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
+      __derpCompositorSnapshotReadIfChanged: vi.fn(() => null),
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     })
@@ -242,6 +243,7 @@ describe('registerCompositorBridgeRuntime', () => {
     vi.stubGlobal('window', {
       __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
       __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
+      __derpCompositorSnapshotReadIfChanged: vi.fn(() => null),
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     })
@@ -393,6 +395,198 @@ describe('registerCompositorBridgeRuntime', () => {
 
     expect(runtimeOptions.applyModelAuthoritativeSnapshotDetails).not.toHaveBeenCalled()
     expect(runtimeOptions.requestCompositorSync).not.toHaveBeenCalled()
+    expect(runtimeOptions.requestWindowSyncRecovery).not.toHaveBeenCalled()
+    dispose()
+  })
+
+  it('requests window sync recovery when snapshot state is newer than the readable snapshot', async () => {
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
+      __derpCompositorSnapshotReadIfChanged: vi.fn(() => null),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'window_geometry',
+        window_id: 7,
+        surface_id: 70,
+        x: 2160,
+        y: 242,
+        width: 900,
+        height: 820,
+        output_name: 'DP-4',
+        maximized: false,
+        fullscreen: false,
+        snapshot_epoch: 12,
+      } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.requestWindowSyncRecovery).toHaveBeenCalledTimes(1)
+    dispose()
+  })
+
+  it('requests window sync recovery for epochless focus state', async () => {
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
+      __derpCompositorSnapshotReadIfChanged: vi.fn(() => null),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'focus_changed',
+        surface_id: 70,
+        window_id: 7,
+      } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.requestWindowSyncRecovery).toHaveBeenCalledTimes(1)
+    dispose()
+  })
+
+  it('applies epochless workspace state directly by revision', async () => {
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
+      __derpCompositorSnapshotReadIfChanged: vi.fn(() => null),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+    const state = {
+      groups: [{ id: 'group-1', windowIds: [7, 8] }],
+      activeTabByGroupId: { 'group-1': 8 },
+      pinnedWindowIds: [],
+      splitByGroupId: {},
+      monitorTiles: [],
+      monitorLayouts: [],
+      preTileGeometry: [],
+      taskbarPins: [],
+      nextGroupSeq: 2,
+    }
+
+    await Promise.resolve()
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'workspace_state',
+        revision: 2,
+        state,
+      } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.applyModelAuthoritativeSnapshotDetails).toHaveBeenCalledWith([
+      expect.objectContaining({ type: 'workspace_state', revision: 2, state }),
+    ])
+    expect(runtimeOptions.requestWindowSyncRecovery).not.toHaveBeenCalled()
+    dispose()
+  })
+
+  it('requests window sync recovery for epochless output layout state', async () => {
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
+      __derpCompositorSnapshotReadIfChanged: vi.fn(() => null),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'output_layout',
+        revision: 1,
+        canvas_logical_width: 3200,
+        canvas_logical_height: 1280,
+        canvas_physical_width: 4800,
+        canvas_physical_height: 1920,
+        screens: [],
+        shell_chrome_primary: 'DP-1',
+        taskbar_auto_hide: false,
+      } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.requestWindowSyncRecovery).toHaveBeenCalledTimes(1)
+    dispose()
+  })
+
+  it('does not request window sync recovery for epochless geometry state', async () => {
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
+      __derpCompositorSnapshotReadIfChanged: vi.fn(() => null),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'window_geometry',
+        window_id: 7,
+        surface_id: 70,
+        x: 2160,
+        y: 242,
+        width: 900,
+        height: 820,
+        output_name: 'DP-4',
+        maximized: false,
+        fullscreen: false,
+      } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.requestWindowSyncRecovery).not.toHaveBeenCalled()
+    dispose()
+  })
+
+  it('applies epochless interaction state directly', async () => {
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
+      __derpCompositorSnapshotReadIfChanged: vi.fn(() => null),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'interaction_state',
+        pointer_x: 42,
+        pointer_y: 64,
+        move_window_id: 0,
+        resize_window_id: 0,
+        move_proxy_window_id: 0,
+        move_capture_window_id: 0,
+        move_rect: null,
+        resize_rect: null,
+      } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.setCompositorInteractionState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pointer_x: 42,
+        pointer_y: 64,
+      }),
+    )
+    expect(runtimeOptions.requestWindowSyncRecovery).not.toHaveBeenCalled()
     dispose()
   })
 
@@ -477,6 +671,118 @@ describe('registerCompositorBridgeRuntime', () => {
     ])
 
     expect(runtimeOptions.setCompositorInteractionState).not.toHaveBeenCalled()
+    dispose()
+  })
+
+  it('clears only explicitly flagged empty authoritative snapshot domains', async () => {
+    const readSnapshot = vi
+      .fn()
+      .mockReturnValueOnce(emptySnapshot(10n))
+      .mockReturnValueOnce(snapshot(12n, SNAPSHOT_DOMAIN_WORKSPACE, { 4: 2n }, []))
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: readSnapshot,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'workspace_state',
+        revision: 2,
+        state: {
+          groups: [],
+          activeTabByGroupId: {},
+          pinnedWindowIds: [],
+          splitByGroupId: {},
+          monitorTiles: [],
+          monitorLayouts: [],
+          preTileGeometry: [],
+          taskbarPins: [],
+          nextGroupSeq: 1,
+        },
+        snapshot_epoch: 12,
+      } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.clearModelAuthoritativeSnapshotDomains).toHaveBeenCalledWith({ workspace: true })
+    expect(runtimeOptions.clearModelAuthoritativeSnapshotDomains).not.toHaveBeenCalledWith(
+      expect.objectContaining({ windows: true }),
+    )
+    expect(runtimeOptions.applyModelAuthoritativeSnapshotDetails).not.toHaveBeenCalled()
+    dispose()
+  })
+
+  it('does not clear authoritative model domains omitted from partial snapshots', async () => {
+    const readSnapshot = vi
+      .fn()
+      .mockReturnValueOnce(emptySnapshot(10n))
+      .mockReturnValueOnce(keyboardLayoutSnapshot(12n, 'ENGLISH', 2n))
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: readSnapshot,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'keyboard_layout',
+        label: 'ENGLISH',
+        snapshot_epoch: 12,
+      } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.clearModelAuthoritativeSnapshotDomains).not.toHaveBeenCalled()
+    expect(runtimeOptions.setKeyboardLayoutLabel).toHaveBeenCalledWith('ENGLISH')
+    dispose()
+  })
+
+  it('requests compositor sync when a newer partial snapshot skipped an unread chrome domain', async () => {
+    const readSnapshot = vi
+      .fn()
+      .mockReturnValueOnce(emptySnapshot(10n))
+      .mockReturnValueOnce(keyboardLayoutSnapshot(12n, 'ENGLISH', 2n))
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: readSnapshot,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'keyboard_layout',
+        label: 'ENGLISH',
+        snapshot_epoch: 12,
+      } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.requestWindowSyncRecovery).not.toHaveBeenCalled()
+
+    readSnapshot.mockReturnValueOnce(
+      snapshot(13n, SNAPSHOT_DOMAIN_KEYBOARD, { 2: 2n, 3: 3n }, [
+        ...packet(52, [...u32(2), ...utf8Bytes('US')]),
+      ]),
+    )
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'keyboard_layout',
+        label: 'US',
+        snapshot_epoch: 13,
+      } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.requestWindowSyncRecovery).toHaveBeenCalledTimes(1)
     dispose()
   })
 

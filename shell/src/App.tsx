@@ -447,6 +447,7 @@ function App() {
   const [compositorSnapshotSequence, setCompositorSnapshotSequence] =
     createSignal(0);
   let windowSyncRecoveryPending = false;
+  let windowSyncRecoveryDeferred = false;
   let windowSyncRecoveryRequestedAt = 0;
   let nextClientMutationId = 1;
   const pendingClientMutationIds = new Map<
@@ -522,7 +523,10 @@ function App() {
     return ok;
   }
 
-  function reconcilePendingClientMutations(snapshotSequence: number) {
+  function reconcilePendingClientMutations(
+    snapshotSequence: number,
+    flushDeferred = true,
+  ) {
     const now = Date.now();
     for (const [clientMutationId, state] of pendingClientMutationIds) {
       if (
@@ -535,11 +539,19 @@ function App() {
       if (now - state.sentAt <= 2000) continue;
       pendingClientMutationIds.delete(clientMutationId);
     }
+    if (flushDeferred) flushDeferredWindowSyncRecovery();
   }
 
   function hasPendingClientMutation() {
-    reconcilePendingClientMutations(compositorSnapshotSequence());
+    reconcilePendingClientMutations(compositorSnapshotSequence(), false);
     return pendingClientMutationIds.size > 0;
+  }
+
+  function flushDeferredWindowSyncRecovery() {
+    if (!windowSyncRecoveryDeferred) return;
+    if (pendingClientMutationIds.size > 0) return;
+    windowSyncRecoveryDeferred = false;
+    requestWindowSyncRecovery();
   }
 
   function handleMutationAck(detail: {
@@ -561,10 +573,12 @@ function App() {
         });
       } else {
         pendingClientMutationIds.delete(detail.client_mutation_id);
+        flushDeferredWindowSyncRecovery();
       }
       return;
     }
     pendingClientMutationIds.delete(detail.client_mutation_id);
+    flushDeferredWindowSyncRecovery();
     requestWindowSyncRecovery();
   }
 
@@ -1034,7 +1048,11 @@ function App() {
     buildWindowsByMonitor(compositorWindowsForGeometry(), fallbackMonitorName()),
   );
   function requestWindowSyncRecovery() {
-    if (hasPendingClientMutation()) return;
+    if (hasPendingClientMutation()) {
+      windowSyncRecoveryDeferred = true;
+      return;
+    }
+    windowSyncRecoveryDeferred = false;
     const now = Date.now();
     if (windowSyncRecoveryPending && now - windowSyncRecoveryRequestedAt < 1000)
       return;

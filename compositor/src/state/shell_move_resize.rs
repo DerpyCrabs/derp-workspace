@@ -835,6 +835,22 @@ impl CompositorState {
             self.refresh_wayland_window_fractional_scale(&window);
             self.refresh_osk_exclusion_damage();
             self.input_routing.shell_move_pending_delta = (0, 0);
+            if let Some(info) = self.windows.window_registry.window_info(wid) {
+                let output_name = self
+                    .output_for_window_position(
+                        after.x,
+                        after.y,
+                        info.width.max(1),
+                        info.height.max(1),
+                    )
+                    .unwrap_or_default();
+                let _ = self.windows.window_registry.update_native(wid, |updated| {
+                    updated.x = after.x;
+                    updated.y = after.y;
+                    updated.output_name = output_name;
+                    updated.clone()
+                });
+            }
             self.notify_geometry_for_window(&window, true);
             self.shell_send_interaction_state();
             tracing::debug!(
@@ -983,6 +999,7 @@ impl CompositorState {
         self.notify_geometry_for_window(window, true);
         self.shell_move_proxy_release(window_id);
         self.shell_send_interaction_state();
+        self.shell_send_window_geometry_snapshot_for_window(window_id);
     }
 
     pub fn shell_move_end(&mut self, window_id: u32) {

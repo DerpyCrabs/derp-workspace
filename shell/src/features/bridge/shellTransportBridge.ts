@@ -88,6 +88,7 @@ export function createShellTransportBridge(options: ShellTransportBridgeOptions)
   }
 
   function canSessionControl(): boolean {
+    void shellWireReadyRev()
     return typeof window.__derpShellWireSend === 'function' || shellHttpBase() !== null
   }
 

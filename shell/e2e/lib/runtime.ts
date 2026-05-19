@@ -2916,6 +2916,10 @@ export async function clickPointWithoutSync(base: string, x: number, y: number):
   await postJson(base, '/test/input/pointer_button', { button: BTN_LEFT, action: 'release' })
 }
 
+export async function clickPointAtomic(base: string, x: number, y: number): Promise<void> {
+  await postJson(base, '/test/input/click', { x, y, button: BTN_LEFT })
+}
+
 export async function clickRectWithoutSync(base: string, rect: Rect): Promise<void> {
   const point = rectCenter(rect)
   await clickPointWithoutSync(base, point.x, point.y)
@@ -3783,12 +3787,11 @@ export async function openSettings(base: string, method: 'click' | 'keybind' = '
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   if (shell.settings_window_visible && shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID)?.minimized !== true) {
     try {
-      await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID, 150)
+      return await waitForWindowRaised(base, SHELL_UI_SETTINGS_WINDOW_ID, 150)
     } catch {
       await activateTaskbarWindow(base, shell, SHELL_UI_SETTINGS_WINDOW_ID)
       return waitForWindowRaised(base, SHELL_UI_SETTINGS_WINDOW_ID)
     }
-    return waitForSettingsVisible(base)
   }
   if (method === 'keybind') {
     await tapSuperShortcut(base, KEY.comma)
@@ -4396,7 +4399,7 @@ export async function cleanupNativeWindows(base: string, windowIds: Set<number>)
     try {
       const { compositor } = await getSnapshots(base)
       const window = compositorWindowById(compositor, windowId)
-      if (!window || window.lifecycle === 'tray_hidden') {
+      if (!window) {
         windowIds.delete(windowId)
         continue
       }
@@ -4411,12 +4414,19 @@ export async function cleanupNativeWindows(base: string, windowIds: Set<number>)
 }
 
 export async function cleanupUnexpectedNativeWindows(base: string, state: E2eState): Promise<void> {
-  try {
-    const { compositor } = await getSnapshots(base)
-    for (const window of unexpectedNativeWindows(compositor, state)) {
-      await closeWindowBestEffort(base, window.window_id)
-    }
-  } catch {}
+  const { compositor } = await getSnapshots(base)
+  const failed: WindowSnapshot[] = []
+  for (const window of unexpectedNativeWindows(compositor, state)) {
+    if (await closeWindowBestEffort(base, window.window_id)) continue
+    failed.push(window)
+  }
+  if (failed.length > 0) {
+    throw new Error(
+      `cleanupUnexpectedNativeWindows failed: ${failed
+        .map((window) => `${window.window_id}:${window.app_id}:${window.title}`)
+        .join(', ')}`,
+    )
+  }
 }
 
 export async function assertNoUnexpectedNativeWindows(base: string, state: E2eState, label: string): Promise<void> {

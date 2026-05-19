@@ -418,7 +418,16 @@ impl UplinkToCompositor {
 
     pub fn shell_request_compositor_sync(&self) {
         self.run(move |s| {
-            s.shell_on_shell_client_connected();
+            s.shell_osr.set_delivery_ready(true);
+            s.send_shell_output_layout();
+            s.shell_osr.shell_embedded_initial_handshake_done = true;
+            s.workspace_send_state();
+            s.shell_hosted_app_state_send();
+            s.shell_send_interaction_state();
+            let msg = s.shell_window_list_message();
+            s.shell_send_to_cef(msg);
+            let window_order = s.shell_window_order_message();
+            s.shell_send_to_cef_with_snapshot_extras(s.shell_focus_message(), vec![window_order]);
         });
     }
 

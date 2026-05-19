@@ -3596,12 +3596,18 @@ export default defineGroup(import.meta.url, ({ test }) => {
       "command palette missing search placeholder",
     );
 
-    await clickPoint(
-      base,
-      settingsWindow.x + settingsWindow.width / 2,
-      settingsWindow.y +
+    const programsPanel = programsOpen.controls?.programs_menu_panel;
+    const settingsDismissPoint = {
+      x: settingsWindow.x + settingsWindow.width / 2,
+      y:
+        settingsWindow.y +
         Math.min(72, Math.max(24, Math.floor(settingsWindow.height / 4))),
-    );
+    };
+    if (programsPanel && pointInWorkspaceRect(programsPanel, settingsDismissPoint)) {
+      settingsDismissPoint.x = settingsWindow.x + settingsWindow.width - 24;
+      settingsDismissPoint.y = settingsWindow.y + settingsWindow.height - 24;
+    }
+    await clickPoint(base, settingsDismissPoint.x, settingsDismissPoint.y);
     await waitForProgramsMenuClosed(base);
     const programsClosed = await getJson<ShellSnapshot>(
       base,

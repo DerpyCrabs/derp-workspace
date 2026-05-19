@@ -5,8 +5,8 @@ impl CompositorState {
         self.windows.shell_window_stack_seed_known_windows();
     }
 
-    pub(crate) fn shell_window_stack_touch(&mut self, window_id: u32) {
-        self.windows.shell_window_stack_touch(window_id);
+    pub(crate) fn shell_window_stack_touch(&mut self, window_id: u32) -> bool {
+        self.windows.shell_window_stack_touch(window_id)
     }
 
     pub(crate) fn shell_window_stack_forget(&mut self, window_id: u32) {
@@ -169,11 +169,12 @@ impl CompositorState {
         let selected_window_id = self.shell_window_switcher_effective_selected_window_id();
         self.windows.shell_window_switcher_selected_window_id = None;
         self.shell_keyboard_capture_clear();
-        self.shell_send_interaction_state();
         if let Some(window_id) = selected_window_id.or(restore_window_id) {
             self.focus_logical_window(window_id);
+            self.shell_send_interaction_state();
             return;
         }
+        self.shell_send_interaction_state();
         self.shell_send_to_cef(self.shell_focus_message());
     }
 

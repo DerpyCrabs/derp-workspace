@@ -278,10 +278,14 @@ wrap_task! {
                     if let Some(snapshot) = snapshot.as_mut() {
                         let snapshot_messages: Vec<_> =
                             snapshot_messages.into_iter().map(|pending| pending.msg).collect();
-                        if let Err(error) =
-                            snapshot.publish_messages(snapshot_epoch, &snapshot_messages)
-                        {
-                            tracing::warn!(%error, "publish shell snapshot failed");
+                        match snapshot.publish_messages(snapshot_epoch, &snapshot_messages) {
+                            Ok(true) => {
+                                compositor_downlink::notify_shell_snapshot(&self.browser_holder);
+                            }
+                            Ok(false) => {}
+                            Err(error) => {
+                                tracing::warn!(%error, "publish shell snapshot failed");
+                            }
                         }
                     }
                 }

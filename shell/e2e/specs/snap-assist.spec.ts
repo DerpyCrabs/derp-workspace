@@ -820,7 +820,7 @@ async function clickSettingsSnapOption(
   await clickPoint(
     base,
     target.global_x + target.width / 2,
-    target.global_y + Math.min(10, target.height / 2),
+    target.global_y + target.height / 2,
   );
 }
 

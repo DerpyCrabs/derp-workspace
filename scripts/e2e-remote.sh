@@ -36,6 +36,7 @@ DERP_E2E_REMOTE_SNAPSHOT="$SCRIPT_DIR/.derp-e2e-remote-snapshot"
 DERP_E2E_SOFTWARE_SESSION="${DERP_E2E_SOFTWARE_RENDERING:-1}"
 DERP_E2E_VALIDATE_BACKUP="scripts/.derp-session.local.env.e2e-validate-backup"
 DERP_E2E_VALIDATE_HAD_ENV="scripts/.derp-session.local.env.e2e-validate-had-env"
+DERP_E2E_USER_STATE_BACKUP="scripts/.derp-e2e-user-state-backup"
 E2E_REMOTE_STARTED_AT="$(date +%s)"
 E2E_REMOTE_RAN_TESTS=0
 E2E_REMOTE_PHASES=()
@@ -102,6 +103,19 @@ e2e_remote_restore_session_env() {
   ssh_base bash -s <<EOF >/dev/null 2>&1 || true
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
+backup_dir="$DERP_E2E_USER_STATE_BACKUP"
+if [[ -d "\$backup_dir" ]]; then
+  if [[ -d "\$backup_dir/config-derp-workspace" ]]; then
+    rm -rf "\$HOME/.config/derp-workspace"
+    mkdir -p "\$HOME/.config"
+    cp -a "\$backup_dir/config-derp-workspace" "\$HOME/.config/derp-workspace"
+  fi
+  if [[ -f "\$backup_dir/session-state.json" ]]; then
+    mkdir -p "\${XDG_STATE_HOME:-\$HOME/.local/state}/derp"
+    cp -a "\$backup_dir/session-state.json" "\${XDG_STATE_HOME:-\$HOME/.local/state}/derp/session-state.json"
+  fi
+  rm -rf "\$backup_dir"
+fi
 env_file="scripts/derp-session.local.env"
 backup_file="scripts/.derp-session.local.env.e2e-backup"
 if [[ -f "\$backup_file" ]]; then
@@ -238,6 +252,24 @@ else
   run_tar_sync
   e2e_remote_record_phase "sync" "$phase_start"
 fi
+
+echo "=== backup remote user desktop state ==="
+phase_start="$(e2e_remote_now)"
+ssh_base bash -s <<EOF
+set -euo pipefail
+cd $(printf '%q' "$REMOTE_REPO")
+backup_dir="$DERP_E2E_USER_STATE_BACKUP"
+rm -rf "\$backup_dir"
+mkdir -p "\$backup_dir"
+if [[ -d "\$HOME/.config/derp-workspace" ]]; then
+  cp -a "\$HOME/.config/derp-workspace" "\$backup_dir/config-derp-workspace"
+fi
+state_file="\${XDG_STATE_HOME:-\$HOME/.local/state}/derp/session-state.json"
+if [[ -f "\$state_file" ]]; then
+  cp -a "\$state_file" "\$backup_dir/session-state.json"
+fi
+EOF
+e2e_remote_record_phase "backup_user_state" "$phase_start"
 
 if [[ "$SKIP_BUILD" -eq 1 ]]; then
   echo "=== skip remote cargo build --release -p compositor -p derp-test-client ==="
@@ -495,6 +527,8 @@ phase_start="$(e2e_remote_now)"
 ssh_base bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
+export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}"
+export DERP_SHELL_HTTP_URL_FILE="\${DERP_SHELL_HTTP_URL_FILE:-\$XDG_RUNTIME_DIR/derp-shell-http-url}"
 $(printf '%s\n' "${remote_env[@]}")
 synthetic_load_pids=()
 synthetic_load_stop() {

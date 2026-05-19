@@ -346,6 +346,7 @@ impl SeatHandler for CompositorState {
                     self.windows.window_registry.window_id_for_wl_surface(&root)
                 })
         });
+        let mut stack_changed = false;
         if let Some(wid) = window_id {
             if let Some(sid) = self.windows.window_registry.surface_id_for_window(wid) {
                 if let Some(window) = self.find_window_by_surface_id(sid) {
@@ -358,7 +359,7 @@ impl SeatHandler for CompositorState {
                         .raise_element(&crate::derp_space::DerpSpaceElem::X11(x11), true);
                 }
             }
-            self.shell_window_stack_touch(wid);
+            stack_changed = self.shell_window_stack_touch(wid);
             if let Some(info) = self.windows.window_registry.window_info(wid) {
                 if !self.window_info_is_solid_shell_host(&info) {
                     self.shell_note_non_shell_focus();
@@ -367,10 +368,23 @@ impl SeatHandler for CompositorState {
         }
         let surface_id =
             window_id.and_then(|w| self.windows.window_registry.surface_id_for_window(w));
-        self.shell_emit_chrome_event(ChromeEvent::FocusChanged {
-            surface_id,
-            window_id,
-        });
+        let mut extra_snapshot_messages = window_id
+            .filter(|_| stack_changed)
+            .map(|_| self.shell_window_order_message())
+            .into_iter()
+            .collect::<Vec<_>>();
+        if let Some(window_id) = window_id {
+            if let Some(workspace_state) = self.workspace_select_window_tab_for_focus(window_id) {
+                extra_snapshot_messages.push(workspace_state);
+            }
+        }
+        self.shell_emit_chrome_event_with_snapshot_extras(
+            ChromeEvent::FocusChanged {
+                surface_id,
+                window_id,
+            },
+            extra_snapshot_messages,
+        );
     }
 }
 

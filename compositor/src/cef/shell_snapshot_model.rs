@@ -68,6 +68,63 @@ impl ShellSnapshotModel {
             .collect();
     }
 
+    fn window_geometry_messages(&mut self) -> Vec<shell_wire::DecodedCompositorToShellMessage> {
+        self.ordered_window_rows()
+            .into_iter()
+            .map(
+                |window| shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+                    window_id: window.window_id,
+                    surface_id: window.surface_id,
+                    x: window.x,
+                    y: window.y,
+                    w: window.w,
+                    h: window.h,
+                    client_x: window.client_x,
+                    client_y: window.client_y,
+                    client_w: window.client_w,
+                    client_h: window.client_h,
+                    frame_x: window.frame_x,
+                    frame_y: window.frame_y,
+                    frame_w: window.frame_w,
+                    frame_h: window.frame_h,
+                    maximized: window.maximized != 0,
+                    fullscreen: window.fullscreen != 0,
+                    client_side_decoration: window.client_side_decoration != 0,
+                    output_id: window.output_id,
+                    output_name: window.output_name,
+                },
+            )
+            .collect()
+    }
+
+    fn window_metadata_messages(&mut self) -> Vec<shell_wire::DecodedCompositorToShellMessage> {
+        self.ordered_window_rows()
+            .into_iter()
+            .map(
+                |window| shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
+                    window_id: window.window_id,
+                    surface_id: window.surface_id,
+                    title: window.title,
+                    app_id: window.app_id,
+                    icon_name: window.icon_name,
+                    icon_buffers: window.icon_buffers,
+                },
+            )
+            .collect()
+    }
+
+    fn window_state_messages(&mut self) -> Vec<shell_wire::DecodedCompositorToShellMessage> {
+        self.ordered_window_rows()
+            .into_iter()
+            .map(
+                |window| shell_wire::DecodedCompositorToShellMessage::WindowState {
+                    window_id: window.window_id,
+                    minimized: window.minimized != 0,
+                },
+            )
+            .collect()
+    }
+
     fn ensure_sorted_window_ids(&mut self) {
         if !self.sorted_window_ids_dirty {
             return;
@@ -402,6 +459,15 @@ impl ShellSnapshotModel {
                 revision: self.window_order_revision,
                 windows: self.window_order_entries.clone(),
             });
+        }
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_GEOMETRY != 0 {
+            messages.extend(self.window_geometry_messages());
+        }
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_METADATA != 0 {
+            messages.extend(self.window_metadata_messages());
+        }
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_STATE != 0 {
+            messages.extend(self.window_state_messages());
         }
         if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_FOCUS != 0 {
             if let Some(message) = self.focus_changed.clone() {

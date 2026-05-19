@@ -5,7 +5,9 @@ import {
   assert,
   assertTaskbarRowOnMonitor,
   closeTaskbarWindow,
+  cleanupUnexpectedNativeWindows,
   clickPoint,
+  clickPointAtomic,
   clickRect,
   compositorWindowById,
   defineGroup,
@@ -25,6 +27,7 @@ import {
   raiseTaskbarWindow,
   rectCenter,
   shellWindowById,
+  syncTest,
   tapKey,
   tapSuperShortcut,
   taskbarEntry,
@@ -354,6 +357,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
   test("secondary taskbar controls can be enabled independently", async ({
     base,
+    state,
   }) => {
     const initial = await getSnapshots(base);
     if (initial.compositor.outputs.length < 2) {
@@ -378,60 +382,96 @@ export default defineGroup(import.meta.url, ({ test }) => {
       base,
       "/settings_osk",
     );
-    const components = ["programs", "osk", "keyboard_layout", "clock"];
-    try {
-      await postJson(base, "/settings_osk", {
-        ...originalOsk,
-        enabled: true,
-        provider: originalOsk.provider || "squeekboard",
-      });
-      await openSettings(base, "click");
-      await waitFor(
+      const components = ["programs", "keyboard_layout", "clock", "osk"];
+      const taskbarHasComponent = (
+        taskbar: ReturnType<typeof taskbarForMonitor>,
+        component: string,
+      ) => {
+        if (!taskbar) return false;
+        if (component === "programs") return taskbar.has_programs_toggle;
+        if (component === "keyboard_layout") return taskbar.has_keyboard_layout;
+        if (component === "clock") return taskbar.has_clock;
+        return taskbar.has_osk_toggle;
+      };
+      try {
+        await cleanupUnexpectedNativeWindows(base, state);
+        await postJson(base, "/settings_osk", {
+          ...originalOsk,
+          enabled: true,
+          provider: originalOsk.provider || "squeekboard",
+        });
+        await openSettings(base, "click");
+        await raiseTaskbarWindow(base, SHELL_UI_SETTINGS_WINDOW_ID);
+        await waitFor(
         "wait for displays settings taskbar component controls",
         async () => {
           const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          const buttons = shell.settings_taskbar_component_buttons ?? [];
+          if (
+            components.every((component) =>
+              buttons.some(
+                (button) =>
+                  button.output === secondaryOutput.name &&
+                  button.component === component &&
+                  button.rect,
+              ),
+            )
+          ) {
+            return shell;
+          }
           if (shell.controls?.settings_tab_displays) {
             await clickRect(base, shell.controls.settings_tab_displays);
           }
-          const buttons = shell.settings_taskbar_component_buttons ?? [];
-          return components.every((component) =>
-            buttons.some(
-              (button) =>
-                button.output === secondaryOutput.name &&
-                button.component === component &&
-                button.rect,
-            ),
-          )
-            ? shell
-            : null;
+          return null;
         },
         5000,
         100,
       );
       for (const component of components) {
-        const shell = await waitFor(
-          `wait for ${component} component setting`,
+        const before = await waitFor(
+          `wait for ${component} secondary taskbar control`,
           async () => {
-            const next = await getJson<ShellSnapshot>(base, "/test/state/shell");
-            const button = next.settings_taskbar_component_buttons?.find(
+            const { shell } = await syncTest(base);
+            const taskbar = taskbarForMonitor(shell, secondaryOutput.name);
+            if (taskbarHasComponent(taskbar, component)) return { shell, taskbar };
+            const button = shell.settings_taskbar_component_buttons?.find(
               (entry) =>
                 entry.output === secondaryOutput.name &&
                 entry.component === component &&
                 entry.rect,
             );
-            return button ? { shell: next, button } : null;
+            return button ? { shell, taskbar, button } : null;
           },
           5000,
           100,
         );
-        if (!shell.button.pressed) {
-          await clickRect(base, shell.button.rect!);
+        const button = "button" in before ? before.button : null;
+        if (button && !button.pressed) {
+          await raiseTaskbarWindow(base, SHELL_UI_SETTINGS_WINDOW_ID);
+          await clickPointAtomic(
+            base,
+            button.rect!.global_x + Math.max(8, button.rect!.width - 12),
+            button.rect!.global_y + button.rect!.height / 2,
+          );
+          await syncTest(base);
+          await waitFor(
+            `wait for ${component} secondary taskbar control enabled`,
+            async () => {
+              const { shell } = await syncTest(base);
+              const taskbar = taskbarForMonitor(shell, secondaryOutput.name);
+              if (taskbarHasComponent(taskbar, component)) return { shell, taskbar };
+              return null;
+            },
+            10000,
+            100,
+          );
         }
       }
+      await syncTest(base);
       const enabled = await waitFor(
         "wait for enabled secondary taskbar controls",
         async () => {
-          const shell = await getJson<ShellSnapshot>(base, "/test/state/shell");
+          const { shell } = await syncTest(base);
           const taskbar = taskbarForMonitor(shell, secondaryOutput.name);
           if (
             !taskbar?.has_programs_toggle ||
@@ -443,7 +483,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           }
           return { shell, taskbar };
         },
-        5000,
+        10000,
         100,
       );
       await writeJsonArtifact("secondary-taskbar-controls.json", {

@@ -684,6 +684,7 @@ impl ShellOsrState {
     pub(crate) fn prepare_shell_send_to_cef(
         &mut self,
         msg: &shell_wire::DecodedCompositorToShellMessage,
+        force: bool,
     ) -> bool {
         if let shell_wire::DecodedCompositorToShellMessage::FocusChanged {
             surface_id,
@@ -691,7 +692,7 @@ impl ShellOsrState {
         } = msg
         {
             let pair = (*surface_id, *window_id);
-            if self.shell_last_sent_focus_pair == Some(pair) {
+            if !force && self.shell_last_sent_focus_pair == Some(pair) {
                 return false;
             }
             self.shell_last_sent_focus_pair = Some(pair);
@@ -725,6 +726,8 @@ impl ShellOsrState {
 
     pub(crate) fn shell_authoritative_snapshot_messages(
         msg: &shell_wire::DecodedCompositorToShellMessage,
+        full_snapshot: bool,
+        workspace_changed: bool,
         output_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
         window_list: shell_wire::DecodedCompositorToShellMessage,
         window_order: shell_wire::DecodedCompositorToShellMessage,
@@ -739,6 +742,54 @@ impl ShellOsrState {
         tray_sni: shell_wire::DecodedCompositorToShellMessage,
     ) -> Option<Vec<shell_wire::DecodedCompositorToShellMessage>> {
         let mut messages = Vec::new();
+        if !full_snapshot {
+            if matches!(
+                msg,
+                shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::WindowState { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::CommandPaletteState { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
+                    | shell_wire::DecodedCompositorToShellMessage::TraySni { .. }
+            ) {
+                messages.push(msg.clone());
+            }
+            if matches!(
+                msg,
+                shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
+            ) {
+                messages.push(window_order.clone());
+            }
+            if workspace_changed
+                && !matches!(
+                    msg,
+                    shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+                        | shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. }
+                )
+            {
+                if let Some(workspace_state) = workspace_state {
+                    messages.push(workspace_state);
+                }
+            }
+            return if messages.is_empty() {
+                None
+            } else {
+                Some(messages)
+            };
+        }
         if matches!(
             msg,
             shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }

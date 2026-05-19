@@ -409,7 +409,12 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const snapshotDomainNativeDragPreview = 1 << 7
   const snapshotDomainTray = 1 << 8
   const snapshotDomainWindowOrder = 1 << 9
+  const snapshotDomainWindowGeometry = 1 << 10
+  const snapshotDomainWindowMetadata = 1 << 11
+  const snapshotDomainWindowState = 1 << 12
   const snapshotDomainCommandPalette = 1 << 13
+  const snapshotRecoveryDomainIndexes = [1, 2, 4, 9]
+  let lastSnapshotDomainRevisions: readonly number[] | null = null
 
   const compositorVisualFollowupForDetail = (detail: DerpShellDetail): CompositorFollowup & { repaint?: boolean } => {
     switch (detail.type) {
@@ -466,6 +471,118 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const detailSnapshotEpoch = (detail: DerpShellDetail) => {
     return runtimeDetailSnapshotEpoch(detail)
   }
+  const detailNeedsWindowSyncRecovery = (detail: DerpShellDetail) => {
+    switch (detail.type) {
+      case 'focus_changed':
+      case 'window_list':
+      case 'window_order':
+      case 'window_geometry':
+      case 'window_mapped':
+      case 'window_state':
+      case 'window_unmapped':
+      case 'window_metadata':
+      case 'output_geometry':
+      case 'output_layout':
+      case 'shell_hosted_app_state':
+      case 'workspace_state':
+        return true
+      default:
+        return false
+    }
+  }
+  const epochlessDetailNeedsWindowSyncRecovery = (detail: DerpShellDetail) => {
+    switch (detail.type) {
+      case 'focus_changed':
+      case 'window_list':
+      case 'window_order':
+      case 'window_mapped':
+      case 'window_unmapped':
+      case 'output_geometry':
+      case 'output_layout':
+      case 'shell_hosted_app_state':
+        return true
+      default:
+        return false
+    }
+  }
+  const snapshotDomainForDetail = (detail: DerpShellDetail) => {
+    switch (detail.type) {
+      case 'output_geometry':
+      case 'output_layout':
+        return snapshotDomainOutputs
+      case 'window_list':
+      case 'window_mapped':
+      case 'window_unmapped':
+        return snapshotDomainWindows
+      case 'focus_changed':
+        return snapshotDomainFocus
+      case 'keyboard_layout':
+        return snapshotDomainKeyboard
+      case 'workspace_state':
+        return snapshotDomainWorkspace
+      case 'shell_hosted_app_state':
+        return snapshotDomainShellHostedApps
+      case 'interaction_state':
+        return snapshotDomainInteraction
+      case 'native_drag_preview':
+        return snapshotDomainNativeDragPreview
+      case 'tray_hints':
+      case 'tray_sni':
+        return snapshotDomainTray
+      case 'window_order':
+        return snapshotDomainWindowOrder
+      case 'window_geometry':
+        return snapshotDomainWindowGeometry
+      case 'window_metadata':
+        return snapshotDomainWindowMetadata
+      case 'window_state':
+        return snapshotDomainWindowState
+      case 'command_palette_state':
+        return snapshotDomainCommandPalette
+      default:
+        return 0
+    }
+  }
+  const snapshotDetailCoveredByDomainFlags = (detail: DerpShellDetail, domainFlags: number) => {
+    const domain = snapshotDomainForDetail(detail)
+    return domain !== 0 && (domainFlags & domain) !== 0
+  }
+  const snapshotDetailCanApplyWhenSyncedSnapshotOmitsDomain = (detail: DerpShellDetail) =>
+    detail.type === 'focus_changed' ||
+    detail.type === 'window_order' ||
+    detail.type === 'workspace_state'
+  const shouldRequestWindowSyncRecovery = (details: readonly DerpShellDetail[]) => {
+    for (const detail of details) {
+      const epoch = detailSnapshotEpoch(detail)
+      if (epoch > lastSnapshotSequence) return true
+      if (epoch === 0 && epochlessDetailNeedsWindowSyncRecovery(detail)) return true
+      if (epoch === 0) continue
+      const domain = snapshotDomainForDetail(detail)
+      if (
+        detail.type === 'interaction_state' &&
+        epoch < lastSnapshotSequence &&
+        domain !== 0 &&
+        (lastSnapshotDomainFlags & domain) === 0 &&
+        (lastKnownInteractionState?.window_switcher_selected_window_id != null ||
+          detail.window_switcher_selected_window_id != null)
+      ) {
+        return true
+      }
+      if (
+        epoch < lastSnapshotSequence &&
+        domain !== 0 &&
+        (lastSnapshotDomainFlags & domain) === 0 &&
+        detailNeedsWindowSyncRecovery(detail)
+      ) {
+        return true
+      }
+    }
+    return false
+  }
+  const canApplyEpochlessSnapshotDetailDirectly = (detail: DerpShellDetail) =>
+    detailIsSnapshotState(detail) &&
+    detailSnapshotEpoch(detail) === 0 &&
+    !epochlessDetailNeedsWindowSyncRecovery(detail)
 
   const markCompositorStateEpoch = (epoch: number) => {
     if (epoch <= 0) return
@@ -791,7 +908,12 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     return false
   }
 
-  const applyCompositorSnapshot = (details: readonly DerpShellDetail[], domainFlags: number, stateStartedAt = performance.now()) => {
+  const applyCompositorSnapshot = (
+    details: readonly DerpShellDetail[],
+    domainFlags: number,
+    stateStartedAt = performance.now(),
+    scheduleFollowup = true,
+  ) => {
     const coalescedDetails = coalesceCompositorDetails(details)
     applyImperativeChromeDetails(coalescedDetails, stateStartedAt)
     const skipOutputGeometry = coalescedDetails.some((detail) => detail.type === 'output_layout')
@@ -887,7 +1009,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       options.bumpSnapChrome()
       options.shellWireSend('invalidate_view')
     }
-    scheduleCompositorVisualFollowup(coalescedDetails)
+    if (scheduleFollowup) scheduleCompositorVisualFollowup(coalescedDetails)
   }
 
   const keybindTargetWindowId = (d: Extract<DerpShellDetail, { type: 'keybind' }>, focusedWindowId: number | null) =>
@@ -1025,7 +1147,18 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     }
     if (detailIsSnapshotState(d)) {
       const synced = syncCompositorSnapshot()
-      if (!synced) scheduleCompositorVisualFollowup([d])
+      if (
+        synced &&
+        snapshotDetailCanApplyWhenSyncedSnapshotOmitsDomain(d) &&
+        !snapshotDetailCoveredByDomainFlags(d, synced.domainFlags)
+      ) {
+        applyCompositorSnapshot([d], 0)
+      }
+      if (!synced) {
+        if (canApplyEpochlessSnapshotDetailDirectly(d)) applyCompositorSnapshot([d], 0)
+        scheduleCompositorVisualFollowup([d])
+        if (shouldRequestWindowSyncRecovery([d])) options.requestWindowSyncRecovery()
+      }
       bridgeDebug({
         last_drop: {
           reason: synced ? 'snapshot_state_event_replaced_by_snapshot' : 'snapshot_state_event_waiting_for_snapshot',
@@ -1046,13 +1179,40 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     const hasSnapshotState = coalescedDetails.some(detailIsSnapshotState)
     let synced: false | { domainFlags: number; detailsLength: number } = false
     if (hasSnapshotState) synced = syncCompositorSnapshot()
+    const uncoveredSnapshotDetails = synced
+      ? coalescedDetails.filter(
+          (detail) =>
+            detailIsSnapshotState(detail) &&
+            snapshotDetailCanApplyWhenSyncedSnapshotOmitsDomain(detail) &&
+            !snapshotDetailCoveredByDomainFlags(detail, synced.domainFlags),
+        )
+      : []
     const directChromeDetails = synced
       ? coalescedDetails.filter((detail) => !detailIsSnapshotState(detail))
       : coalescedDetails
     applyImperativeChromeDetails(directChromeDetails, stateStartedAt)
     batch(() => {
+      for (const detail of coalescedDetails) {
+        if (detail.type === 'mutation_ack') applyCompositorDetail(detail)
+      }
       if (hasSnapshotState) {
-        if (!synced) scheduleCompositorVisualFollowup(coalescedDetails.filter(detailIsSnapshotState))
+        if (synced && uncoveredSnapshotDetails.length > 0) {
+          const syncedChromeAffectingDomain =
+            (synced.domainFlags &
+              (snapshotDomainWindows |
+                snapshotDomainWindowOrder |
+                snapshotDomainFocus |
+                snapshotDomainWorkspace |
+                snapshotDomainOutputs)) !==
+            0
+          applyCompositorSnapshot(uncoveredSnapshotDetails, 0, stateStartedAt, !syncedChromeAffectingDomain)
+        }
+        if (!synced) {
+          const directSnapshotDetails = coalescedDetails.filter(canApplyEpochlessSnapshotDetailDirectly)
+          if (directSnapshotDetails.length > 0) applyCompositorSnapshot(directSnapshotDetails, 0, stateStartedAt)
+          scheduleCompositorVisualFollowup(coalescedDetails.filter(detailIsSnapshotState))
+          if (shouldRequestWindowSyncRecovery(coalescedDetails)) options.requestWindowSyncRecovery()
+        }
         bridgeDebug({
           last_drop: {
             reason: synced ? 'snapshot_state_batch_replaced_by_snapshot' : 'snapshot_state_batch_waiting_for_snapshot',
@@ -1063,7 +1223,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         })
       }
       for (const detail of coalescedDetails) {
-        if (!detailIsSnapshotState(detail)) applyCompositorDetail(detail)
+        if (!detailIsSnapshotState(detail) && detail.type !== 'mutation_ack') applyCompositorDetail(detail)
       }
     })
     noteShellBatchApply(performance.now() - applyStart, coalescedDetails.length)
@@ -1099,6 +1259,20 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (!decoded) return false
     const stateStartedAt = performance.now()
     const snapshotDetails = decoded.details
+    const previousDomainRevisions = lastSnapshotDomainRevisions
+    if (previousDomainRevisions) {
+      for (const index of snapshotRecoveryDomainIndexes) {
+        const domain = 1 << index
+        if ((decoded.domainFlags & domain) !== 0) continue
+        const previous = previousDomainRevisions[index] ?? 0
+        const next = decoded.domainRevisions[index] ?? previous
+        if (next > previous) {
+          options.requestWindowSyncRecovery()
+          break
+        }
+      }
+    }
+    lastSnapshotDomainRevisions = decoded.domainRevisions
     lastSnapshotDomainFlags = decoded.domainFlags
     bridgeDebug({
       last_snapshot_sequence: decoded.sequence,

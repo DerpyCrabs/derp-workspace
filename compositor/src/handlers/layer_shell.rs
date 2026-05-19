@@ -102,6 +102,7 @@ impl WlrLayerShellHandler for CompositorState {
             };
             let before = self.effective_layer_usable_area_global_for_output(output);
             layer_map_for_output(output).unmap_layer(&layer);
+            self.arrange_layer_output(output);
             let after = self.effective_layer_usable_area_global_for_output(output);
             if before != after {
                 self.refresh_usable_area_dependent_window_layouts();

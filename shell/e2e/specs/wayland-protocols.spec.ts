@@ -2949,6 +2949,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
           afterShellTouch.up === beforeShellTouch.up,
         `shell touch leaked to native client: before=${JSON.stringify(beforeShellTouch)} after=${JSON.stringify(afterShellTouch)}`,
       );
+      await tapKey(base, KEY.escape);
+      await waitFor(
+        "wait for programs menu closed before native touch route",
+        async () => {
+          const snapshots = await getSnapshots(base);
+          return snapshots.shell.programs_menu_open ? null : snapshots;
+        },
+      );
 
       await touchDown(base, nativePoint.x, nativePoint.y, 1);
       await touchMove(base, togglePoint.x, togglePoint.y, 1);

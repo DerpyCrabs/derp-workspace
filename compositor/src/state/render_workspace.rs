@@ -86,11 +86,18 @@ impl CompositorState {
         let Some(output_geo) = self.output_topology.space.output_geometry(output) else {
             return false;
         };
-        let Some(layer_usable) = self.effective_layer_usable_area_global_for_output(output) else {
-            return false;
-        };
-        if layer_usable != output_geo {
-            return false;
+        if smithay::desktop::layer_map_for_output(output)
+            .layers()
+            .next()
+            .is_some()
+        {
+            let Some(layer_usable) = self.effective_layer_usable_area_global_for_output(output)
+            else {
+                return false;
+            };
+            if layer_usable != output_geo {
+                return false;
+            }
         }
         let Some(window_id) = self.ordered_window_ids_on_output(output).last().copied() else {
             return false;

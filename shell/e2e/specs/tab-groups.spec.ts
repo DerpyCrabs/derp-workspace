@@ -40,6 +40,7 @@ import {
   taskbarEntry,
   tapKey,
   waitFor,
+  waitForTaskbarEntry,
   waitForNativeFocus,
   waitForShellUiFocus,
   waitForWindowGone,
@@ -986,6 +987,7 @@ async function waitForSplitGroup(base: string, windowId: number, leftWindowId: n
       if (!group) return null
       if (group.split_left_window_id !== leftWindowId) return null
       if (!group.split_left_rect || !group.split_right_rect || !group.split_divider_rect) return null
+      if (!group.tabs.some((tab) => tab.window_id === leftWindowId && tab.split_left)) return null
       return { shell, group }
     },
     2000,
@@ -1073,6 +1075,8 @@ async function moveShellWindowToOtherMonitor(base: string, windowId: number) {
       const movedShellWindow = shellWindowById(shell, windowId)
       if (!movedWindow || !movedShellWindow) return null
       if (movedWindow.output_name !== move.target.name || movedShellWindow.output_name !== move.target.name) return null
+      if (Math.abs(movedWindow.x - movedShellWindow.x) > 2 || Math.abs(movedWindow.y - movedShellWindow.y) > 2) return null
+      if (Math.abs(movedWindow.width - movedShellWindow.width) > 2 || Math.abs(movedWindow.height - movedShellWindow.height) > 2) return null
       assertTaskbarRowOnMonitor(shell, windowId, move.target.name)
       return { compositor, shell, movedWindow, movedShellWindow, move }
     },
@@ -1102,8 +1106,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
       created.push(first.window.window_id, second.window.window_id)
       assert(first.window.window_id !== second.window.window_id, 'expected distinct js test window ids')
       assert(first.window.shell_hosted && second.window.shell_hosted, 'expected shell-hosted js test windows')
-      assert(taskbarEntry(first.shell, first.window.window_id), 'missing taskbar row for first js test window')
-      assert(taskbarEntry(second.shell, second.window.window_id), 'missing taskbar row for second js test window')
+      const firstTaskbar = await timing.step('wait for first js test window taskbar row', () =>
+        waitForTaskbarEntry(base, first.window.window_id),
+      )
+      const secondTaskbar = await timing.step('wait for second js test window taskbar row', () =>
+        waitForTaskbarEntry(base, second.window.window_id),
+      )
+      assert(taskbarEntry(firstTaskbar, first.window.window_id), 'missing taskbar row for first js test window')
+      assert(taskbarEntry(secondTaskbar, second.window.window_id), 'missing taskbar row for second js test window')
       await timing.step('write fixture artifact', () => writeJsonArtifact('tab-groups-js-test-windows.json', {
         first: first.window,
         second: second.window,

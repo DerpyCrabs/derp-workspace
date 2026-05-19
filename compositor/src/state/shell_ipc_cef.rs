@@ -5,11 +5,24 @@ impl CompositorState {
         self.shell_osr.shell_cef_active()
     }
 
-    pub(crate) fn shell_send_to_cef(
+    pub(crate) fn shell_send_to_cef(&mut self, msg: shell_wire::DecodedCompositorToShellMessage) {
+        self.shell_send_to_cef_with_snapshot_extras(msg, Vec::new());
+    }
+
+    pub(crate) fn shell_send_to_cef_with_snapshot_extras(
         &mut self,
         mut msg: shell_wire::DecodedCompositorToShellMessage,
+        extra_snapshot_messages: Vec<shell_wire::DecodedCompositorToShellMessage>,
     ) {
-        if !self.shell_osr.prepare_shell_send_to_cef(&msg) {
+        let force_focus_snapshot = !extra_snapshot_messages.is_empty()
+            && matches!(
+                msg,
+                shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
+            );
+        if !self
+            .shell_osr
+            .prepare_shell_send_to_cef(&msg, force_focus_snapshot)
+        {
             return;
         }
         if self.shell_prune_stale_interaction_refs() {
@@ -26,8 +39,13 @@ impl CompositorState {
         if workspace_changed {
             self.next_shell_workspace_revision();
         }
-        let authoritative_snapshot =
+        let mut authoritative_snapshot =
             self.shell_authoritative_snapshot_messages(&msg, workspace_changed);
+        if !extra_snapshot_messages.is_empty() {
+            authoritative_snapshot
+                .get_or_insert_with(Vec::new)
+                .extend(extra_snapshot_messages);
+        }
         let workspace_state_message = if workspace_changed {
             self.workspace_state_message()
         } else {
@@ -66,11 +84,14 @@ impl CompositorState {
     fn shell_authoritative_snapshot_messages(
         &mut self,
         msg: &shell_wire::DecodedCompositorToShellMessage,
-        _workspace_changed: bool,
+        workspace_changed: bool,
     ) -> Option<Vec<shell_wire::DecodedCompositorToShellMessage>> {
         self.shell_clear_stale_primary_output();
         ShellOsrState::shell_authoritative_snapshot_messages(
             msg,
+            self.shell_osr.shell_snapshot_epoch == 0
+                || !self.shell_osr.shell_embedded_initial_handshake_done,
+            workspace_changed,
             self.shell_output_layout_snapshot_message(),
             self.shell_window_list_snapshot_message(),
             self.shell_window_order_snapshot_message(),

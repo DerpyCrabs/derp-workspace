@@ -210,6 +210,97 @@ mod shell_shared_state_tests {
 }
 
 #[cfg(test)]
+mod shell_authoritative_snapshot_tests {
+    use super::ShellOsrState;
+
+    fn focus(window_id: Option<u32>) -> shell_wire::DecodedCompositorToShellMessage {
+        shell_wire::DecodedCompositorToShellMessage::FocusChanged {
+            surface_id: window_id.map(|id| id + 100),
+            window_id,
+        }
+    }
+
+    fn window_list() -> shell_wire::DecodedCompositorToShellMessage {
+        shell_wire::DecodedCompositorToShellMessage::WindowList {
+            revision: 1,
+            windows: Vec::new(),
+        }
+    }
+
+    fn window_order() -> shell_wire::DecodedCompositorToShellMessage {
+        shell_wire::DecodedCompositorToShellMessage::WindowOrder {
+            revision: 1,
+            windows: Vec::new(),
+        }
+    }
+
+    fn workspace() -> shell_wire::DecodedCompositorToShellMessage {
+        shell_wire::DecodedCompositorToShellMessage::WorkspaceState {
+            revision: 1,
+            state_json: "{}".to_string(),
+        }
+    }
+
+    fn messages_for(
+        msg: &shell_wire::DecodedCompositorToShellMessage,
+        workspace_changed: bool,
+    ) -> Vec<shell_wire::DecodedCompositorToShellMessage> {
+        let dummy = focus(None);
+        ShellOsrState::shell_authoritative_snapshot_messages(
+            msg,
+            false,
+            workspace_changed,
+            None,
+            window_list(),
+            window_order(),
+            focus(Some(7)),
+            Some(workspace()),
+            dummy.clone(),
+            dummy.clone(),
+            dummy.clone(),
+            None,
+            dummy.clone(),
+            dummy.clone(),
+            dummy,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn partial_focus_snapshot_publishes_current_window_order() {
+        let messages = messages_for(&focus(Some(3)), false);
+
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(
+            messages[0],
+            shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
+        ));
+        assert!(matches!(
+            messages[1],
+            shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. }
+        ));
+    }
+
+    #[test]
+    fn partial_workspace_side_effect_publishes_only_workspace_extra_domain() {
+        let msg = shell_wire::DecodedCompositorToShellMessage::KeyboardLayout {
+            label: "us".to_string(),
+        };
+        let messages = messages_for(&msg, true);
+
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(
+            messages[0],
+            shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
+        ));
+        assert!(matches!(
+            messages[1],
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+        ));
+    }
+}
+
+#[cfg(test)]
 mod programs_menu_super_tests {
     use super::CompositorState;
 

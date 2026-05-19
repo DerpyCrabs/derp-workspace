@@ -165,9 +165,9 @@ impl WindowManagementState {
         }
     }
 
-    pub(crate) fn shell_window_stack_touch(&mut self, window_id: u32) {
+    pub(crate) fn shell_window_stack_touch(&mut self, window_id: u32) -> bool {
         if window_id == 0 || self.window_registry.window_info(window_id).is_none() {
-            return;
+            return false;
         }
         let before = self.shell_window_stack_order.clone();
         self.shell_window_stack_order
@@ -175,7 +175,9 @@ impl WindowManagementState {
         self.shell_window_stack_order.push(window_id);
         if self.shell_window_stack_order != before {
             self.next_shell_window_stack_revision();
+            return true;
         }
+        false
     }
 
     pub(crate) fn shell_window_stack_forget(&mut self, window_id: u32) {

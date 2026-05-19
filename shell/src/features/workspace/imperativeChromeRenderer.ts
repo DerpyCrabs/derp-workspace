@@ -258,6 +258,21 @@ const WORKSPACE_SPLIT_DIVIDER_PX = 4
 const WORKSPACE_SPLIT_MIN_PANE_PX = 160
 const WORKSPACE_SPLIT_MIN_HEIGHT_PX = 140
 const CSD_GROUP_DROP_STRIP_PX = 34
+
+function workspaceVisibleWindowIds(state: ReturnType<typeof createEmptyWorkspaceSnapshot>): { grouped: Set<number>; visible: Set<number> } {
+  const grouped = new Set<number>()
+  const visible = new Set<number>()
+  for (const group of state.groups) {
+    for (const windowId of group.windowIds) grouped.add(windowId)
+    const active = state.activeTabByGroupId[group.id]
+    const right = group.windowIds.includes(active) ? active : group.windowIds[0]
+    if (right !== undefined) visible.add(right)
+    const split = state.splitByGroupId[group.id]
+    if (split && group.windowIds.includes(split.leftWindowId)) visible.add(split.leftWindowId)
+  }
+  return { grouped, visible }
+}
+
 function coerceWindowId(value: unknown): number | null {
   const n = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(n)) return null
@@ -2180,6 +2195,14 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
         }
       } else if (detail.type === 'workspace_state') {
         workspace = normalizeWorkspaceSnapshot(detail.state)
+        const { grouped, visible } = workspaceVisibleWindowIds(workspace)
+        for (const [windowId, window] of windows) {
+          if (!grouped.has(windowId)) continue
+          const workspaceVisible = visible.has(windowId)
+          if (window.workspace_visible !== workspaceVisible) {
+            windows.set(windowId, { ...window, workspace_visible: workspaceVisible })
+          }
+        }
         adoptDetachedTabDragIfReady()
         changed = true
       } else if (detail.type === 'interaction_state') {
@@ -2205,6 +2228,25 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
     if (!(target instanceof Element)) return null
     const el = target.closest<HTMLElement>('[data-shell-window-frame]')
     return coerceWindowId(el?.getAttribute('data-shell-window-frame') ?? null)
+  }
+
+  const rectContains = (rect: DOMRect, x: number, y: number) =>
+    x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+
+  const touchResizeHit = (windowId: number, x: number, y: number) => {
+    const node = nodes.get(windowId)
+    if (!node || node.frame.hidden || node.frame.style.visibility === 'hidden') return null
+    const hits: Array<[HTMLElement, number]> = [
+      [node.resizeBottomLeft, SHELL_RESIZE_BOTTOM | SHELL_RESIZE_LEFT],
+      [node.resizeBottomRight, SHELL_RESIZE_BOTTOM | SHELL_RESIZE_RIGHT],
+      [node.resizeLeft, SHELL_RESIZE_LEFT],
+      [node.resizeRight, SHELL_RESIZE_RIGHT],
+    ]
+    for (const [el, edges] of hits) {
+      if (el.hidden || el.style.display === 'none' || el.style.pointerEvents === 'none') continue
+      if (rectContains(el.getBoundingClientRect(), x, y)) return edges
+    }
+    return null
   }
 
   const clearPendingTitlebarDrag = () => {
@@ -2402,16 +2444,17 @@ export function createImperativeChromeRenderer(options: ImperativeChromeRenderer
       return
     }
     const resize = targetEl.closest<HTMLElement>('[data-shell-resize-left], [data-shell-resize-right], [data-shell-resize-bottom-left], [data-shell-resize-bottom-right]') ?? null
-    if (resize) {
+    const resizeEdges = resize
+      ? resize.hasAttribute('data-shell-resize-bottom-left') ? SHELL_RESIZE_BOTTOM | SHELL_RESIZE_LEFT :
+        resize.hasAttribute('data-shell-resize-bottom-right') ? SHELL_RESIZE_BOTTOM | SHELL_RESIZE_RIGHT :
+          resize.hasAttribute('data-shell-resize-left') ? SHELL_RESIZE_LEFT :
+            SHELL_RESIZE_RIGHT
+      : touchResizeHit(windowId, touch.clientX, touch.clientY)
+    if (resizeEdges !== null) {
       event.preventDefault()
       event.stopPropagation()
-      const edges =
-        resize.hasAttribute('data-shell-resize-bottom-left') ? SHELL_RESIZE_BOTTOM | SHELL_RESIZE_LEFT :
-          resize.hasAttribute('data-shell-resize-bottom-right') ? SHELL_RESIZE_BOTTOM | SHELL_RESIZE_RIGHT :
-            resize.hasAttribute('data-shell-resize-left') ? SHELL_RESIZE_LEFT :
-              SHELL_RESIZE_RIGHT
       options.focusWindowViaShell(windowId)
-      options.beginShellWindowResize(windowId, edges, touch.clientX, touch.clientY)
+      options.beginShellWindowResize(windowId, resizeEdges, touch.clientX, touch.clientY)
       return
     }
     if (!targetEl.closest('[data-shell-titlebar]')) return

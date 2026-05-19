@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use cef::{
     binary_value_create, process_message_create, Browser, CefString, ImplBrowser, ImplBrowserHost,
@@ -407,6 +407,16 @@ fn dispatch_shell_snapshot_notify(browser: &Browser) {
         crate::cef::begin_frame_diag::unix_micros_now() as f64,
     );
     frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
+}
+
+pub(crate) fn notify_shell_snapshot(browser_holder: &Arc<Mutex<Option<Browser>>>) {
+    let Ok(guard) = browser_holder.lock() else {
+        return;
+    };
+    let Some(browser) = guard.as_ref() else {
+        return;
+    };
+    dispatch_shell_snapshot_notify(browser);
 }
 
 fn flush_shell_updates(

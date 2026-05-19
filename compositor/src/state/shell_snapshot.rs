@@ -204,7 +204,7 @@ impl CompositorState {
         self.shell_window_list_rows_inner(true)
     }
 
-    pub(super) fn shell_window_list_message(
+    pub(crate) fn shell_window_list_message(
         &mut self,
     ) -> shell_wire::DecodedCompositorToShellMessage {
         shell_wire::DecodedCompositorToShellMessage::WindowList {
@@ -656,7 +656,7 @@ impl CompositorState {
         true
     }
 
-    pub(super) fn workspace_send_state(&mut self) {
+    pub(crate) fn workspace_send_state(&mut self) {
         self.workspace_warn_invariants("send_state");
         self.next_shell_workspace_revision();
         let Some(msg) = self.workspace_state_message() else {
@@ -751,7 +751,7 @@ impl CompositorState {
         self.shell_osr.shell_hosted_app_state_message()
     }
 
-    pub(super) fn shell_focus_message(&self) -> shell_wire::DecodedCompositorToShellMessage {
+    pub(crate) fn shell_focus_message(&self) -> shell_wire::DecodedCompositorToShellMessage {
         let window_id = self.logical_focused_window_id();
         let surface_id =
             window_id.and_then(|w| self.windows.window_registry.surface_id_for_window(w));
